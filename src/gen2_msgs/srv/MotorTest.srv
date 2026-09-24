@@ -1,0 +1,9 @@
+# Start a guarded bench test on one motor (motor_test_node). Refused unless confirm_lifted.
+string motor                 # motor name from motors.yaml
+string mode                  # "current" (A) | "velocity" (joint rad/s)
+float64 value
+float64 duration_s
+bool confirm_lifted          # operator confirms: robot lifted / wheel free / hand on E-stop
+---
+bool accepted
+string message

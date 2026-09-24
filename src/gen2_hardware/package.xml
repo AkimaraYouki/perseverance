@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>gen2_hardware</name>
+  <version>0.1.0</version>
+  <description>Gen2 hardware layer: SocketCAN, CubeMars AK servo-mode protocol, motor state</description>
+  <maintainer email="choding860@gmail.com">parksudo</maintainer>
+  <license>Proprietary</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>diagnostic_updater</depend>
+  <depend>gen2_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

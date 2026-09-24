@@ -1,0 +1,2 @@
+# AX210 Bluetooth needs in-tree btusb; NVIDIA modprobe rule blocks it when rtk_btusb exists
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="8087", ATTR{idProduct}=="0032", RUN+="/sbin/modprobe --ignore-install btusb"

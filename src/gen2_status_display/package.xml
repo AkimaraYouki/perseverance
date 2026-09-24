@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>gen2_status_display</name>
+  <version>0.1.0</version>
+  <description>ST7789 2" SPI LCD robot status screen (power, motors, sensor hub)</description>
+  <maintainer email="choding860@gmail.com">parksudo</maintainer>
+  <license>Proprietary</license>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>diagnostic_msgs</exec_depend>
+  <exec_depend>gen2_msgs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-pil</exec_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

@@ -1,0 +1,10 @@
+[Unit]
+Description=Boot-time WiFi diagnostics (AX210)
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/parksudo/lcd_test/wifi_diag.sh
+
+[Install]
+WantedBy=multi-user.target

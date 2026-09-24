@@ -1,0 +1,19 @@
+# Install: sudo cp gen2-bench.service /etc/systemd/system/ && sudo systemctl enable --now gen2-bench
+[Unit]
+Description=Gen2 robot bench bringup (sensors, read-only motor monitor, status LCD)
+After=network-online.target can0-up.service lcd-pinmux.service
+Wants=network-online.target can0-up.service lcd-pinmux.service
+
+[Service]
+Type=simple
+User=parksudo
+SupplementaryGroups=dialout gpio
+Environment=GEN2_WS=/home/parksudo/gen2_ws
+ExecStart=/home/parksudo/gen2_ws/install/gen2_bringup/lib/gen2_bringup/gen2_run.sh bench.launch.py
+KillSignal=SIGINT
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

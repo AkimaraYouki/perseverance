@@ -1,0 +1,15 @@
+[Unit]
+Description=Bring up can0 (mttcan) at 1 Mbit/s
+After=sys-subsystem-net-devices-can0.device
+BindsTo=sys-subsystem-net-devices-can0.device
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=-/sbin/ip link set can0 down
+ExecStart=/sbin/ip link set can0 type can bitrate 1000000 restart-ms 100 loopback off listen-only off
+ExecStart=/sbin/ip link set can0 up
+ExecStop=/sbin/ip link set can0 down
+
+[Install]
+WantedBy=multi-user.target

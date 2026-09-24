@@ -1,0 +1,57 @@
+# ESP32-C3 sensor hub driver (HostFrame v1). Values here override node defaults.
+sensor_hub:
+  ros__parameters:
+    port: "auto"                         # or an explicit path
+    by_id_patterns: ["/dev/serial/by-id/usb-Espressif*"]
+    allow_acm_fallback: false            # true: also probe /dev/ttyACM* (may grab other CDC devices)
+    reconnect_period_s: 1.0
+    probe_timeout_s: 2.0                 # a newly opened port must deliver a valid frame within this
+    stale_timeout_s: 0.5                 # link diagnostic ERROR after this; reopen after 4x this
+    clock_offset_window_s: 5.0
+
+    gps_frame_id: "gps_link"
+    mag_frame_id: "gps_link"
+    mag_tesla_per_lsb: 3.0e-7            # IST8310 datasheet: 0.3 uT/LSB
+    mag_variance_t2: 0.0                 # unknown until calibrated (0 = unknown per REP)
+    gps_min_itow_step_ms: 1
+
+    # PM02 V3 host-side calibration (firmware has CURRENT_ZERO_V = 0 and nominal scales):
+    #   volts = raw_V * voltage_scale
+    #   amps  = (raw_A - current_offset_a) * current_scale
+    # Procedure (README STEP 7): multimeter on battery -> voltage_scale = V_meter / raw_V;
+    # load disconnected -> current_offset_a = raw_A; known load -> current_scale.
+    # present = min_present_cell_v <= V/cells <= max_present_cell_v
+    compute:
+      # ESP32-C3 ADC (11 dB) cannot resolve PM02 current near 0 A (27.5 mV/A). When the PM02
+      # reading is below pm02_min_current_a, current = Jetson VDD_IN power (as in the Jetson
+      # power GUI / INA3221) x factor / PM02 pack voltage. Shown with "~" on the LCD.
+      jetson_current_fallback: true
+      jetson_power_factor: 1.0
+      pm02_min_current_a: 1.5
+      nominal_cell_v: 3.70          # LiPo nominal (11.1 V 3S)
+      reserve_fraction: 0.20        # runtime counts down to 20 % left
+      power_avg_tau_s: 30.0         # runtime uses a 30 s power average
+      soc_init_settle_s: 2.0        # initial SoC from resting voltage averaged over this window
+      voltage_scale: 1.0
+      current_scale: 1.0
+      min_present_cell_v: 2.8
+      max_present_cell_v: 4.35
+      cells: 3
+      capacity_ah: 3.3
+      current_offset_a: 0.0
+      warn_cell_v: 3.50
+      error_cell_v: 3.30
+    motor:
+      nominal_cell_v: 3.70          # LiPo nominal (22.2 V 6S)
+      reserve_fraction: 0.20        # runtime counts down to 20 % left
+      power_avg_tau_s: 30.0         # runtime uses a 30 s power average
+      soc_init_settle_s: 2.0        # initial SoC from resting voltage averaged over this window
+      voltage_scale: 1.0
+      current_scale: 1.0
+      min_present_cell_v: 2.8
+      max_present_cell_v: 4.35
+      cells: 6
+      capacity_ah: 3.3
+      current_offset_a: 0.0
+      warn_cell_v: 3.50
+      error_cell_v: 3.30

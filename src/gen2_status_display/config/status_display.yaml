@@ -1,0 +1,23 @@
+status_display:
+  ros__parameters:
+    data_hz: 1.0             # status gathering rate (diagnostics arrive at ~1 Hz)
+    frame_hz: 12.0           # boot animation frame rate; dashboard blinks at 4 Hz phases
+    boot_animation: true
+    boot_hold_s: 0.8
+    stale_timeout_s: 3.0
+    spi_device: "/dev/spidev0.0"
+    spi_speed_hz: 20000000
+    pin_dc: 22               # BOARD numbering (Seengreat wiring)
+    pin_rst: 15
+    pin_bl: 18
+    invert_colors: true
+    bgr: false
+    rotate_180: true          # panel mounted upside down
+    gps_expected: true        # GPS connected (NEO-M8N @230400): missing NAV-PVT blinks
+    compute_cells: 3
+    motor_cells: 6
+    warn_cell_v: 3.5
+    error_cell_v: 3.3
+    wifi_iface: "auto"
+    eth_iface: "auto"
+    snapshot_path: "/tmp/gen2_lcd.png"   # latest rendered frame, for viewing over SSH

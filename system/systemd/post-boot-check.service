@@ -1,0 +1,11 @@
+[Unit]
+Description=One-shot post-reboot check (gen2 bench, CAN, WiFi, camera)
+After=gen2-bench.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/parksudo/gen2_ws/src/gen2_bringup/scripts/post_boot_check.sh
+
+[Install]
+WantedBy=multi-user.target

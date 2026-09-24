@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.8)
+project(gen2_bringup)
+find_package(ament_cmake REQUIRED)
+install(DIRECTORY launch config systemd DESTINATION share/${PROJECT_NAME})
+install(PROGRAMS scripts/gen2_run.sh scripts/gen2_bench_check.py DESTINATION lib/${PROJECT_NAME})
+ament_package()

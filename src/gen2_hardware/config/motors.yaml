@@ -1,0 +1,45 @@
+# Gen2 actuator configuration. One source of truth for IDs, directions, scales and limits.
+# Evidence for every value is noted; items marked VERIFY gate ARM via verified.* flags.
+/**:   # shared by motor_monitor, motor_cli and future controllers
+  ros__parameters:
+    can_interface: "can0"          # 1 Mbit/s (AppParams can_baud_rate 3; verified on bus)
+    publish_rate_hz: 100.0
+    motors:
+      # Currently on the bus: one AK45-10. AK45-10 #2 and AK60-6 V3.0 are not delivered yet;
+      # add them to names[] once their IDs are read from the bus (see README STEP 3).
+      names: ["ak45_a"]
+      ak45_a:
+        model: "AK45-10"
+        can_id: 69                  # AppParams controller_id 69; seen as ext id 0x2945
+        # CubeMars AK45-10 KV75 datasheet (user-supplied 2026-09-24): 24 V rated, 14 pole pairs,
+        # 10:1, Kt 0.127 N·m/A (rotor side), rated 2.5 N·m @ 2.1 A, peak 7 N·m @ 5 A,
+        # no-load 180 rpm, rated 150 rpm (output). Drive AppParams l_current_max is 35 A — far
+        # above the motor's 5 A peak; lower it in the CubeMars tool as a drive-side limit.
+        pole_pairs: 14.0            # datasheet (matches McParams foc_encoder_ratio 14)
+        gear_ratio: 10.0            # datasheet 10:1
+        raw_deg_per_output_rev: 360.0  # VERIFY: rotate output one turn by hand in STEP 3
+        direction: 1                # VERIFY (STEP 5)
+        position_offset_rad: 0.0
+        kt_nm_per_a: 1.27           # output side = 0.127 x 10; cross-check rated 2.5/2.1=1.19,
+                                    # peak 7/5=1.4. verified.kt after a torque-arm measurement.
+        current_limit_a: 2.0        # below rated 2.1 A (peak 5 A); bring-up value
+        velocity_limit_rad_s: 10.0  # no-load 180 rpm = 18.8 rad/s
+        joint_min_rad: -1.0e9       # wheel: continuous
+        joint_max_rad: 1.0e9
+        max_temperature_c: 80.0
+        feedback_stale_timeout_s: 0.1   # upload is 50 Hz now (send_can_status_rate_hz 50)
+        command_timeout_s: 0.05
+        supports_disable_cmd: false     # mode 15 is documented for AK 3.0 only
+        verified:
+          direction: false
+          position_scale: false
+          velocity_scale: false
+          kt: false
+      # ak60_leg:                  # AK60-6 V3.0 (manual V3.2.0): Kt 0.5994 N·m/A (MIT table),
+      #   model: "AK60-6 V3.0"     # pole pairs 14 (manual 3.1.5.2 example), supports mode 15 disable
+      #   can_id: ?                # read from bus when delivered
+    # motor_cli bench limits (never exceed the per-motor limits above)
+    cli:
+      max_test_current_a: 1.0
+      max_test_velocity_rad_s: 2.0
+      max_test_duration_s: 3.0

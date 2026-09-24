@@ -1,0 +1,11 @@
+[Unit]
+Description=Pinmux for ST7789 LCD on 40-pin header (SPI1 + DC/RST/BL GPIO)
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/lcd_pinmux.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
