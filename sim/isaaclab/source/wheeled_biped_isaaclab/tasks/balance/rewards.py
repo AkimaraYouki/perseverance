@@ -61,3 +61,30 @@ def action_out_of_range(env: "ManagerBasedRLEnv", limit: float = 1.0) -> torch.T
     """
     a = env.action_manager.action
     return torch.sum(torch.square(torch.clamp(torch.abs(a) - limit, min=0.0)), dim=1)
+
+
+# --- 명령 추종 (commands.WheelLegCommand: [vx, wz, h_ref]) ------------------
+def track_vx_exp(env: "ManagerBasedRLEnv", command_name: str, std: float,
+                 asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """전진 속도 추종. 옆 미끄럼(vy)은 목표 0 으로 같이 본다."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    cmd = env.command_manager.get_command(command_name)
+    v = asset.data.root_lin_vel_b
+    err = torch.square(cmd[:, 0] - v[:, 0]) + torch.square(v[:, 1])
+    return torch.exp(-err / std**2)
+
+
+def track_wz_exp(env: "ManagerBasedRLEnv", command_name: str, std: float,
+                 asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    asset: Articulation = env.scene[asset_cfg.name]
+    cmd = env.command_manager.get_command(command_name)
+    return torch.exp(-torch.square(cmd[:, 1] - asset.data.root_ang_vel_b[:, 2]) / std**2)
+
+
+def track_height_exp(env: "ManagerBasedRLEnv", command_name: str, std: float,
+                     asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    """두 다리 관절값이 높이 기준(h_ref)에 붙어 있는지. asset_cfg 는 params 로 넘길 것."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    h = env.command_manager.get_command(command_name)[:, 2:3]
+    q = asset.data.joint_pos[:, asset_cfg.joint_ids]
+    return torch.exp(-torch.mean(torch.square(q - h), dim=1) / std**2)

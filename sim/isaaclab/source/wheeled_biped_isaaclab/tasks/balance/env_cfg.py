@@ -29,7 +29,8 @@ import isaaclab.envs.mdp as mdp
 from wheeled_biped_isaaclab.robot_cfg import LEG_MAX, LEG_MID, LEG_MIN, WHEELED_BIPED_CFG
 
 from . import rewards as custom_rewards
-from .actions import ClampedJointPositionActionCfg, FilteredJointEffortActionCfg
+from .actions import CommandOffsetLegActionCfg, FilteredJointEffortActionCfg
+from .commands import WheelLegCommandCfg
 
 # 학습 목표 다리 길이. 범위 중앙에 둔다.
 TARGET_LEG = LEG_MID
@@ -81,19 +82,21 @@ STAGE = int(os.environ.get("WB_STAGE", "1"))
 
 @configclass
 class CommandsCfg:
-    base_velocity = mdp.UniformVelocityCommandCfg(
+    # (vx, wz, 다리높이). 구조는 오리(SummerProject)에서 가져왔다 — commands.py 참조.
+    # 이름은 관측/보상 호환을 위해 base_velocity 로 둔다.
+    base_velocity = WheelLegCommandCfg(
         asset_name="robot",
-        resampling_time_range=(5.0, 8.0),
-        rel_standing_envs=1.0 if STAGE == 1 else 0.15,
-        rel_heading_envs=0.0,
-        heading_command=False,
-        debug_vis=False,
-        ranges=mdp.UniformVelocityCommandCfg.Ranges(
-            # 휠 모터 최고 0.90 m/s 의 절반까지만. 실기가 못 내는 속도를
-            # 학습시키면 정책이 그쪽으로 치우친다.
-            lin_vel_x=(0.0, 0.0) if STAGE == 1 else (-0.45, 0.45),
-            lin_vel_y=(0.0, 0.0),
-            ang_vel_z=(0.0, 0.0) if STAGE == 1 else (-1.0, 1.0),
+        resampling_time_range=(3.0, 6.0),
+        default_height=TARGET_LEG,
+        # STAGE 1: 주행 명령 0, 높이만 무작위 (높이별로 서는 법 먼저)
+        zero_vel_prob=1.0 if STAGE == 1 else 0.10,
+        pure_axis_prob=0.35,
+        pure_axis_weights=(0.50, 0.35, 0.15),
+        ranges=WheelLegCommandCfg.Ranges(
+            # 휠 모터 최고 0.90 m/s 의 절반까지만.
+            lin_vel_x=(-0.45, 0.45),
+            ang_vel_z=(-1.0, 1.0),
+            height=(0.130, 0.235),
         ),
     )
 
@@ -101,11 +104,12 @@ class CommandsCfg:
 @configclass
 class ActionsCfg:
     # 원시 액션은 두 항 모두 안에서 ±1 로 자른다 (actions.py 설명 참조).
-    legs = ClampedJointPositionActionCfg(
+    # 다리 목표 = 높이 명령 h_ref + 0.03 m * a. 높이는 명령이, 균형용 미세조정은 정책이.
+    legs = CommandOffsetLegActionCfg(
         asset_name="robot",
         joint_names=[".*_leg"],
-        scale=0.05,          # +-0.05 m 범위를 기본값 주변으로
-        offset=TARGET_LEG,
+        scale=0.03,
+        command_name="base_velocity",
         clip={".*_leg": (LEG_MIN, LEG_MAX)},
     )
     wheels = FilteredJointEffortActionCfg(
@@ -127,7 +131,9 @@ class ObservationsCfg:
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
         projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
         velocity_commands = ObsTerm(func=mdp.generated_commands, params={"command_name": "base_velocity"})
-        joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.002, n_max=0.002))
+        # 다리만. 바퀴 회전각은 계속 커져서(연속 관절) 학습 때 못 본 값이 된다.
+        joint_pos = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.002, n_max=0.002),
+                            params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_leg"])})
         joint_vel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.5, n_max=0.5))
         actions = ObsTerm(func=mdp.last_action)
 
@@ -198,16 +204,16 @@ class EventCfg:
 @configclass
 class RewardsCfg:
     # --- 과제 ---
-    track_lin_vel = RewTerm(func=mdp.track_lin_vel_xy_exp, weight=2.0,
+    # 오리 판정 순위: 6 방향 추종 > 안정성 > 효율. 요 추종이 약했으므로 1.0 -> 1.5.
+    track_lin_vel = RewTerm(func=custom_rewards.track_vx_exp, weight=2.0,
                             params={"command_name": "base_velocity", "std": 0.25})
-    track_ang_vel = RewTerm(func=mdp.track_ang_vel_z_exp, weight=1.0,
+    track_ang_vel = RewTerm(func=custom_rewards.track_wz_exp, weight=1.5,
                             params={"command_name": "base_velocity", "std": 0.35})
-    # asset_cfg 는 반드시 params 로 넘긴다. 함수 기본 인자로 두면 매니저가 해석하지 않아
-    # joint_ids 가 전 관절(slice(None))이 된다 — 2026-09-25 까지 이 항은 바퀴 회전각까지
-    # "다리 길이 오차"로 세서 굴러가는 것 자체를 벌하고 있었다.
-    leg_length = RewTerm(func=custom_rewards.leg_length_target_l2, weight=-2.0,
-                         params={"target": TARGET_LEG,
-                                 "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_leg"])})
+    track_height = RewTerm(func=custom_rewards.track_height_exp, weight=1.0,
+                           params={"command_name": "base_velocity", "std": 0.02,
+                                   "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_leg"])})
+    # (고정 목표 leg_length 항은 높이 명령 추종 track_height 로 대체했다.
+    #  asset_cfg 는 반드시 params 로 — 기본 인자는 매니저가 해석하지 않는다.)
 
     # --- 균형 ---
     # 두 바퀴 로봇이라 자세 유지가 과제보다 먼저다. 가중치를 크게 준다.

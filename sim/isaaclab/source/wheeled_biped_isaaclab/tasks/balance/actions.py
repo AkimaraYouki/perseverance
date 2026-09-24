@@ -71,3 +71,28 @@ class ClampedJointPositionActionCfg(JointPositionActionCfg):
 class FilteredJointEffortActionCfg(JointEffortActionCfg):
     class_type: type = FilteredJointEffortAction
     cutoff_hz: float = 20.0
+
+
+class CommandOffsetLegAction(ClampedJointPositionAction):
+    """다리 목표 = 높이 명령(h_ref) + scale * clamp(a, ±1).
+
+    높이를 명령으로 받으면서 액션은 그 주변 잔차만 맡는다. 고정 오프셋(범위 중앙)
+    + 큰 scale 로도 전 구간을 덮을 수는 있지만, 그러면 특정 높이를 유지하는 데
+    0 이 아닌 액션을 계속 내야 해서 학습이 나빠진다.
+    """
+
+    cfg: "CommandOffsetLegActionCfg"
+
+    def process_actions(self, actions: torch.Tensor):
+        self._raw_actions[:] = actions
+        h = self._env.command_manager.get_command(self.cfg.command_name)[:, 2:3]
+        self._processed_actions = h + torch.clamp(actions, -1.0, 1.0) * self._scale
+        if self.cfg.clip is not None:
+            self._processed_actions = torch.clamp(
+                self._processed_actions, min=self._clip[:, :, 0], max=self._clip[:, :, 1])
+
+
+@configclass
+class CommandOffsetLegActionCfg(JointPositionActionCfg):
+    class_type: type = CommandOffsetLegAction
+    command_name: str = "base_velocity"
