@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wheeled_biped_isaaclab"
+version = "0.1.0"
+description = "휠-레그 계단 로봇 Isaac Lab 학습 환경"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["source"]
