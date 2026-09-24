@@ -169,7 +169,7 @@ class EventCfg:
         func=mdp.randomize_rigid_body_mass,
         mode="startup",
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names="base"),
+            "asset_cfg": SceneEntityCfg("robot", body_names="base_link"),
             "mass_distribution_params": (-0.3, 0.5),
             "operation": "add",
         },
@@ -179,7 +179,7 @@ class EventCfg:
         func=mdp.randomize_rigid_body_com,
         mode="startup",
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names="base"),
+            "asset_cfg": SceneEntityCfg("robot", body_names="base_link"),
             "com_range": {"x": (-0.02, 0.02), "y": (-0.03, 0.01), "z": (-0.01, 0.01)},
         },
     )

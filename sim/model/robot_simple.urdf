@@ -1,81 +1,29 @@
 <?xml version='1.0' encoding='utf-8'?>
 <robot name="wheeled_biped_simple">
-  <link name="base">
+  <link name="base_link">
     <inertial>
-      <origin xyz="0 0 0.029" rpy="0 0 0" />
-      <mass value="2.949612" />
-      <inertia ixx="9.935384e-03" iyy="1.057103e-02" izz="9.821302e-03" ixy="-4.372184e-04" ixz="1.757000e-03" iyz="5.178394e-04" />
+      <origin xyz="0.00886818 -0.00154265 0.0261825" rpy="0 0 0" />
+      <mass value="2.949467" />
+      <inertia ixx="1.108558e-02" ixy="-3.429385e-04" ixz="1.511850e-03" iyy="9.755404e-03" iyz="4.677701e-04" izz="1.073981e-02" />
     </inertial>
     <visual>
-      <origin xyz="0 0 0.029" rpy="0 0 0" />
+      <origin xyz="0 0 0.0262" rpy="0 0 0" />
       <geometry>
         <box size="0.15 0.19 0.13" />
       </geometry>
     </visual>
     <collision>
-      <origin xyz="0 0 0.029" rpy="0 0 0" />
+      <origin xyz="0 0 0.0262" rpy="0 0 0" />
       <geometry>
         <box size="0.15 0.19 0.13" />
       </geometry>
     </collision>
   </link>
-  <link name="r_carrier">
-    <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0" />
-      <mass value="0.473631" />
-      <inertia ixx="9.454247e-04" iyy="1.535286e-03" izz="2.306264e-03" ixy="1.031844e-03" ixz="-6.365604e-05" iyz="4.778709e-05" />
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0.0912" rpy="0 0 0" />
-      <geometry>
-        <cylinder radius="0.018" length="0.1" />
-      </geometry>
-    </visual>
-    <collision>
-      <origin xyz="0 0 0.0912" rpy="0 0 0" />
-      <geometry>
-        <cylinder radius="0.018" length="0.1" />
-      </geometry>
-    </collision>
-  </link>
-  <link name="r_wheel">
-    <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0" />
-      <mass value="0.066806" />
-      <inertia ixx="9.503910e-05" iyy="1.817040e-04" izz="9.503910e-05" ixy="0.000000e+00" ixz="0.000000e+00" iyz="0.000000e+00" />
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0" rpy="1.5708 0 0" />
-      <geometry>
-        <cylinder radius="0.06" length="0.03" />
-      </geometry>
-    </visual>
-    <collision>
-      <origin xyz="0 0 0" rpy="1.5708 0 0" />
-      <geometry>
-        <cylinder radius="0.06" length="0.03" />
-      </geometry>
-    </collision>
-  </link>
-  <joint name="r_leg" type="prismatic">
-    <parent link="base" />
-    <child link="r_carrier" />
-    <origin xyz="0 0.081 0" rpy="0 0 0" />
-    <axis xyz="0 0 -1" />
-    <limit lower="0.122479" upper="0.242455" effort="79.5" velocity="1.0" />
-  </joint>
-  <joint name="r_wheel_joint" type="continuous">
-    <parent link="r_carrier" />
-    <child link="r_wheel" />
-    <origin xyz="0 0 0" rpy="0 0 0" />
-    <axis xyz="0 1 0" />
-    <limit effort="7.0" velocity="18.8" />
-  </joint>
   <link name="l_carrier">
     <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0" />
-      <mass value="0.473631" />
-      <inertia ixx="9.454247e-04" iyy="1.535286e-03" izz="2.306264e-03" ixy="1.031844e-03" ixz="-6.365604e-05" iyz="4.778709e-05" />
+      <origin xyz="-0.0611273 0 0" rpy="0 0 0" />
+      <mass value="0.473474" />
+      <inertia ixx="1.534847e-03" ixy="4.783431e-05" ixz="1.031795e-03" iyy="2.305984e-03" iyz="-6.370449e-05" izz="9.455158e-04" />
     </inertial>
     <visual>
       <origin xyz="0 0 0.0912" rpy="0 0 0" />
@@ -94,7 +42,7 @@
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <mass value="0.066806" />
-      <inertia ixx="9.503910e-05" iyy="1.817040e-04" izz="9.503910e-05" ixy="0.000000e+00" ixz="0.000000e+00" iyz="0.000000e+00" />
+      <inertia ixx="9.503900e-05" ixy="0.000000e+00" ixz="0.000000e+00" iyy="1.817040e-04" iyz="0.000000e+00" izz="9.503900e-05" />
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="1.5708 0 0" />
@@ -110,9 +58,9 @@
     </collision>
   </link>
   <joint name="l_leg" type="prismatic">
-    <parent link="base" />
+    <parent link="base_link" />
     <child link="l_carrier" />
-    <origin xyz="0 -0.081 0" rpy="0 0 0" />
+    <origin xyz="0 0.081 0" rpy="0 0 0" />
     <axis xyz="0 0 -1" />
     <limit lower="0.122479" upper="0.242455" effort="79.5" velocity="1.0" />
   </joint>
@@ -122,5 +70,81 @@
     <origin xyz="0 0 0" rpy="0 0 0" />
     <axis xyz="0 1 0" />
     <limit effort="7.0" velocity="18.8" />
+  </joint>
+  <link name="r_carrier">
+    <inertial>
+      <origin xyz="-0.0611273 0 0" rpy="0 0 0" />
+      <mass value="0.473474" />
+      <inertia ixx="1.534847e-03" ixy="4.783431e-05" ixz="1.031795e-03" iyy="2.305984e-03" iyz="-6.370449e-05" izz="9.455158e-04" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.0912" rpy="0 0 0" />
+      <geometry>
+        <cylinder radius="0.018" length="0.1" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.0912" rpy="0 0 0" />
+      <geometry>
+        <cylinder radius="0.018" length="0.1" />
+      </geometry>
+    </collision>
+  </link>
+  <link name="r_wheel">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.066806" />
+      <inertia ixx="9.503900e-05" ixy="0.000000e+00" ixz="0.000000e+00" iyy="1.817040e-04" iyz="0.000000e+00" izz="9.503900e-05" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5708 0 0" />
+      <geometry>
+        <cylinder radius="0.06" length="0.03" />
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5708 0 0" />
+      <geometry>
+        <cylinder radius="0.06" length="0.03" />
+      </geometry>
+    </collision>
+  </link>
+  <joint name="r_leg" type="prismatic">
+    <parent link="base_link" />
+    <child link="r_carrier" />
+    <origin xyz="0 -0.081 0" rpy="0 0 0" />
+    <axis xyz="0 0 -1" />
+    <limit lower="0.122479" upper="0.242455" effort="79.5" velocity="1.0" />
+  </joint>
+  <joint name="r_wheel_joint" type="continuous">
+    <parent link="r_carrier" />
+    <child link="r_wheel" />
+    <origin xyz="0 0 0" rpy="0 0 0" />
+    <axis xyz="0 1 0" />
+    <limit effort="7.0" velocity="18.8" />
+  </joint>
+  <link name="imu_link" />
+  <joint name="imu_link_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="imu_link" />
+    <origin xyz="0.0499964 -0.005 0.0699994" rpy="-0 -0 -0" />
+  </joint>
+  <link name="gps_link" />
+  <joint name="gps_link_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="gps_link" />
+    <origin xyz="0.0503105 -0.004766 0.0863994" rpy="0 -0 -0" />
+  </joint>
+  <link name="laser" />
+  <joint name="laser_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="laser" />
+    <origin xyz="-0.0774261 0 0.122499" rpy="-0 -0 -3.14159" />
+  </joint>
+  <link name="camera_link" />
+  <joint name="camera_link_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="camera_link" />
+    <origin xyz="0.107996 0 0.0152593" rpy="0 0 -0" />
   </joint>
 </robot>

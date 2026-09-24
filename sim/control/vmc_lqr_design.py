@@ -76,7 +76,7 @@ def plant(links, joints, h, extra_mass, wheel_rotor):
     추가 질량(배선·배터리 등 실측 차이)은 몸체 COM 에 얹는다.
     """
     R = leg_map.R_WHEEL
-    base, car, wh = links["base"], links["r_carrier"], links["r_wheel"]
+    base, car, wh = links["base_link"], links["r_carrier"], links["r_wheel"]
 
     hip_to_axle = h - R
     m_b = base["m"] + extra_mass

@@ -1,163 +1,196 @@
-"""RL 학습용 단순화 URDF 생성.
+"""RL/제어 설계용 단순화 URDF 생성.
 
 4절링크를 직선 관절 하나로 대체한다. Isaac 은 닫힌 고리를 잘 못 다루므로
 학습 모델에서는 고리를 아예 없앤다. 정책이 내는 다리 길이 h 는
 leg_map.py 로 모터 각도 theta 로 바꿔 실기/MuJoCo 에 넣는다.
 
-    몸체 ─(prismatic, 아래로)─ 캐리어 ─(continuous)─ 바퀴
+    base_link ─(prismatic, 아래로)─ 캐리어 ─(continuous)─ 바퀴
+              └(fixed) imu_link, gps_link, laser, camera_link  (CAD 프레임 그대로)
+
+입력은 fix_urdf.py 를 거친 onshape-to-robot export 다 (export (5) 부터, X 전진 / Z 위,
+L = +y 쪽, 루트 = base_link). 원점은 두 고관절(모터축)의 중점으로 옮긴다.
 
 질량 배분은 MuJoCo 닫힌고리 모델에서 실측한 참여도를 쓴다.
 크랭크 0.54, 로커 0.35, 생크 0.96, 바퀴 1.00 만큼만 다리를 따라 움직인다.
+나머지는 고관절 위치에 몸체 질량으로 붙인다.
 """
 
+import argparse
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import numpy as np
+
 import leg_map
 
-SRC = Path(__file__).parent.parent / "export_(4)_fixed" / "robot.urdf"
-OUT = Path(__file__).parent / "robot_simple.urdf"
-
-HIP_Y = 0.081          # 몸체 중심에서 좌우 고관절까지 [m] (가로 = y)
+HERE = Path(__file__).parent
+DEFAULT_SRC = HERE.parent / "export_(5)_fixed" / "robot.urdf"
+OUT = HERE / "robot_simple.urdf"
 R = leg_map.R_WHEEL
-
-# ---------------------------------------------------------------------------
-# 좌표 규약 (2026-09-24 수정)
-#
-# CAD 내보내기 프레임은 바퀴가 x=+-0.081 에 있고 회전축도 x 였다. 즉 이 로봇은
-# y 방향으로 굴러간다. 그런데 IsaacLab 의 이동 과제는 전부 +x 를 전진으로 보고
-# 커맨드도 lin_vel_x 다. 그대로 두면 정책이 갈 수 없는 방향으로 가라는 지령을
-# 받게 되고, 실기에서도 부호 실수가 나기 쉽다.
-#
-# 그래서 모델 전체를 z 축으로 +90 deg 돌려 전진을 +x 로 맞춘다.
-#   고관절  x=+-0.081  ->  y=+-0.081
-#   바퀴축  x          ->  y
-#   불안정축(넘어지는 축) = pitch = y
-# 관성 텐서도 같이 돌려야 한다 (아래 rot_z90).
-# ---------------------------------------------------------------------------
-
-
-def rot_z90(I):
-    """z 축 +90 deg 회전 후의 관성 텐서. I' = R I R^T, R = Rz(90).
-
-    성분으로 풀면:  ixx'=iyy, iyy'=ixx, izz'=izz,
-                   ixy'=-ixy, ixz'=-iyz, iyz'=ixz
-    """
-    return {
-        "ixx": I["iyy"], "iyy": I["ixx"], "izz": I["izz"],
-        "ixy": -I["ixy"], "ixz": -I["iyz"], "iyz": I["ixz"],
-    }
-
-
-# 바퀴 회전자 반사 관성. URDF 에는 넣지 않는다 —
-# robot_cfg.py 가 armature 로 관절에 직접 넣기 때문에 양쪽에 넣으면 이중 계상이다.
-# (기존 모델은 CAD izz 에 이미 포함된 채로 armature 까지 더해져 있었다.)
-WHEEL_ROTOR_REFLECTED = 157.33e-7 * 10.0**2   # 1.5733e-3 kg m^2
 
 # MuJoCo 실측 참여도
 PARTICIPATION = {"crank": 0.5385, "rocker": 0.3483, "shank": 0.9592, "wheel": 1.0}
 
+# 바퀴 회전자 반사 관성. 단순화 URDF 에는 넣지 않는다 —
+# robot_cfg.py 가 armature 로 관절에 직접 넣기 때문에 양쪽에 넣으면 이중 계상이다.
+# fix_urdf.py 가 CAD 바퀴 izz 에 더해 둔 것을 여기서 뺀다.
+WHEEL_ROTOR_REFLECTED = 157.33e-7 * 10.0**2   # 1.5733e-3 kg m^2
 
-def inertial(el):
-    i = el.find("inertial")
-    m = float(i.find("mass").get("value"))
-    ine = i.find("inertia")
-    return m, {k: float(ine.get(k)) for k in ("ixx", "ixy", "ixz", "iyy", "iyz", "izz")}
+SENSOR_FRAMES = ("imu_link", "gps_link", "laser", "camera_link")
+
+
+def rpy_mat(r, p, y):
+    cr, sr, cp, sp, cy, sy = np.cos(r), np.sin(r), np.cos(p), np.sin(p), np.cos(y), np.sin(y)
+    return np.array([[cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
+                     [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
+                     [-sp, cp*sr, cp*cr]])
+
+
+class Src:
+    def __init__(self, path):
+        r = ET.parse(path).getroot()
+        self.L = {l.get("name"): l for l in r.findall("link")}
+        self.J = {j.get("name"): j for j in r.findall("joint")}
+        self.by_child = {j.find("child").get("link"): j for j in r.findall("joint")}
+
+    def inertial(self, name):
+        i = self.L[name].find("inertial")
+        o = i.find("origin")
+        assert all(abs(float(v)) < 1e-9 for v in o.get("rpy", "0 0 0").split()), f"{name} 관성 프레임 회전됨"
+        e = i.find("inertia")
+        g = lambda k: float(e.get(k))
+        I = np.array([[g("ixx"), g("ixy"), g("ixz")],
+                      [g("ixy"), g("iyy"), g("iyz")],
+                      [g("ixz"), g("iyz"), g("izz")]])
+        return float(i.find("mass").get("value")), np.array(list(map(float, o.get("xyz").split()))), I
+
+    def pose(self, link):
+        """관절 0 자세에서 base_link 기준 link 의 (R, p)."""
+        T = np.eye(4)
+        chain = []
+        while link in self.by_child:
+            j = self.by_child[link]
+            chain.append(j)
+            link = j.find("parent").get("link")
+        for j in reversed(chain):
+            o = j.find("origin")
+            A = np.eye(4)
+            A[:3, :3] = rpy_mat(*map(float, o.get("rpy").split()))
+            A[:3, 3] = list(map(float, o.get("xyz").split()))
+            T = T @ A
+        return T[:3, :3], T[:3, 3]
+
+
+def tensor_attrs(I):
+    return {"ixx": I[0, 0], "ixy": I[0, 1], "ixz": I[0, 2], "iyy": I[1, 1], "iyz": I[1, 2], "izz": I[2, 2]}
 
 
 def main():
-    src = ET.parse(SRC).getroot()
-    L = {l.get("name"): l for l in src.findall("link")}
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--src", default=str(DEFAULT_SRC))
+    ap.add_argument("--out", default=str(OUT))
+    a = ap.parse_args()
+    S = Src(a.src)
 
-    m_body, I_body = inertial(L["r_body"])
-    m_crank, _ = inertial(L["r_crank"])
-    m_rocker, _ = inertial(L["r_rocker"])
-    m_shank, I_shank = inertial(L["r_shank"])
-    m_wheel, I_wheel = inertial(L["r_wheel"])
+    # --- 고관절 (다리 모터축) 위치 → 새 원점
+    hipL = S.pose(S.J["L_joint_M"].find("child").get("link"))[1]
+    hipR = S.pose(S.J["R_joint_M"].find("child").get("link"))[1]
+    hip_c = 0.5 * (hipL + hipR)
+    hip_y = 0.5 * abs(hipL[1] - hipR[1])
+    assert hipL[1] > hipR[1], "L 다리가 +y 쪽이 아니다 — export 좌우 규약 확인"
 
-    # 다리를 따라 움직이는 유효 질량
-    eff = (
-        m_crank * PARTICIPATION["crank"]
-        + m_rocker * PARTICIPATION["rocker"]
-        + m_shank * PARTICIPATION["shank"]
-    )
+    # --- 질량
+    m_body, com_body, I_body = S.inertial("base_link")
+    m_crank = S.inertial("r_crank")[0]
+    m_rocker = S.inertial("r_rocker")[0]
+    m_shank, _, I_shank_local = S.inertial("r_shank")
+    m_wheel, _, I_wheel_cad = S.inertial("r_wheel")
+
+    eff = (m_crank * PARTICIPATION["crank"] + m_rocker * PARTICIPATION["rocker"]
+           + m_shank * PARTICIPATION["shank"])
     m_carrier = eff
-    # 나머지는 몸체에 붙는다
-    m_body_total = m_body + 2 * (m_crank + m_rocker + m_shank - eff)
+    left_over = m_crank + m_rocker + m_shank - eff          # 다리 하나당 몸체에 붙는 몫
+    m_base = m_body + 2 * left_over
 
-    # 몸체 관성은 질량 증가분만큼 비례 확대 (근사).
-    # 추가된 질량이 고관절 근처에 있어 실제보다 약간 작게 잡힌다.
-    k = m_body_total / m_body
-    I_body = {kk: v * k for kk, v in I_body.items()}
+    # 몸체 COM: CAD 몸체 COM + 남은 다리 질량을 각 고관절에
+    com_base = (m_body * com_body + left_over * (hipL + hipR)) / m_base
+    # 몸체 관성: CAD 몸체 관성(자기 COM 기준) + 고관절 점질량의 평행축 항
+    def pa(m, d):
+        return m * (np.dot(d, d) * np.eye(3) - np.outer(d, d))
+    I_base = (I_body + pa(m_body, com_body - com_base)
+              + pa(left_over, hipL - com_base) + pa(left_over, hipR - com_base))
 
-    # 캐리어 관성은 생크 것을 쓴다 (지배적)
-    I_carrier = {kk: v * (m_carrier / m_shank) for kk, v in I_shank.items()}
+    # 캐리어 관성: 생크 텐서를 몸체 좌표로 돌리고 질량비로 축소 (지배적 부재)
+    Rs = S.pose("r_shank")[0]
+    I_carrier = (Rs @ I_shank_local @ Rs.T) * (m_carrier / m_shank)
 
+    # 캐리어 COM 보정: 실제 다리 부재(생크 등)는 고관절-바퀴 선보다 뒤에 있다.
+    # 캐리어 질량을 선 위에 두면 전체 COM 이 CAD 와 반대쪽(앞)으로 가서 정적
+    # 기울기 부호가 실기와 뒤집힌다. CAD 영점 자세의 전체 COM x 에 맞춘다.
+    tot_m, tot_c = 0.0, np.zeros(3)
+    for n, l in S.L.items():
+        if l.find("inertial") is None:
+            continue
+        m_, c_, _ = S.inertial(n)
+        if m_ <= 0:
+            continue
+        Rn, pn = S.pose(n)
+        tot_m += m_
+        tot_c += m_ * (pn + Rn @ c_)
+    com_cad = tot_c / tot_m
+    # sum m x 일치: m_base*cx_base + 2*m_carrier*dx + 2*m_wheel*x_wheel(=고관절 x) = M*cx_cad
+    x_w = hip_c[0]
+    dx_car = (tot_m * com_cad[0] - m_base * com_base[0] - 2 * m_wheel * x_w) / (2 * m_carrier) - x_w
+    self_check = (m_base * com_base[0] + 2 * m_carrier * (x_w + dx_car) + 2 * m_wheel * x_w) / (m_base + 2 * m_carrier + 2 * m_wheel)
+
+    # 바퀴: 스핀축 = 몸체 y. CAD 바퀴 텐서는 로컬 z 가 스핀축.
+    I_spin_cad = I_wheel_cad[2, 2] - WHEEL_ROTOR_REFLECTED
+    I_trans = 0.5 * (I_wheel_cad[0, 0] + I_wheel_cad[1, 1])
+    I_wheel = np.diag([I_trans, I_spin_cad, I_trans])
+
+    # --- URDF 작성 (원점 = 고관절 중점)
     robot = ET.Element("robot", {"name": "wheeled_biped_simple"})
-    ET.SubElement(robot, "!--", {})  # placeholder removed below
 
     def add_link(name, mass, I, com=(0, 0, 0), shape=None):
-        """shape = (kind, size, origin_xyz, origin_rpy) 또는 None.
-
-        RL 학습에는 충돌체가 반드시 있어야 한다. 바퀴는 실제 반지름 그대로,
-        몸체와 캐리어는 관성만 맞춘 단순 도형으로 둔다 (접촉은 바퀴에서만 일어난다).
-        """
         l = ET.SubElement(robot, "link", {"name": name})
-        i = ET.SubElement(l, "inertial")
-        ET.SubElement(i, "origin", {"xyz": " ".join(f"{v:g}" for v in com), "rpy": "0 0 0"})
-        ET.SubElement(i, "mass", {"value": f"{mass:.6f}"})
-        ET.SubElement(i, "inertia", {k2: f"{v:.6e}" for k2, v in I.items()})
-
-        if shape is None:
-            return l
-
-        kind, size, oxyz, orpy = shape
-        for tag in ("visual", "collision"):
-            e = ET.SubElement(l, tag)
-            ET.SubElement(e, "origin", {"xyz": oxyz, "rpy": orpy})
-            g = ET.SubElement(e, "geometry")
-            if kind == "box":
-                ET.SubElement(g, "box", {"size": size})
-            else:
-                r, ln = size
-                ET.SubElement(g, "cylinder", {"radius": f"{r:g}", "length": f"{ln:g}"})
+        if mass is not None:
+            i = ET.SubElement(l, "inertial")
+            ET.SubElement(i, "origin", {"xyz": " ".join(f"{v:.6g}" for v in com), "rpy": "0 0 0"})
+            ET.SubElement(i, "mass", {"value": f"{mass:.6f}"})
+            ET.SubElement(i, "inertia", {k: f"{v:.6e}" for k, v in tensor_attrs(I).items()})
+        if shape is not None:
+            kind, size, oxyz, orpy = shape
+            for tag in ("visual", "collision"):
+                e = ET.SubElement(l, tag)
+                ET.SubElement(e, "origin", {"xyz": oxyz, "rpy": orpy})
+                g = ET.SubElement(e, "geometry")
+                if kind == "box":
+                    ET.SubElement(g, "box", {"size": size})
+                else:
+                    r_, ln = size
+                    ET.SubElement(g, "cylinder", {"radius": f"{r_:g}", "length": f"{ln:g}"})
         return l
 
-    # 몸체: CAD 외형을 감싸는 상자. 접지는 바퀴로만 하므로 정확도는 덜 중요하다.
-    add_link("base", m_body_total, rot_z90(I_body), com=(0, 0, 0.029),
-             shape=("box", "0.15 0.19 0.13", "0 0 0.029", "0 0 0"))
+    c = com_base - hip_c
+    # 몸체 충돌체: CAD 외형을 감싸는 상자를 COM 높이에 둔다 (접지는 바퀴로만 한다)
+    add_link("base_link", m_base, I_base, com=c,
+             shape=("box", "0.15 0.19 0.13", f"0 0 {c[2]:.4f}", "0 0 0"))
 
-    for side, sx in (("r", +1), ("l", -1)):
-
-        # 캐리어: 다리를 나타내는 가는 원통. 절반 지점에 중심이 오게 둔다.
+    for side, sy in (("l", +1), ("r", -1)):
         leg_mid = (leg_map.H_MIN + leg_map.H_MAX) / 2 - R
-        add_link(f"{side}_carrier", m_carrier, rot_z90(I_carrier),
+        add_link(f"{side}_carrier", m_carrier, I_carrier, com=(dx_car, 0.0, 0.0),
                  shape=("cyl", (0.018, 0.10), f"0 0 {leg_mid/2:.4f}", "0 0 0"))
-        # 바퀴: 실제 반지름 60 mm, 폭 30 mm. 회전축이 y 라 x 축 기준 90도 눕힌다.
-        #
-        # CAD 텐서는 스핀축이 z 였다(izz 가 큰 값). 단순화 모델의 회전축은 y 이므로
-        # 스핀 성분을 y 로 옮긴다. 그리고 CAD izz 에 섞여 있던 회전자 반사 관성을
-        # 빼서 armature 와의 이중 계상을 없앤다.
-        I_spin_cad = I_wheel["izz"] - WHEEL_ROTOR_REFLECTED   # 1.817e-4
-        I_trans = 0.5 * (I_wheel["ixx"] + I_wheel["iyy"])     # 9.504e-5
-        I_wheel_rot = {"ixx": I_trans, "iyy": I_spin_cad, "izz": I_trans,
-                       "ixy": 0.0, "ixz": 0.0, "iyz": 0.0}
-        add_link(f"{side}_wheel", m_wheel, I_wheel_rot,
+        add_link(f"{side}_wheel", m_wheel, I_wheel,
                  shape=("cyl", (R, 0.030), "0 0 0", "1.5708 0 0"))
 
-        # 다리 길이 관절: 고관절에서 아래로. 관절값 = 모터축~바퀴중심 거리
         j = ET.SubElement(robot, "joint", {"name": f"{side}_leg", "type": "prismatic"})
-        ET.SubElement(j, "parent", {"link": "base"})
+        ET.SubElement(j, "parent", {"link": "base_link"})
         ET.SubElement(j, "child", {"link": f"{side}_carrier"})
-        ET.SubElement(j, "origin", {"xyz": f"0 {sx*HIP_Y:g} 0", "rpy": "0 0 0"})
+        ET.SubElement(j, "origin", {"xyz": f"0 {sy*hip_y:.6g} 0", "rpy": "0 0 0"})
         ET.SubElement(j, "axis", {"xyz": "0 0 -1"})
         ET.SubElement(j, "limit", {
-            "lower": f"{leg_map.H_MIN - R:.6f}",
-            "upper": f"{leg_map.H_MAX - R:.6f}",
-            # 다리가 낼 수 있는 수직력 = 모터 피크토크 / (dh/dtheta)
-            "effort": f"{9.0 / leg_map.dh_dtheta(leg_map.THETA_MIN):.1f}",
-            "velocity": "1.0",
-        })
+            "lower": f"{leg_map.H_MIN - R:.6f}", "upper": f"{leg_map.H_MAX - R:.6f}",
+            "effort": f"{9.0 / leg_map.dh_dtheta(leg_map.THETA_MIN):.1f}", "velocity": "1.0"})
 
         jw = ET.SubElement(robot, "joint", {"name": f"{side}_wheel_joint", "type": "continuous"})
         ET.SubElement(jw, "parent", {"link": f"{side}_carrier"})
@@ -166,22 +199,38 @@ def main():
         ET.SubElement(jw, "axis", {"xyz": "0 1 0"})
         ET.SubElement(jw, "limit", {"effort": "7.0", "velocity": "18.8"})
 
-    robot.remove(robot.find("!--"))
+    # 센서 프레임: CAD 위치/자세를 새 원점 기준으로 옮긴다
+    frames = []
+    for name in SENSOR_FRAMES:
+        if name not in S.by_child:
+            continue
+        o = S.by_child[name].find("origin")
+        xyz = np.array(list(map(float, o.get("xyz").split()))) - hip_c
+        ET.SubElement(robot, "link", {"name": name})
+        jf = ET.SubElement(robot, "joint", {"name": f"{name}_joint", "type": "fixed"})
+        ET.SubElement(jf, "parent", {"link": "base_link"})
+        ET.SubElement(jf, "child", {"link": name})
+        ET.SubElement(jf, "origin", {"xyz": " ".join(f"{v:.6g}" for v in xyz), "rpy": o.get("rpy")})
+        frames.append((name, xyz, o.get("rpy")))
+
     t = ET.ElementTree(robot)
     ET.indent(t, space="  ")
-    t.write(OUT, encoding="utf-8", xml_declaration=True)
+    t.write(a.out, encoding="utf-8", xml_declaration=True)
 
-    print(f"{OUT.name} 생성")
-    print(f"  base      {m_body_total*1000:8.1f} g")
-    print(f"  carrier   {m_carrier*1000:8.1f} g  x2")
-    print(f"  wheel     {m_wheel*1000:8.1f} g  x2   izz={I_wheel['izz']:.3e} (회전자 포함)")
-    print(f"  합계      {(m_body_total+2*(m_carrier+m_wheel))*1000:8.1f} g")
-    print(f"  좌표규약  전진 +x, 가로 +y, 바퀴축 y, 불안정축 pitch(y)")
-    print(f"  바퀴관성  스핀(iyy) {I_spin_cad:.4e}  횡 {I_trans:.4e}  "
-          f"(회전자 {WHEEL_ROTOR_REFLECTED:.4e} 는 armature 로 별도)")
+    tot = m_base + 2 * (m_carrier + m_wheel)
+    print(f"{Path(a.out).name} 생성  (입력 {a.src})")
+    print(f"  base_link {m_base*1000:8.1f} g   COM (고관절 중점 기준) "
+          f"x {c[0]*1000:+.1f}  y {c[1]*1000:+.1f}  z {c[2]*1000:+.1f} mm")
+    print(f"  carrier   {m_carrier*1000:8.1f} g  x2   COM x {dx_car*1000:+.1f} mm (바퀴축 기준, CAD 전체 COM 맞춤)")
+    print(f"  전체 COM x (고관절 중점 기준): CAD {(com_cad[0]-hip_c[0])*1000:+.1f} mm, 단순화 {(self_check-hip_c[0])*1000:+.1f} mm  (CAD 영점 자세 기준)")
+    print(f"  wheel     {m_wheel*1000:8.1f} g  x2   스핀 iyy {I_spin_cad:.4e} (회전자 {WHEEL_ROTOR_REFLECTED:.4e} 는 armature 로 별도)")
+    print(f"  합계      {tot*1000:8.1f} g")
+    print(f"  고관절 간격 {2*hip_y*1000:.1f} mm  (L +y {hip_y*1000:.1f}, R -y)")
+    print(f"  좌표규약  전진 +x, 가로 +y(왼쪽), 바퀴축 y, 불안정축 pitch(y)")
+    for n, xyz, rpy in frames:
+        print(f"  프레임 {n:12s} xyz {np.round(xyz*1000,1)} mm  rpy {rpy}")
     print(f"\n  다리 관절 범위 {(leg_map.H_MIN-R)*1000:.1f} ~ {(leg_map.H_MAX-R)*1000:.1f} mm (모터축~바퀴중심)")
     print(f"  = 다리 높이 h  {leg_map.H_MIN*1000:.1f} ~ {leg_map.H_MAX*1000:.1f} mm")
-    print(f"  다리 최대 수직력 {9.0/leg_map.dh_dtheta(leg_map.THETA_MIN):.1f} N (모터 피크 9 Nm 기준)")
 
 
 main()
