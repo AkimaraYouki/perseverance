@@ -34,7 +34,7 @@ from isaaclab.sim import UsdFileCfg
 from isaaclab.sim.schemas import ArticulationRootPropertiesCfg, RigidBodyPropertiesCfg
 
 # scripts/convert_urdf.py 가 만드는 위치
-USD_PATH = os.path.expanduser("~/wheeled_biped_isaaclab/usd/robot_simple.usd")
+USD_PATH = os.environ.get("WB_USD", os.path.expanduser("~/wheeled_biped_isaaclab/usd/robot_simple.usd"))
 
 # leg_map.py 의 h 범위에서 온 값 (모터축 ~ 바퀴중심 거리)
 LEG_MIN = 0.1225
@@ -53,7 +53,11 @@ WHEELED_BIPED_CFG = ArticulationCfg(
             linear_damping=0.0,
             angular_damping=0.0,
             max_linear_velocity=100.0,
-            max_angular_velocity=100.0,
+            # 단위가 deg/s 다 (IsaacLab schemas_cfg). 예전 100.0 은 100 deg/s = 1.75 rad/s 로
+            # 바퀴와 몸체 회전을 전부 잘라, 바퀴가 0.1 m/s 둘레속도 이상에서 계속 제동되고 있었다
+            # (2026-09-25 무중력 공회전 시험으로 확인: 토크 0 에서 13.3 -> 1.75 rad/s).
+            # 바퀴 최고 18.85 rad/s = 1080 deg/s 이므로 넉넉히 3600 deg/s.
+            max_angular_velocity=3600.0,
             max_depenetration_velocity=1.0,
         ),
         articulation_props=ArticulationRootPropertiesCfg(
