@@ -92,9 +92,11 @@ class CommandsCfg:
         zero_vel_prob=1.0 if STAGE == 1 else 0.10,
         pure_axis_prob=0.35,
         pure_axis_weights=(0.50, 0.35, 0.15),
+        fast_turn_prob=0.0 if STAGE == 1 else 0.20,
         ranges=WheelLegCommandCfg.Ranges(
-            # 휠 모터 최고 0.90 m/s 의 절반까지만.
-            lin_vel_x=(-0.45, 0.45),
+            # 2026-09-25 사용자 요청: 3 km/h. 0.85 m/s = 바퀴 14.2 rad/s (무부하 18.85 의 75 %).
+            # 그 이상은 균형 회복에 쓸 속도 여유가 거의 없다.
+            lin_vel_x=(-0.85, 0.85),
             ang_vel_z=(-1.0, 1.0),
             height=(0.130, 0.235),
         ),
@@ -217,11 +219,14 @@ class RewardsCfg:
 
     # --- 균형 ---
     # 두 바퀴 로봇이라 자세 유지가 과제보다 먼저다. 가중치를 크게 준다.
-    upright = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0)
+    # 2026-09-25 사용자 요청: 좌우는 수평(코너에서는 안쪽으로 기울기), 앞뒤는 균형 때문에 어쩔 수 없음.
+    # 예전 upright(flat_orientation_l2)는 앞뒤·좌우를 같이 벌해서 코너 기울기와 부딪혔다.
+    upright = RewTerm(func=custom_rewards.pitch_l2, weight=-2.0)
+    roll_track = RewTerm(func=custom_rewards.roll_track_exp, weight=1.5, params={"std": 0.03})
     ang_vel_xy = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.1)
     lin_vel_z = RewTerm(func=mdp.lin_vel_z_l2, weight=-1.0)
-    leg_symmetry = RewTerm(func=custom_rewards.leg_length_symmetry_l2, weight=-2.0,
-                           params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_leg"])})
+    # (다리 좌우 대칭 벌점은 뺐다 — 코너에서 안쪽 다리를 줄이는 것과 정면으로 부딪힌다.
+    #  직진에서 수평이면 대칭은 roll_track 이 알아서 맞춘다.)
     # Isaac Lab 은 모든 보상항에 step_dt(1/200 s)를 곱한다. 버티기의
     # 총 상금은 weight * episode_length_s 이므로 2.0 이면 20 s 완주에 +40.
     alive = RewTerm(func=mdp.is_alive, weight=2.0)

@@ -97,6 +97,15 @@ class WheelLegCommand(CommandTerm):
             vx[pure & (axis == 1)] = 0.0
             vx[pure & (axis == 2)] = 0.0
             wz[pure & (axis == 2)] = 0.0
+        # 고속 코너링: 속도와 회전을 둘 다 크게 (2026-09-25 사용자 요청 — 코너에서 안쪽으로 기울기 학습)
+        if self.cfg.fast_turn_prob > 0.0:
+            ft = torch.rand(n, device=dev) < self.cfg.fast_turn_prob
+            m = int(ft.sum())
+            if m:
+                sv = torch.where(torch.rand(m, device=dev) < 0.5, -1.0, 1.0)
+                sw = torch.where(torch.rand(m, device=dev) < 0.5, -1.0, 1.0)
+                vx[ft] = sv * torch.empty(m, device=dev).uniform_(*self.cfg.fast_turn_vx)
+                wz[ft] = sw * torch.empty(m, device=dev).uniform_(*self.cfg.fast_turn_wz)
         zero = torch.rand(n, device=dev) < self.cfg.zero_vel_prob
         vx[zero] = 0.0
         wz[zero] = 0.0
@@ -127,6 +136,9 @@ class WheelLegCommandCfg(CommandTermCfg):
     pure_axis_prob: float = 0.35
     pure_axis_weights: tuple = (0.50, 0.35, 0.15)   # vx, wz, 높이 — 오리처럼 앞뒤 > 회전 > 나머지
     zero_vel_prob: float = 0.10
+    fast_turn_prob: float = 0.0
+    fast_turn_vx: tuple = (0.50, 0.85)     # |vx| [m/s]
+    fast_turn_wz: tuple = (0.40, 1.00)     # |wz| [rad/s]
 
     @configclass
     class Ranges:

@@ -28,7 +28,7 @@ sim.reset() 에서 진행이 없었다. 닫힌 고리는 MuJoCo 로 따로 검�
 
 import os
 
-from isaaclab.actuators import ImplicitActuatorCfg
+from isaaclab.actuators import DCMotorCfg, ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.sim import UsdFileCfg
 from isaaclab.sim.schemas import ArticulationRootPropertiesCfg, RigidBodyPropertiesCfg
@@ -77,12 +77,19 @@ WHEELED_BIPED_CFG = ArticulationCfg(
             damping=30.0,
             armature=8.766e-4 / DH_DTHETA**2,     # 0.0684 kg (직선 관절 환산)
         ),
-        "wheels": ImplicitActuatorCfg(
+        # 2026-09-25: Implicit(damping 0.1) -> DC 모터 모델.
+        #  * damping 0.1 은 토크 제어 모터에 없는 점성 제동이었다. 0.45 m/s(7.5 rad/s)에서 0.75 Nm,
+        #    3 km/h(13.9 rad/s)에서 1.39 Nm — 정책 토크 한계 1.5 Nm 를 거의 다 먹었다.
+        #    그 속도에서 로봇이 15~17 deg 숙인 것도 이 제동을 이기려던 것으로 본다.
+        #  * 대신 선형 토크-속도 곡선을 넣는다: 가용 토크 = 7 Nm x (1 - w / 18.85 rad/s).
+        #    AK45-10 KV75 24 V 무부하 180 rpm = 18.85 rad/s, 피크 7 Nm. 3 km/h 에서 약 1.86 Nm.
+        "wheels": DCMotorCfg(
             joint_names_expr=[".*_wheel_joint"],
-            effort_limit_sim=7.0,
-            velocity_limit_sim=18.8,
+            saturation_effort=7.0,
+            effort_limit=7.0,
+            velocity_limit=18.85,
             stiffness=0.0,                         # 토크 제어
-            damping=0.1,
+            damping=0.0,
             armature=1.5733e-3,                    # 회전자 157.33 g*cm^2 x 10^2
         ),
     },

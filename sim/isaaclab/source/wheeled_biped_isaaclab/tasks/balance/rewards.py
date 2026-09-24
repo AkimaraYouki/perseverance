@@ -88,3 +88,32 @@ def track_height_exp(env: "ManagerBasedRLEnv", command_name: str, std: float,
     h = env.command_manager.get_command(command_name)[:, 2:3]
     q = asset.data.joint_pos[:, asset_cfg.joint_ids]
     return torch.exp(-torch.mean(torch.square(q - h), dim=1) / std**2)
+
+
+# --- 자세: 앞뒤는 벌점, 좌우는 코너링 목표 기울기 추종 -----------------------
+def pitch_l2(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """앞뒤 기울기만. 두 바퀴 균형에서 가감속 때 앞뒤로 기우는 건 피할 수 없어서 좌우와 분리한다."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    return torch.square(asset.data.projected_gravity_b[:, 0])
+
+
+def roll_lean_target(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """코너링 목표 좌우 기울기의 projected_gravity y 성분 (= sin phi_des).
+
+    원심력과 중력의 합력 방향에 몸을 맞춘다: tan(phi) = v * wz / g.
+    +y 가 왼쪽이므로 전진하며 좌회전(v>0, wz>0)하면 구심가속도가 +y, 몸은 왼쪽(안쪽)으로 기운다.
+    몸이 왼쪽으로 phi 기울면 projected_gravity_b.y = +sin(phi).
+    실제 속도(오도메트리)와 자이로 z 를 쓴다 — 실기에서도 둘 다 있다.
+    직진이나 제자리 회전이면 v * wz = 0 이라 목표는 수평이다.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    a_c = asset.data.root_lin_vel_b[:, 0] * asset.data.root_ang_vel_b[:, 2]
+    return torch.sin(torch.atan(a_c / 9.81))
+
+
+def roll_track_exp(env: "ManagerBasedRLEnv", std: float,
+                   asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """좌우 기울기가 코너링 목표(직진이면 수평)에 붙어 있는지."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    err = asset.data.projected_gravity_b[:, 1] - roll_lean_target(env, asset_cfg)
+    return torch.exp(-torch.square(err) / std**2)

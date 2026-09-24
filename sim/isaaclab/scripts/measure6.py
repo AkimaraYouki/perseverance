@@ -25,6 +25,7 @@ ap.add_argument("--seconds", type=float, default=10.0)
 ap.add_argument("--settle", type=float, default=2.0, help="이 시간 이후만 평균 [s]")
 ap.add_argument("--vx", type=float, default=0.30)
 ap.add_argument("--wz", type=float, default=0.80)
+ap.add_argument("--vx_fast", type=float, default=0.80, help="고속 조건 vx [m/s] (0.83 = 3 km/h)")
 ap.add_argument("--hard", action="store_true")
 ap.add_argument("--out", default=None)
 AppLauncher.add_app_launcher_args(ap)
@@ -50,6 +51,10 @@ for hn, h in H.items():
               (f"후진/{hn}", -args.vx, 0.0, h, h), (f"좌회전/{hn}", 0.0, args.wz, h, h),
               (f"우회전/{hn}", 0.0, -args.wz, h, h)]
 CONDS += [("올라가기", 0.0, 0.0, H["낮음"], H["높음"]), ("내려가기", 0.0, 0.0, H["높음"], H["낮음"])]
+# 고속 (3 km/h 목표) — 코너에서 안쪽으로 기우는지(lean vs 목표 atan(v*wz/g))도 본다
+hm = H["중간"]
+CONDS += [("고속전진", args.vx_fast, 0.0, hm, hm), ("고속후진", -args.vx_fast, 0.0, hm, hm),
+          ("고속좌코너", args.vx_fast, args.wz, hm, hm), ("고속우코너", args.vx_fast, -args.wz, hm, hm)]
 SWITCH_T = 3.0   # 높이 전환 조건은 이 시각에 목표를 바꾼다
 
 N = len(CONDS) * args.repeats
@@ -77,7 +82,7 @@ T = int(args.seconds / dt)
 S = int(args.settle / dt)
 obs, _ = env.reset()
 alive = torch.ones(N, dtype=torch.bool, device=dev)
-rec = {k: [] for k in ("vx", "wz", "hq", "href", "pitch", "roll", "tau", "alive")}
+rec = {k: [] for k in ("vx", "wz", "hq", "href", "pitch", "roll", "lean", "tau", "alive")}
 with torch.inference_mode():
     for k in range(T):
         t = k * dt
@@ -93,6 +98,8 @@ with torch.inference_mode():
         rec["href"].append(cmd.command[:, 2].clone())
         rec["pitch"].append(torch.rad2deg(torch.asin(g[:, 0].clamp(-1, 1))))
         rec["roll"].append(torch.rad2deg(torch.asin((-g[:, 1]).clamp(-1, 1))))
+        # lean: + = 왼쪽으로 기움 (projected_gravity y = +sin). 목표는 rewards.roll_lean_target 과 같은 식
+        rec["lean"].append(torch.rad2deg(torch.asin(g[:, 1].clamp(-1, 1))))
         rec["tau"].append(d.applied_torque[:, wheel_ids].clone())
         rec["alive"].append(alive.clone())
 A = {k: torch.stack(v).cpu().numpy() for k, v in rec.items()}   # (T, N, ...)
@@ -121,7 +128,10 @@ for c, (name, vx, wz, ha, hb) in enumerate(CONDS):
         frac = (hq - ha) / (hb - ha)
         idx = np.nonzero(frac >= 0.9)[0]
         t90 = float(idx[0] * dt) if len(idx) else float("nan")
+    lean = mean(A["lean"])
+    lean_tgt = float(np.degrees(np.arctan(vx_a * wz_a / 9.81)))
     rows.append(dict(cond=name, cmd_vx=vx, cmd_wz=wz, vx=vx_a, wz=wz_a, err_vx=abs(vx_a - vx),
+                     lean=lean, lean_tgt=lean_tgt,
                      err_wz=abs(wz_a - wz), err_h_mm=herr * 1000, t90_s=t90, falls=falls,
                      pitch_sd=pitch_sd, roll_max=roll_max, tau_rms=tau_rms, flips_per_s=flips))
 
@@ -137,13 +147,14 @@ for r in rows:
     t90 = f"{r['t90_s']:.2f}s" if r["t90_s"] is not None else "-"
     print(f"{r['cond']:12s}{r['cmd_vx']:8.2f}{r['vx']:8.3f}{r['cmd_wz']:8.2f}{r['wz']:8.3f}"
           f"{r['err_h_mm']:7.1f}mm{t90:>8}{r['falls']:>4}/{args.repeats}{r['pitch_sd']:9.2f}"
-          f"{r['roll_max']:10.2f}{r['tau_rms']:9.3f}{r['flips_per_s']:8.1f}")
+          f"{r['lean']:+8.2f}{r['lean_tgt']:+7.2f}{r['tau_rms']:9.3f}{r['flips_per_s']:8.1f}")
 mv = [r for r in rows if r["cmd_vx"] != 0]
 mw = [r for r in rows if r["cmd_wz"] != 0]
 print("-" * 110)
 print(f"  추종  vx 오차 평균 {np.mean([r['err_vx'] for r in mv]):.3f} m/s ({100*np.mean([r['err_vx'] for r in mv])/args.vx:.0f} %)"
       f" | wz 오차 평균 {np.mean([r['err_wz'] for r in mw]):.3f} rad/s ({100*np.mean([r['err_wz'] for r in mw])/args.wz:.0f} %)"
       f" | 높이 오차 평균 {np.mean([r['err_h_mm'] for r in rows]):.1f} mm")
+print(f"  좌우  |기울기-목표| 평균 {np.mean([abs(r['lean']-r['lean_tgt']) for r in rows]):.2f}° (직진·정지는 목표 0°, 코너는 atan(v*wz/g))")
 print(f"  안정  낙상 {sum(r['falls'] for r in rows)}/{N} | pitch σ 최대 {max(r['pitch_sd'] for r in rows):.2f}°")
 print(f"  효율  바퀴 토크 RMS 평균 {np.mean([r['tau_rms'] for r in rows]):.3f} Nm | 토크 반전 최대 {max(r['flips_per_s'] for r in rows):.1f} 회/s")
 out = args.out or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(args.policy))),
