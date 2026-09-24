@@ -51,3 +51,13 @@ def wheel_effort_l2(
     한참 넘는 토크를 내봐야 실기에서는 미끄러지기만 하므로 억제한다."""
     asset: Articulation = env.scene[asset_cfg.name]
     return torch.sum(torch.square(asset.data.applied_torque[:, asset_cfg.joint_ids]), dim=1)
+
+
+def action_out_of_range(env: "ManagerBasedRLEnv", limit: float = 1.0) -> torch.Tensor:
+    """원시 액션이 ±limit 밖으로 나간 양의 제곱합.
+
+    액션은 액션 항 안에서 ±1 로 잘리므로 그 밖은 효과가 없는데, 벌이 없으면
+    정책 평균이 계속 바깥으로 밀려나 출력이 ±1 에 붙은 뱅뱅 제어가 된다.
+    """
+    a = env.action_manager.action
+    return torch.sum(torch.square(torch.clamp(torch.abs(a) - limit, min=0.0)), dim=1)

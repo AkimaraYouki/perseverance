@@ -29,6 +29,7 @@ import isaaclab.envs.mdp as mdp
 from wheeled_biped_isaaclab.robot_cfg import LEG_MAX, LEG_MID, LEG_MIN, WHEELED_BIPED_CFG
 
 from . import rewards as custom_rewards
+from .actions import ClampedJointPositionActionCfg, FilteredJointEffortActionCfg
 
 # 학습 목표 다리 길이. 범위 중앙에 둔다.
 TARGET_LEG = LEG_MID
@@ -99,16 +100,19 @@ class CommandsCfg:
 
 @configclass
 class ActionsCfg:
-    legs = mdp.JointPositionActionCfg(
+    # 원시 액션은 두 항 모두 안에서 ±1 로 자른다 (actions.py 설명 참조).
+    legs = ClampedJointPositionActionCfg(
         asset_name="robot",
         joint_names=[".*_leg"],
         scale=0.05,          # +-0.05 m 범위를 기본값 주변으로
         offset=TARGET_LEG,
         clip={".*_leg": (LEG_MIN, LEG_MAX)},
     )
-    wheels = mdp.JointEffortActionCfg(
+    wheels = FilteredJointEffortActionCfg(
         asset_name="robot",
         joint_names=[".*_wheel_joint"],
+        # 바퀴 토크 1차 LPF. 실기 제어기에도 같은 필터를 넣을 것.
+        cutoff_hz=20.0,
         # 마찰한계가 0.82 Nm 이라 2.0 Nm 는 액션 범위의 60% 가 죽은 구간이고,
         # 탐색 노이즈만 증폭시켰다. PD 검사에서 실제로 쓰인 토크는 0.85 Nm.
         # 1.5 면 여유는 남기고 노이즈는 25% 줄어든다.
@@ -198,22 +202,32 @@ class RewardsCfg:
                             params={"command_name": "base_velocity", "std": 0.25})
     track_ang_vel = RewTerm(func=mdp.track_ang_vel_z_exp, weight=1.0,
                             params={"command_name": "base_velocity", "std": 0.35})
+    # asset_cfg 는 반드시 params 로 넘긴다. 함수 기본 인자로 두면 매니저가 해석하지 않아
+    # joint_ids 가 전 관절(slice(None))이 된다 — 2026-09-25 까지 이 항은 바퀴 회전각까지
+    # "다리 길이 오차"로 세서 굴러가는 것 자체를 벌하고 있었다.
     leg_length = RewTerm(func=custom_rewards.leg_length_target_l2, weight=-2.0,
-                         params={"target": TARGET_LEG})
+                         params={"target": TARGET_LEG,
+                                 "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_leg"])})
 
     # --- 균형 ---
     # 두 바퀴 로봇이라 자세 유지가 과제보다 먼저다. 가중치를 크게 준다.
     upright = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0)
     ang_vel_xy = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.1)
     lin_vel_z = RewTerm(func=mdp.lin_vel_z_l2, weight=-1.0)
-    leg_symmetry = RewTerm(func=custom_rewards.leg_length_symmetry_l2, weight=-2.0)
+    leg_symmetry = RewTerm(func=custom_rewards.leg_length_symmetry_l2, weight=-2.0,
+                           params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_leg"])})
     # Isaac Lab 은 모든 보상항에 step_dt(1/200 s)를 곱한다. 버티기의
     # 총 상금은 weight * episode_length_s 이므로 2.0 이면 20 s 완주에 +40.
     alive = RewTerm(func=mdp.is_alive, weight=2.0)
 
     # --- 매끄러움 / 실기 보호 ---
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.02)
-    wheel_effort = RewTerm(func=custom_rewards.wheel_effort_l2, weight=-0.002)
+    # 2026-09-25: 바퀴 진동(±1.5 Nm 뱅뱅) 억제. 이전 -0.02 / -0.002.
+    # wheel_effort: 양 바퀴 1.5 Nm 상시면 초당 -0.45, 균형 유지(0.2~0.5 Nm)면 무시할 수준.
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.1)
+    # 같은 이유로 params 명시. 기본 인자였을 때는 다리 지지력(40~80 N)까지 세고 있었다.
+    wheel_effort = RewTerm(func=custom_rewards.wheel_effort_l2, weight=-0.1,
+                           params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_wheel_joint"])})
+    action_range = RewTerm(func=custom_rewards.action_out_of_range, weight=-0.5)
     leg_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.002,
                       params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_leg"])})
     joint_limits = RewTerm(func=mdp.joint_pos_limits, weight=-1.0,

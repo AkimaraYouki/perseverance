@@ -31,6 +31,13 @@ class BalancePPORunnerCfg(RslRlOnPolicyRunnerCfg):
     save_interval = 50
     experiment_name = "wheeled_biped_balance"
     empirical_normalization = False
+    # 정책 출력을 ±1 로 자른다. IsaacLab 기본값은 None(자르지 않음)이라, 이게 없으면
+    # 액션 스케일(바퀴 1.5 Nm, 다리 ±5 cm)이 한계 역할을 못 한다. 실제로 2026-09-24 학습은
+    # 원시 액션이 최대 8.85 까지 나와 바퀴는 모터 한계 7 Nm 로 뱅뱅(약 10 Hz, 속도한계 18.8 rad/s),
+    # 다리는 하한(122.5 mm)에 99.5 % 붙어 있었다 (scripts/play_log.py 로그).
+    # 자르기는 액션 항 안(tasks/balance/actions.py)에서 한다. 래퍼에서 자르면 ±1 밖으로
+    # 밀려난 정책 평균을 벌할 수 없어 뱅뱅 제어가 된다 (2026-09-25 원시 출력 최대 194).
+    clip_actions = None
 
     policy = RslRlPpoActorCriticCfg(
         init_noise_std=1.0,
