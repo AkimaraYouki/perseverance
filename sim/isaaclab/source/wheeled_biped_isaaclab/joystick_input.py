@@ -185,14 +185,23 @@ class Gamepad:
 
 
 
-#: 오른쪽 스틱 Y. 두 배치(고전 xpad / 최신 hid)에서 번호가 갈린다.
-AXIS_RIGHT_Y_CLASSIC = 4
-AXIS_RIGHT_Y_MODERN = 3
+#: 트리거 축 번호. 두 배치(고전 xpad / 최신 hid)에서 LT 가 갈린다. RT 는 둘 다 5.
+AXIS_LT_CLASSIC = 2
+AXIS_LT_MODERN = 4
+AXIS_RT = 5
 BUTTON_B = 1
+_TRIGGER_DEADZONE = 0.05
 
 
-def right_y_axis(pad: "Gamepad") -> int:
-    return AXIS_RIGHT_Y_MODERN if pad.axis_right_x == AXIS_RIGHT_X_MODERN else AXIS_RIGHT_Y_CLASSIC
+def lt_axis(pad: "Gamepad") -> int:
+    return AXIS_LT_MODERN if pad.axis_right_x == AXIS_RIGHT_X_MODERN else AXIS_LT_CLASSIC
+
+
+def trigger(pad: "Gamepad", number: int) -> float:
+    """트리거 0..1. 안 누르면 -1 로 쉬므로 (raw+1)/2. 한 번도 안 움직였으면 0."""
+    raw = pad._axes.get(number, -1.0)
+    v = (raw + 1.0) * 0.5
+    return 0.0 if v < _TRIGGER_DEADZONE else v
 
 
 def command_from_gamepad(
@@ -200,18 +209,17 @@ def command_from_gamepad(
     lin_vel_x_range: tuple[float, float],
     ang_vel_z_range: tuple[float, float],
 ) -> tuple[float, float, float, bool, bool]:
-    """스틱 -> (vx, wz, 높이 변화 입력 -1..1, 비상정지, 높이 초기화).
+    """패드 -> (vx, wz, 높이 변화 입력 -1..1, 비상정지, 높이 초기화).
 
-    배치 (오리와 같은 손 위치를 유지했다):
+    배치 (2026-09-25 사용자 지정 — 한 스틱에 한 성분만):
 
-        왼쪽 스틱  세로 = 전진/후진 (vx)
-        왼쪽 스틱  가로 = 제자리 회전 (wz)
-        오른쪽 스틱 세로 = 높이 올리기/내리기 (위로 밀면 키가 커진다)
+        왼쪽 스틱  세로 = 전진/후진 (vx)          (가로는 쓰지 않는다)
+        오른쪽 스틱 가로 = 조향, 제자리 회전 (wz)   (세로는 쓰지 않는다)
+        RT / LT         = 높이 올리기 / 내리기 (속도 입력 — 떼면 그 높이 유지)
         A = 비상정지 (vx = wz = 0, 높이는 유지)
         B = 높이를 기본값으로
+        (십자키 = 카메라 둘러보기, LB/RB = 확대/축소 — play_joy.py)
 
-    높이는 속도(rate) 입력이다. 스틱을 놓으면 그 높이에 머문다 — 실기에서 손을
-    떼자마자 쪼그려 앉으면 위험하므로 위치 입력으로 하지 않았다.
     방향 규약: +x 앞, yaw 반시계 +. 스틱은 위/왼쪽이 음수라 부호를 뒤집는다.
     """
     estop = pad.button(BUTTON_A)
@@ -219,8 +227,8 @@ def command_from_gamepad(
     if estop:
         return 0.0, 0.0, 0.0, True, reset_h
     vx = -pad.axis(AXIS_LEFT_Y)
-    wz = -pad.axis(AXIS_LEFT_X)
-    dh = -pad.axis(right_y_axis(pad))
+    wz = -pad.axis(pad.axis_right_x)
+    dh = trigger(pad, AXIS_RT) - trigger(pad, lt_axis(pad))
     return _scale(vx, lin_vel_x_range), _scale(wz, ang_vel_z_range), dh, False, reset_h
 
 
