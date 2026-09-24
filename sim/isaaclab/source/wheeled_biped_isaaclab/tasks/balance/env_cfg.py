@@ -45,9 +45,11 @@ class SceneCfg(InteractiveSceneCfg):
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
             restitution_combine_mode="multiply",
-            # 고무-대리석 건조 기준. 실기 마찰과 맞춰야 견인 한계가 같아진다.
-            static_friction=0.8,
-            dynamic_friction=0.7,
+            # multiply 결합이라 실효 마찰 = 지면 x 로봇 재질. 지면을 1.0 으로 두고 로봇(바퀴) 재질을
+            # 0.5~0.8 에서 무작위로 뽑는다 (사용자 지정).
+            # 예전 0.8/0.7 x 로봇 기본 0.5 = 실효 0.4/0.35 였다.
+            static_friction=1.0,
+            dynamic_friction=1.0,
         ),
     )
     robot = WHEELED_BIPED_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
@@ -93,11 +95,14 @@ class CommandsCfg:
         pure_axis_prob=0.35,
         pure_axis_weights=(0.50, 0.35, 0.15),
         fast_turn_prob=0.0 if STAGE == 1 else 0.20,
+        fast_turn_wz=(0.6, 2.0),
         ranges=WheelLegCommandCfg.Ranges(
             # 2026-09-25 사용자 요청: 3 km/h. 0.85 m/s = 바퀴 14.2 rad/s (무부하 18.85 의 75 %).
             # 그 이상은 균형 회복에 쓸 속도 여유가 거의 없다.
             lin_vel_x=(-0.85, 0.85),
-            ang_vel_z=(-1.0, 1.0),
+            # 2026-09-25 사용자: 회전이 너무 느리다. 제자리 회전 시 바퀴 = 1.35 x wz 이라 이론상 14 rad/s 까지 되지만
+            # 균형·마찰 여유를 두고 2.5 rad/s (143 deg/s).
+            ang_vel_z=(-2.5, 2.5),
             height=(0.130, 0.235),
         ),
     )
@@ -176,6 +181,19 @@ class EventCfg:
     )
 
     # --- 도메인 랜덤화 ---
+    # 바퀴-바닥 마찰 0.5 ~ 0.8 (사용자 지정 2026-09-25, 처음 0.25~0.6 에서 변경). 두 단계 모두 켠다.
+    wheel_friction = EventTerm(
+        func=mdp.randomize_rigid_body_material,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
+            "static_friction_range": (0.5, 0.8),
+            "dynamic_friction_range": (0.5, 0.8),
+            "restitution_range": (0.0, 0.0),
+            "num_buckets": 64,
+            "make_consistent": True,
+        },
+    )
     # 실기 무게가 아직 확정 전이고 배터리/배선으로 바뀔 수 있어 범위를 넓게 둔다.
     base_mass = EventTerm(
         func=mdp.randomize_rigid_body_mass,
@@ -210,7 +228,7 @@ class RewardsCfg:
     track_lin_vel = RewTerm(func=custom_rewards.track_vx_exp, weight=2.0,
                             params={"command_name": "base_velocity", "std": 0.25})
     track_ang_vel = RewTerm(func=custom_rewards.track_wz_exp, weight=1.5,
-                            params={"command_name": "base_velocity", "std": 0.35})
+                            params={"command_name": "base_velocity", "std": 0.5})
     track_height = RewTerm(func=custom_rewards.track_height_exp, weight=1.0,
                            params={"command_name": "base_velocity", "std": 0.02,
                                    "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_leg"])})
