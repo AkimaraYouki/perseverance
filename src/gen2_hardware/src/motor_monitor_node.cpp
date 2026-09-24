@@ -66,6 +66,7 @@ private:
       m.name = c.name;
       m.can_id = c.can_id;
       m.rx_count = fb.rx_count;
+      m.kt_nm_per_a = c.kt_nm_per_a;
       if (fb.valid) {
         m.header.stamp = fb.realtime_ns > 0 ?
           static_cast<builtin_interfaces::msg::Time>(rclcpp::Time(fb.realtime_ns)) : arr.header.stamp;

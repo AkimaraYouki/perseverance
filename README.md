@@ -72,6 +72,23 @@ sudo modprobe vcan; sudo ip link add vcan0 type vcan; sudo ip link set vcan0 up
 python3 src/gen2_hardware/test/test_motor_test_node.py src/gen2_hardware/config/motors.yaml
 ```
 
+## Logging (sim ↔ real comparison)
+
+```bash
+ros2 run gen2_tools record_bag.sh <experiment>      # mcap in ~/bags/<date>_<experiment>; keep STILL 5 s
+ros2 run gen2_tools bag_to_csv ~/bags/<bag> [--start S --end S --still 5]
+```
+Records motors (state + commands + tests), IMU (`/imu/data`, `/imu/data_raw`, `/imu/raw`),
+`/controller/state`, diagnostics (CAN stats), power, GNSS, TF, scan, `/cmd_vel`, `/joy`. Topics
+that appear later are picked up automatically. CSV columns follow `sim/isaaclab/scripts/play_log.py`
+(`q_`, `qd_`, `cur_`, `tau_`, `kt_` per motor; `roll pitch yaw angvel_* acc_*`); `trim.txt` holds
+the still-window means (static lean trim). Do not commit bags; put CSV excerpts in `logs/`.
+
+## Desktop ↔ robot agents
+
+`comms/` is a mailbox between the desktop (Isaac Sim) agent and the Jetson agent — see
+`comms/README.md`. `sim/` and `tools/shr1/` belong to the desktop side.
+
 ## Test sequence (pass/fail)
 
 | Step | How | Pass criteria | Status |
@@ -108,7 +125,8 @@ Accuracy depends on the PM02 current calibration.
 - AK45-10 datasheet: Kt 0.127 N·m/A rotor side → 1.27 N·m/A output (config), 14 pole pairs,
   rated 2.1 A / peak 5 A. The drive's own current limit (AppParams `l_current_max` 35 A) is far
   above the motor's peak: lower it to ≈5 A in the CubeMars tool. Confirm Kt with a torque arm.
-- AK45-10 #2 and AK60-6 V3.0 not on the bus yet: add to `motors.yaml` with their IDs.
+- Robot has **4 actuators**: wheels AK45-10 ×2, legs AK60-6 V3.0 ×2 (L = +y, R = -y).
+  Only one AK45-10 (id 69) is on the bus so far; add the others to `motors.yaml` with their IDs.
   AK60-6 V3.0 supports disable (mode 15) and has Kt 0.5994 N·m/A in the V3.2.0 manual table.
 - Feedback upload is 50 Hz (`send_can_status_rate_hz`); balance control needs 500–1000 Hz
   uploads (AK 3.0: up to 2000 Hz) — change in CubeMars tool before step 12.

@@ -8,6 +8,7 @@ float64 position_rad            # joint side, direction and offset applied
 float64 velocity_rad_s          # joint side
 float64 current_a               # motor q-axis current as reported
 float64 torque_nm               # current_a * kt_nm_per_a * direction (estimate)
+float64 kt_nm_per_a             # output-side Kt used for torque_nm (NaN = unknown)
 float64 temperature_c           # driver board temperature (CubeMars servo upload)
 uint8 error_code
 string error_text
