@@ -24,6 +24,9 @@ ap.add_argument("--policy", required=True)
 ap.add_argument("--task", default="Isaac-WheeledBiped-Balance-Play-v0")
 ap.add_argument("--num_envs", type=int, default=1)
 ap.add_argument("--joystick", nargs="?", const="/dev/input/js0", default=None, metavar="DEV")
+ap.add_argument("--pad", choices=("auto", "classic", "modern"), default="auto",
+                help="패드 축 배치 강제. 자동 판별이 모호할 때 (연결 순간 트리거를 잡고 있으면 생긴다). "
+                     "유선 Xbox(xpad 드라이버) = classic")
 ap.add_argument("--cycle", action="store_true")
 ap.add_argument("--hold", type=float, default=4.0)
 ap.add_argument("--vx", type=float, default=0.0)
@@ -137,6 +140,10 @@ pad = None
 if args.joystick:
     pad = J.Gamepad(args.joystick)
     pad.poll()
+    if args.pad != "auto":
+        pad.axis_right_x = J.AXIS_RIGHT_X_CLASSIC if args.pad == "classic" else J.AXIS_RIGHT_X_MODERN
+        pad.layout = f"{args.pad} (강제 지정)"
+        pad._layout_done = True
     print(f"[패드] {args.joystick} 배치: {pad.layout}", flush=True)
 
 h_mid = 0.5 * (h_lo + h_hi)
