@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- gen2 DDS, local mode (no Wi-Fi IPv4): loopback only, robot-internal traffic keeps working.
+     Cyclone 0.10 does not fail over from a vanished Wi-Fi address to lo, so gen2_dds.sh picks this
+     file at start-up and the NetworkManager hook restarts gen2-bench when Wi-Fi comes or goes. -->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain Id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface name="lo"/>
+      </Interfaces>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>60</MaxAutoParticipantIndex>
+      <Peers><Peer address="127.0.0.1"/></Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

@@ -16,10 +16,9 @@ DURATION = float(sys.argv[1]) if len(sys.argv) > 1 else 5.0
 def main():
     import os
     uri = os.environ.get('CYCLONEDDS_URI', '')
-    if 'gen2_bringup' not in uri:
+    if 'gen2_cyclonedds' not in uri and 'gen2_bringup' not in uri:
         print('WARN  CYCLONEDDS_URI is not the gen2 config — robot topics may be invisible.\n'
-              '      open a new terminal or: export CYCLONEDDS_URI=file://$HOME/gen2_ws/src/'
-              'gen2_bringup/config/cyclonedds.xml')
+              '      open a new terminal, or: export CYCLONEDDS_URI=file://$(ros2 run gen2_bringup gen2_dds.sh)')
     rclpy.init()
     n = rclpy.create_node('gen2_bench_check')
     cnt = {'hub': 0, 'mot': 0}

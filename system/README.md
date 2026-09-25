@@ -8,6 +8,7 @@
 | `systemd/wifi-diag.service` + `scripts/wifi_diag.sh` | `/etc/systemd/system/`, `~/lcd_test/` | boot-time Wi-Fi log → `~/wifi_diag.log` |
 | `systemd/post-boot-check.service` | `/etc/systemd/system/` | one-shot post-reboot check (disables itself) |
 | `chrony/gen2-lan-server.conf` | `/etc/chrony/conf.d/` | Jetson serves NTP to the LAN / phone hotspot (camera latency clock sync) |
+| `networkmanager/90-gen2-dds` | `/etc/NetworkManager/dispatcher.d/` (root, 755) | restart gen2-bench when the Wi-Fi IPv4 address appears/changes/disappears (DDS mode re-selection) |
 | `udev/90-ax210-btusb.rules` | `/etc/udev/rules.d/` | load btusb for AX210 Bluetooth (NVIDIA rule blocks it) |
 | `scripts/st7789_test.py` | `~/lcd_test/` | standalone LCD wiring test |
 | `scripts/can_scope.sh` | `~/can_test/` | repeating CAN frames for oscilloscope checks |
@@ -17,6 +18,8 @@ Install / restore:
 sudo cp system/systemd/*.service /etc/systemd/system/
 sudo install -m 755 system/sbin/lcd_pinmux.sh /usr/local/sbin/
 sudo cp system/udev/90-ax210-btusb.rules /etc/udev/rules.d/ && sudo udevadm control --reload
+sudo install -m 755 system/networkmanager/90-gen2-dds /etc/NetworkManager/dispatcher.d/
+sudo cp system/chrony/gen2-lan-server.conf /etc/chrony/conf.d/ && sudo systemctl restart chrony
 sudo systemctl daemon-reload
 sudo systemctl enable --now can0-up lcd-pinmux gen2-bench
 ```

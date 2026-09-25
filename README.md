@@ -135,6 +135,11 @@ Accuracy depends on the PM02 current calibration.
   AK60-6 V3.0 supports disable (mode 15) and has Kt 0.5994 N·m/A in the V3.2.0 manual table.
 - Feedback upload is 50 Hz (`send_can_status_rate_hz`); balance control needs 500–1000 Hz
   uploads (AK 3.0: up to 2000 Hz) — change in CubeMars tool before step 12.
-- IMX219 on CAM1 failed to probe at the last boot (I2C -121): reseat the ribbon cable.
-- `~/.bashrc` DDS config now points to `src/gen2_bringup/config/cyclonedds.xml` (lo + Wi-Fi);
-  every terminal/remote machine must use a compatible config.
+- IMX219 on CAM1 works after reseating the ribbon cable (an earlier boot failed with I2C -121).
+- DDS (CycloneDDS 0.10): `gen2_dds.sh` writes `~/.ros/gen2_cyclonedds.xml` at start-up —
+  **Wi-Fi mode** (wlP1p1s0 only, multicast for discovery only, peers from
+  `src/gen2_bringup/config/dds_peers.txt`) when Wi-Fi has an IPv4 address, else **local mode** (lo).
+  A loopback entry next to Wi-Fi made lo the primary interface and broke Wi-Fi; and Cyclone does not
+  fail over when the Wi-Fi address disappears (tested with a dummy interface). The NetworkManager hook
+  `system/networkmanager/90-gen2-dds` restarts gen2-bench when the Wi-Fi address appears/changes/goes.
+  New terminals get the same config via `~/.bashrc`.

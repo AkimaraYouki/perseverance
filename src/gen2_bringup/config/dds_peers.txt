@@ -1,0 +1,4 @@
+# Unicast DDS discovery peers for Wi-Fi mode (one IPv4/hostname per line). Used by gen2_dds.sh.
+# Needed when the network blocks multicast (many phone hotspots). Edit, then restart gen2-bench
+# (sudo systemctl restart gen2-bench) or open a new terminal.
+192.168.147.160   # desktop PC on "NEW T433 5G" (2026-09-25)

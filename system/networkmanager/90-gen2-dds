@@ -1,0 +1,14 @@
+#!/bin/sh
+# NetworkManager dispatcher: when the Wi-Fi IPv4 address appears, disappears or changes, restart
+# gen2-bench so gen2_dds.sh re-selects the CycloneDDS mode (Wi-Fi vs local). Cyclone 0.10 keeps
+# using a vanished address otherwise and robot-internal topics stop (tested 2026-09-25).
+IFACE="$1"; ACTION="$2"; WIFI=wlP1p1s0; STATE=/run/gen2-dds.addr
+[ "$IFACE" = "$WIFI" ] || exit 0
+case "$ACTION" in up|down|dhcp4-change) ;; *) exit 0 ;; esac
+NEW=$(ip -4 -o addr show dev "$WIFI" 2>/dev/null | awk '{print $4}' | head -1)
+OLD=$(cat "$STATE" 2>/dev/null)
+[ "$NEW" = "$OLD" ] && exit 0          # DHCP renewal with the same address: nothing to do
+echo "$NEW" > "$STATE"
+logger -t gen2-dds "Wi-Fi $ACTION: '${OLD:-none}' -> '${NEW:-none}', restarting gen2-bench"
+systemctl try-restart gen2-bench.service
+exit 0
