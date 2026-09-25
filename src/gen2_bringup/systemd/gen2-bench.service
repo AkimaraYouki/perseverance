@@ -11,6 +11,9 @@ SupplementaryGroups=dialout gpio
 Environment=GEN2_WS=/home/parksudo/gen2_ws
 ExecStart=/home/parksudo/gen2_ws/install/gen2_bringup/lib/gen2_bringup/gen2_run.sh bench.launch.py
 KillSignal=SIGINT
+# SIGINT only to ros2 launch (it forwards once to the nodes); SIGKILL to leftovers after the timeout.
+# With the default control-group mode every node got SIGINT twice and died mid-teardown.
+KillMode=mixed
 TimeoutStopSec=10
 Restart=on-failure
 RestartSec=3

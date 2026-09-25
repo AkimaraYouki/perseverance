@@ -3,7 +3,9 @@
 #include <chrono>
 #include <cmath>
 #include <deque>
+#include <limits>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -66,6 +68,7 @@ private:
       m.name = c.name;
       m.can_id = c.can_id;
       m.rx_count = fb.rx_count;
+      m.configured = true;
       m.kt_nm_per_a = c.kt_nm_per_a;
       if (fb.valid) {
         m.header.stamp = fb.realtime_ns > 0 ?
@@ -91,7 +94,56 @@ private:
       }
       arr.motors.push_back(m);
     }
+    // Drives seen on the bus but not in motors.yaml: raw values only, never commanded.
+    for (uint8_t id : bus_->unconfigured_ids()) {
+      const MotorFeedback fb = bus_->unconfigured_feedback(id);
+      gen2_msgs::msg::MotorState m;
+      m.name = unconfigured_name(id);
+      m.can_id = id;
+      m.configured = false;
+      m.header.stamp = fb.realtime_ns > 0 ?
+        static_cast<builtin_interfaces::msg::Time>(rclcpp::Time(fb.realtime_ns)) : arr.header.stamp;
+      m.age_s = (now - fb.mono_ns) * 1e-9;
+      m.stale = m.age_s > unconfigured_stale_s_;
+      m.raw_position_deg = fb.status.position_deg;
+      m.raw_speed_erpm = fb.status.speed_erpm;
+      m.position_rad = fb.status.position_deg * M_PI / 180.0;  // drive degrees, unscaled
+      m.velocity_rad_s = m.torque_nm = m.kt_nm_per_a = std::numeric_limits<double>::quiet_NaN();
+      m.current_a = fb.status.current_a;
+      m.temperature_c = fb.status.temperature_c;
+      m.error_code = fb.status.error;
+      m.error_text = cubemars::error_text(fb.status.error);
+      m.rx_count = fb.rx_count;
+      arr.motors.push_back(m);
+      if (diag_ids_.insert(id).second) {
+        RCLCPP_WARN(get_logger(), "Unconfigured CubeMars drive on the bus: CAN id %u — add it to motors.yaml", id);
+        updater_.add("motor: " + unconfigured_name(id), [this, id](auto & st) {diag_unconfigured(st, id);});
+      }
+    }
     pub_->publish(arr);
+  }
+
+  static std::string unconfigured_name(uint8_t id) {return "id_" + std::to_string(id) + "?";}
+
+  void diag_unconfigured(diagnostic_updater::DiagnosticStatusWrapper & s, uint8_t id)
+  {
+    const MotorFeedback fb = bus_->unconfigured_feedback(id);
+    const double age = (mono_now_ns() - fb.mono_ns) * 1e-9;
+    if (age > unconfigured_stale_s_) {
+      s.summary(DiagnosticStatus::ERROR, "unconfigured drive: feedback stale");
+    } else {
+      s.summary(DiagnosticStatus::WARN, "unconfigured drive — add to motors.yaml (read-only)");
+    }
+    s.add("configured", false);
+    s.add("can_id", static_cast<int>(id));
+    s.add("age_s", age);
+    s.add("rx_count", fb.rx_count);
+    s.add("position_deg", fb.status.position_deg);   // raw drive degrees
+    s.add("raw_position_deg", fb.status.position_deg);
+    s.add("raw_speed_erpm", fb.status.speed_erpm);
+    s.add("current_a", fb.status.current_a);
+    s.add("temperature_c", static_cast<int>(fb.status.temperature_c));
+    s.add("error_code", static_cast<int>(fb.status.error));
   }
 
   rclcpp::Time now_ros() {return now();}
@@ -120,6 +172,7 @@ private:
     s.add("rx_rate_hz", rx_rate);
     s.add("rx_frames", rx);
     s.add("rx_unknown", st.rx_unknown.load());
+    s.add("rx_unconfigured_drives", st.rx_unconfigured.load());
     s.add("rx_error_frames", err);
     s.add("last_error_class_hex", std::to_string(st.last_error_class.load()));
     s.add("boot_frames_0x2C", st.boot_frames_any.load());
@@ -149,6 +202,7 @@ private:
     } else {
       s.summary(DiagnosticStatus::OK, "ok");
     }
+    s.add("configured", true);
     s.add("can_id", static_cast<int>(c.can_id));
     s.add("model", c.model);
     s.add("feedback_rate_hz", rate);
@@ -168,6 +222,8 @@ private:
   }
 
   std::unique_ptr<MotorBus> bus_;
+  std::set<uint8_t> diag_ids_;
+  double unconfigured_stale_s_ = 0.5;
   rclcpp::Publisher<gen2_msgs::msg::MotorStateArray>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr timer_;
   diagnostic_updater::Updater updater_;

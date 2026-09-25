@@ -3,6 +3,8 @@ std_msgs/Header header          # stamp = host CAN RX time (SocketCAN timestamp)
 
 string name
 uint8 can_id
+bool configured                 # false = CubeMars drive seen on the bus but not in motors.yaml:
+                                # raw values only (position_rad = drive degrees in rad, no scaling)
 
 float64 position_rad            # joint side, direction and offset applied
 float64 velocity_rad_s          # joint side

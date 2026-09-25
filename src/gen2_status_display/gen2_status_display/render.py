@@ -214,29 +214,63 @@ def _sensors(d, box, s):
 
 
 def _motors(d, box, s):
+    """One line per motor: configured motors, then drives found on the bus but not in
+    motors.yaml ("id_70?", warning), then dim placeholders up to motors_expected (default 4)."""
     can = s.get('can_rate')
     x, y = _panel(d, box, '3 MOTORS', f"CAN {_fmt(can, '.0f')}/s", OK if can else BAD)
     w = box[2] - x - 6
-    motors = s.get('motors', [])
-    if not motors:
-        _txt(d, (x, y + 4), 'no motor data', F_SB, BAD if s.get('can_expected') else DIM)
-        return
-    for m in motors[:3]:
-        good = m.get('fresh') and not m.get('stale') and m.get('error_code', 0) == 0
-        col = OK if good else BAD
-        _dot(d, x, y, col)
-        _txt(d, (x + 11, y), m.get('name', '?')[:10], F_SB, FG)
-        t = f"{_fmt(m.get('temp'), '.0f')}°C"
-        _txt(d, (x + w - d.textlength(t, font=F_S), y), t, F_S, _heat(m.get('temp'), 65, 80))
-        y += ROW - 1
-        if good:
-            txt = f"{_fmt(m.get('pos_deg'), '7.1f')}°  {_fmt(m.get('current'), '5.2f')}A"
-        elif m.get('fresh') and m.get('error_code'):
-            txt = (m.get('error_text') or 'fault')[:24]
+    motors = list(s.get('motors', []))
+    expected = int(s.get('motors_expected', 4))
+    # right edges of the value columns
+    e_temp = x + w
+    e_cur = e_temp - d.textlength('999', font=F_S) - 5
+    e_pos = e_cur - d.textlength('-99.9', font=F_S) - 5
+    name_w = e_pos - d.textlength('-180', font=F_S) - 3 - (x + 11)
+    for label, edge in (('deg', e_pos), ('A', e_cur), ('C', e_temp)):
+        d.text((edge - d.textlength(label, font=F_S), y - 1), label, font=F_S, fill=DIM)
+    y += ROW - 1
+    rows = motors[:expected + 2]
+    for m in rows:
+        unconf = m.get('configured') is False
+        fresh = m.get('fresh') and not m.get('stale')
+        if not fresh:
+            col = BAD
+        elif m.get('error_code'):
+            col = BAD
+        elif unconf:
+            col = WARN
         else:
-            txt = 'STALE / NO FEEDBACK'
-        _txt(d, (x + 11, y), txt, F_S, FG if good else col)
-        y += ROW + 2
+            col = OK
+        _dot(d, x, y, col)
+        name = m.get('name', '?')
+        if unconf and name.startswith('id_'):
+            name = '#' + name[3:]          # "id_70?" -> "#70?"
+        while name and d.textlength(name, font=F_SB) > name_w:
+            name = name[:-1]
+        _txt(d, (x + 11, y), name, F_SB, FG if not unconf else WARN)
+        if not fresh:
+            msg = 'STALE'
+            _txt(d, (e_temp - d.textlength(msg, font=F_S), y), msg, F_S, BAD)
+        elif m.get('error_code'):
+            msg = (m.get('error_text') or 'fault')[:14]
+            _txt(d, (e_temp - d.textlength(msg, font=F_S), y), msg, F_S, BAD)
+        else:
+            pos = m.get('pos_deg')
+            if _ok(pos):                   # display only: wrap to [-180, 180) (wheels grow without bound)
+                pos = (pos + 180.0) % 360.0 - 180.0
+            vals = ((e_pos, _fmt(pos, '.0f')), (e_cur, _fmt(m.get('current'), '.1f')),
+                    (e_temp, _fmt(m.get('temp'), '.0f')))
+            for edge, v in vals:
+                c = _heat(m.get('temp'), 65, 80) if edge == e_temp else FG
+                _txt(d, (edge - d.textlength(v, font=F_S), y), v, F_S, c)
+        y += ROW
+    for _ in range(max(0, expected - len(rows))):
+        _dot(d, x, y, None)
+        d.text((x + 11, y), '-', font=F_S, fill=DIM)
+        d.text((e_temp - d.textlength('waiting', font=F_S), y), 'waiting', font=F_S, fill=DIM)
+        y += ROW
+    if len(motors) > len(rows):
+        d.text((x + 11, y), f'+{len(motors) - len(rows)} more', font=F_S, fill=DIM)
 
 
 def _netpower(d, box, s):

@@ -190,7 +190,7 @@ class CameraNode(Node):
 
     def destroy_node(self):
         self.running = False
-        self.th.join(timeout=2.0)
+        self.th.join(timeout=1.0)   # the loop wakes at least every 0.5 s (try-pull-sample)
         self._stop()
         super().destroy_node()
 
@@ -203,8 +203,11 @@ def main():
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        node.destroy_node()
-        rclpy.try_shutdown()
+        try:  # a second Ctrl+C / SIGINT during teardown must not print a traceback
+            node.destroy_node()
+            rclpy.try_shutdown()
+        except BaseException:
+            pass
 
 
 if __name__ == "__main__":

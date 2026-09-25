@@ -22,7 +22,7 @@ std::string validate(const MotorConfig & c)
 }
 
 MotorBus::MotorBus(std::string ifname, std::vector<MotorConfig> motors)
-: ifname_(std::move(ifname)), motors_(std::move(motors))
+: ifname_(std::move(ifname)), motors_(std::move(motors)), unknown_slots_(256), unknown_writer_(256)
 {
   for (std::size_t i = 0; i < motors_.size(); ++i) {
     by_id_[motors_[i].can_id] = i;
@@ -34,6 +34,15 @@ MotorBus::MotorBus(std::string ifname, std::vector<MotorConfig> motors)
 MotorBus::~MotorBus()
 {
   stop();
+}
+
+std::vector<uint8_t> MotorBus::unconfigured_ids() const
+{
+  std::vector<uint8_t> ids;
+  for (int i = 0; i < 256; ++i) {
+    if (unknown_seen_[i].load(std::memory_order_relaxed)) {ids.push_back(static_cast<uint8_t>(i));}
+  }
+  return ids;
 }
 
 void MotorBus::start()
@@ -111,9 +120,23 @@ void MotorBus::rx_loop()
     if (cubemars::is_boot_frame(rx.frame)) {
       ++stats_.boot_frames_any;  // observed with driver id 0x00 on AK45-10: not attributable
     }
-    const auto it = by_id_.find(cubemars::id_driver(rx.frame.id));
+    const uint8_t drv = cubemars::id_driver(rx.frame.id);
+    const auto it = by_id_.find(drv);
     if (it == by_id_.end()) {
-      ++stats_.rx_unknown;
+      // Not configured: remember CubeMars status frames so the drive shows up (discovery only).
+      if (auto st = cubemars::decode_status(rx.frame)) {
+        MotorFeedback & fb = unknown_writer_[drv];
+        fb.valid = true;
+        fb.status = *st;
+        fb.mono_ns = rx.mono_ns;
+        fb.realtime_ns = rx.kernel_realtime_ns;
+        ++fb.rx_count;
+        unknown_slots_[drv].store(fb);
+        unknown_seen_[drv].store(true, std::memory_order_relaxed);
+        ++stats_.rx_unconfigured;
+      } else {
+        ++stats_.rx_unknown;
+      }
       continue;
     }
     MotorFeedback & fb = writer_state_[it->second];

@@ -2,6 +2,7 @@
 // Readers (control loop, ROS publishers) never block the RX thread.
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -39,6 +40,7 @@ struct BusStats
   std::atomic<uint64_t> tx_errors{0};
   std::atomic<uint64_t> reopen_count{0};
   std::atomic<uint64_t> boot_frames_any{0};
+  std::atomic<uint64_t> rx_unconfigured{0};   // CubeMars status frames from IDs not in motors.yaml
   std::atomic<bool> socket_ok{false};
   std::atomic<int64_t> last_rx_mono_ns{0};
 };
@@ -57,6 +59,11 @@ public:
   const BusStats & stats() const {return stats_;}
   const std::string & ifname() const {return ifname_;}
 
+  // Drives that send CubeMars status (0x29) frames but are not configured. Read-only discovery:
+  // they are never commanded. IDs are returned in ascending order.
+  std::vector<uint8_t> unconfigured_ids() const;
+  MotorFeedback unconfigured_feedback(uint8_t id) const {return unknown_slots_[id].load();}
+
   // TX is refused unless enable_tx(true) was called (read-only by default).
   void enable_tx(bool on) {tx_enabled_ = on;}
   bool tx_enabled() const {return tx_enabled_;}
@@ -70,6 +77,9 @@ private:
   std::map<uint8_t, std::size_t> by_id_;
   std::vector<std::unique_ptr<SeqLock<MotorFeedback>>> slots_;
   std::vector<MotorFeedback> writer_state_;  // RX thread private copy
+  std::vector<SeqLock<MotorFeedback>> unknown_slots_;   // 256, indexed by driver id
+  std::vector<MotorFeedback> unknown_writer_;           // RX thread private, 256
+  std::array<std::atomic<bool>, 256> unknown_seen_{};
   CanSocket rx_sock_;
   CanSocket tx_sock_;
   std::thread rx_thread_;

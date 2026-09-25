@@ -131,6 +131,9 @@ Accuracy depends on the PM02 current calibration.
   (contact assumed at wheel mid-plane).
 - RPLIDAR C1 not delivered yet; its USB–UART adapter is a CP2102 (`10c4:ea60`, serial `0001`).
 - Robot has **4 actuators**: wheels AK45-10 ×2, legs AK60-6 V3.0 ×2 (L = +y, R = -y).
+  Drives that appear on the bus but are not in `motors.yaml` are **discovered automatically**
+  (read-only): `/motors/state` entry `id_<N>?` with `configured: false` and raw values, a WARN
+  diagnostic, and a row `#N?` on the LCD. Add them to `motors.yaml` to get scaling and commands.
   Only one AK45-10 (id 69) is on the bus so far; add the others to `motors.yaml` with their IDs.
   AK60-6 V3.0 supports disable (mode 15) and has Kt 0.5994 N·m/A in the V3.2.0 manual table.
 - Feedback upload is 50 Hz (`send_can_status_rate_hz`); balance control needs 500–1000 Hz

@@ -51,6 +51,7 @@ class StatusDisplay(Node):
             rotate_180=p('rotate_180', False).value)
         self.snapshot = p('snapshot_path', '').value  # e.g. /tmp/gen2_lcd.png for remote viewing
         self.gps_expected = p('gps_expected', False).value
+        self.motors_expected = p('motors_expected', 4).value
         self.warn = p('warn_cell_v', 3.5).value
         self.err = p('error_cell_v', 3.3).value
         self.sys = SysInfo(p('wifi_iface', 'auto').value, p('eth_iface', 'auto').value)
@@ -106,10 +107,13 @@ class StatusDisplay(Node):
                 fresh = now - t < self.timeout
                 motors.append(dict(
                     name=name.split('motor: ')[-1], fresh=fresh,
+                    configured=kv.get('configured', 'True') != 'False',
                     stale=lvl == DiagnosticStatus.ERROR and 'stale' in msg or 'no feedback' in msg,
                     pos_deg=_f(kv, 'position_deg'), current=_f(kv, 'current_a'),
                     temp=_f(kv, 'temperature_c'), error_code=int(_f(kv, 'error_code') or 0),
                     error_text=msg))
+        # configured motors first (config order ~ name), then unconfigured drives by CAN id
+        motors.sort(key=lambda m: (not m['configured'], m['name']))
         link = self._find('sensor_hub: link')
         hub = dict(fresh=link is not None)
         if link:
@@ -134,7 +138,7 @@ class StatusDisplay(Node):
                     camera=self._device('camera', sy.get('video0'), '/dev/video0',
                                         missing='no /dev/video0', missing_col=BAD),
                     can_rate=_f(can[2], 'rx_rate_hz') if can else None, can_expected=True,
-                    gps_expected=self.gps_expected)
+                    gps_expected=self.gps_expected, motors_expected=self.motors_expected)
 
     def _device(self, key, present, present_text, missing='n/a', missing_col=DIM):
         # A driver's own diagnostic ("<key>: ...") wins; otherwise fall back to device presence.
@@ -239,7 +243,9 @@ def main():
     except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
     finally:
-        node.shutdown_screen()
-        node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        try:  # a second SIGINT during teardown must not print a traceback
+            node.shutdown_screen()
+            node.destroy_node()
+            rclpy.try_shutdown()
+        except BaseException:
+            pass

@@ -21,3 +21,4 @@ status_display:
     wifi_iface: "auto"
     eth_iface: "auto"
     snapshot_path: "/tmp/gen2_lcd.png"   # latest rendered frame, for viewing over SSH
+    motors_expected: 4        # rows in the MOTORS sector (2x AK45-10 wheels + 2x AK60-6 legs)
