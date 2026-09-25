@@ -7,7 +7,7 @@
 | 소프트웨어 | [① 학습](software/01_learning.md) | POMDP, **관측 20 / 행동 4 벡터**, 보상 식, PPO 시간 규모, 지형 커리큘럼, 짐벌, VMC+LQR |
 | | [② 통신](software/02_communication.md) | CAN 1 Mbit/s (부하 식 → 500 Hz 상한), SHR1 센서허브 프레임, IMU 설정, 에이전트 우편함 |
 | | [③ ROS 2](software/03_ros2.md) | "ROS 는 위, 균형은 아래" 구조, 패키지·토픽, 조종 매핑, 기동·시험 순서 |
-| 하드웨어 | [① CAD](hardware/01_cad.md) | Onshape → URDF → Isaac 폐루프, 4절링크 치수, 질량, 센서 프레임 |
+| 하드웨어 | [① CAD](hardware/01_cad.md) | **4절링크 최적화 (asd.py: 수식·제약 → 링크 길이)**, 최적해 vs CAD, 무게 예산, 센서 프레임, Onshape → Isaac 폐루프 |
 | | [② 센서](hardware/02_sensors.md) | iAHRS IMU, RPLIDAR C1, IMX219, NEO-M8N + IST8310, PM02 ×2, ESP32-C3 허브 |
 | | [③ 액추에이터](hardware/03_actuators.md) | AK60-6 V3.0 ×2 (고관절), AK45-10 ×2 (바퀴), 토크·속도 여유, 시뮬 모델 |
 
