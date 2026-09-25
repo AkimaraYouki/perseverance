@@ -493,3 +493,51 @@ class WheeledBipedCADRoughEnvCfg_PLAY(WheeledBipedCADRoughEnvCfg):
         self.events.push = None
         self.curriculum.terrain_levels = None
         self.scene.terrain.max_init_terrain_level = None
+
+
+# ---------------------------------------------------------------------------
+# r6: 점프 (조종자 버튼) + 대회 장애물 (2 단 계단, 엇갈린 삼각 턱) — 2026-09-26
+# 명령 = [vx, wz, h_ref, m, j] (관측 26). 고관절은 토크-속도 모델(DC). 처음부터 학습.
+# ---------------------------------------------------------------------------
+@configclass
+class JumpSceneCfg(RoughSceneCfg):
+    l_wheel_scanner = rough.L_WHEEL_SCANNER_CFG
+    r_wheel_scanner = rough.R_WHEEL_SCANNER_CFG
+
+
+@configclass
+class JumpRewardsCfg(RoughRewardsCfg):
+    # 버튼 후 0.7 s 동안 바퀴가 바로 아래 지면에서 뜬 높이 (목표 10 cm). 8 cm 턱을 넘으려면 이만큼 떠야 한다.
+    jump_clear = RewTerm(func=custom_rewards.jump_clearance, weight=4.0,
+                         params={"command_name": "base_velocity", "target": 0.10})
+    # 버튼 없이 뛰기 금지
+    air_no_jump = RewTerm(func=custom_rewards.airtime_outside_jump, weight=-1.0,
+                          params={"command_name": "base_velocity"})
+
+
+@configclass
+class WheeledBipedCADJumpEnvCfg(WheeledBipedCADRoughEnvCfg):
+    scene: JumpSceneCfg = JumpSceneCfg(num_envs=4096, env_spacing=2.5)
+    rewards: JumpRewardsCfg = JumpRewardsCfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.terrain.terrain_generator = rough.ROUGH_JUMP_TERRAINS_CFG
+        self.scene.robot = cad.CAD_ROBOT_CFG_DCHIP.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        self.commands.base_velocity.with_jump = True
+        # 점프 중에는 몸통 높이 유지·승차감·정지 유지·다리 부드러움을 끈다 (뛰려면 다리를 빠르게 펴야 한다)
+        for name in ("gimbal_height", "ride", "stand_still", "leg_rate"):
+            getattr(self.rewards, name).params["jump_cmd"] = "base_velocity"
+        for sc in (self.scene.l_wheel_scanner, self.scene.r_wheel_scanner):
+            sc.update_period = self.decimation * self.sim.dt
+
+
+@configclass
+class WheeledBipedCADJumpEnvCfg_PLAY(WheeledBipedCADJumpEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 16
+        self.observations.policy.enable_corruption = False
+        self.events.push = None
+        self.curriculum.terrain_levels = None
+        self.scene.terrain.max_init_terrain_level = None

@@ -153,7 +153,8 @@ def spin_in_place_exp(env: "ManagerBasedRLEnv", command_name: str, asset_cfg: Sc
 
 # --- 거친 지형: 짐벌처럼 몸통 고정 (terrain.py) -----------------------------------------------------
 def gimbal_height_exp(env: "ManagerBasedRLEnv", command_name: str, std: float, sensor_cfg: SceneEntityCfg,
-                      asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), std_auto: float | None = None) -> torch.Tensor:
+                      asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), std_auto: float | None = None,
+                      jump_cmd: str | None = None) -> torch.Tensor:
     """몸통 높이를 **바퀴 밑이 아니라 몸통 아래 넓은 지면 평균** 기준으로 h_ref 에 맞춘다.
 
         오차 = (바퀴 접지 높이 - 지면 평균) + (다리 평균 - h_ref)
@@ -178,7 +179,7 @@ def gimbal_height_exp(env: "ManagerBasedRLEnv", command_name: str, std: float, s
         s = torch.where(cmd[:, 3] > 0.5, std_auto, std)
     else:
         s = std
-    return torch.exp(-torch.square(err) / s**2)
+    return torch.exp(-torch.square(err) / s**2) * _not_jumping(env, jump_cmd)
 
 
 def base_vz_world_l2(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
@@ -188,7 +189,7 @@ def base_vz_world_l2(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = Scene
 
 
 def base_vertical_acc_exp(env: "ManagerBasedRLEnv", std: float,
-                          asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+                          asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), jump_cmd: str | None = None) -> torch.Tensor:
     """몸통 COM 수직가속도 (짐벌 지표, 승차감 ISO 2631 과 같은 축).
 
     속도가 아니라 가속도라서 경사를 일정하게 오르내리거나 높이를 천천히 바꾸는 건 벌하지 않고,
@@ -196,17 +197,17 @@ def base_vertical_acc_exp(env: "ManagerBasedRLEnv", std: float,
     """
     asset: Articulation = env.scene[asset_cfg.name]
     az = asset.data.body_com_lin_acc_w[:, 0, 2]      # 0 = 루트(base_link)
-    return torch.exp(-torch.square(az) / std**2)
+    return torch.exp(-torch.square(az) / std**2) * _not_jumping(env, jump_cmd)
 
 
-def leg_action_rate_phys(env: "ManagerBasedRLEnv", scale_ratio: float) -> torch.Tensor:
+def leg_action_rate_phys(env: "ManagerBasedRLEnv", scale_ratio: float, jump_cmd: str | None = None) -> torch.Tensor:
     """다리 행동 변화를 **실제 다리 이동량** 기준으로 (행동 0, 1 = 다리 L, R).
 
     다리 권한을 0.03 -> 0.12 m 로 넓히면(scale_ratio 4) 같은 action_rate 벌점이 실제 다리 움직임으로는 1/16 이
     된다. m5100 에서 평지 수직가속 RMS 0.4 -> 1~3 m/s^2 (다리 떨림)로 나타났다. 예전 물리량 기준을 되살린다.
     """
     d = env.action_manager.action[:, :2] - env.action_manager.prev_action[:, :2]
-    return torch.sum(torch.square(d), dim=1) * scale_ratio**2
+    return torch.sum(torch.square(d), dim=1) * scale_ratio**2 * _not_jumping(env, jump_cmd)
 
 
 def leg_stroke_margin(env: "ManagerBasedRLEnv", command_name: str, margin: float, h_min: float, h_max: float,
@@ -247,7 +248,7 @@ def imu_specific_force_g(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = S
 
 
 def stand_still_exp(env: "ManagerBasedRLEnv", command_name: str, std: float = 0.05,
-                    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+                    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), jump_cmd: str | None = None) -> torch.Tensor:
     """정지 명령(vx = wz = 0)일 때 제자리 유지. 몸체 COM 수평속도 기준, 문은 명령이 0 에 가까울 때만 열린다.
 
     r3 측정(7099): 정지 명령인데 2.5 s 에 수동 평지 10 cm, 자동 4.4 cm 밀렸다. 추종 보상 exp(-v^2/0.25^2) 는
@@ -257,4 +258,32 @@ def stand_still_exp(env: "ManagerBasedRLEnv", command_name: str, std: float = 0.
     cmd = env.command_manager.get_command(command_name)
     gate = ((cmd[:, 0].abs() < 0.02) & (cmd[:, 1].abs() < 0.05)).float()
     v = asset.data.root_com_lin_vel_b[:, :2]
-    return gate * torch.exp(-torch.sum(torch.square(v), dim=1) / std**2)
+    return gate * torch.exp(-torch.sum(torch.square(v), dim=1) / std**2) * _not_jumping(env, jump_cmd)
+
+
+# --- r6 점프 (조종자 버튼, 2026-09-26) ------------------------------------------------------------------
+def _not_jumping(env: "ManagerBasedRLEnv", jump_cmd: str | None):
+    """점프 문 밖이면 1, 점프 중(버튼 후 jump_window_s)이면 0. jump_cmd 가 None 이거나 점프 없는 과제면 1."""
+    if jump_cmd is None:
+        return 1.0
+    term = env.command_manager.get_term(jump_cmd)
+    if not getattr(term.cfg, "with_jump", False):
+        return 1.0
+    return (~term.jump_window).float()
+
+
+def jump_clearance(env: "ManagerBasedRLEnv", command_name: str, target: float = 0.10) -> torch.Tensor:
+    """점프 중(버튼 후 jump_window_s) 두 바퀴 바닥이 **바로 아래 지면**에서 뜬 높이 (0~1, target 에서 포화).
+    바로 아래 지면 기준이라 턱 위로 올라서면 0 으로 돌아온다 -> "뛰어서 올라서기" 가 끝나면 보상도 끝난다."""
+    from .terrain import wheel_clearance
+    term = env.command_manager.get_term(command_name)
+    c = wheel_clearance(env).clamp(0.0, target).mean(dim=1) / target
+    return c * term.jump_window.float()
+
+
+def airtime_outside_jump(env: "ManagerBasedRLEnv", command_name: str, thresh: float = 0.03) -> torch.Tensor:
+    """버튼 없이 두 바퀴가 다 뜨는 것 (벌점용). 쓸데없이 뛰지 않게."""
+    from .terrain import wheel_clearance
+    term = env.command_manager.get_term(command_name)
+    air = (wheel_clearance(env).min(dim=1).values > thresh).float()
+    return air * (~term.jump_window).float()

@@ -240,3 +240,75 @@ def height_scan_rel(env: "ManagerBasedRLEnv", sensor_cfg: SceneEntityCfg, offset
     z = env.scene.sensors[sensor_cfg.name].data.ray_hits_w[..., 2]
     rel = asset.data.root_com_pos_w[:, 2:3] - z - offset
     return torch.nan_to_num(rel, nan=0.0, posinf=0.0, neginf=0.0).clamp(-0.5, 0.5)
+
+
+# === r6: 점프 + 대회 장애물 (2026-09-26) ===========================================================
+from isaaclab.terrains.trimesh.mesh_terrains_cfg import (  # noqa: E402
+    MeshInvertedPyramidStairsTerrainCfg,
+    MeshPyramidStairsTerrainCfg,
+)
+
+
+@height_field_to_mesh
+def staggered_ridges_terrain(difficulty: float, cfg: "StaggeredRidgesTerrainCfg"):
+    """대회 "ㅅㅅㅅ": 밑변이 긴 삼각 턱이 x 로 반복되고, y 로 lane_w 마다 반 주기씩 엇갈린다 (좌우 바퀴가 번갈아 탄다)."""
+    h = cfg.height_range[0] + difficulty * (cfg.height_range[1] - cfg.height_range[0])
+    nx, ny = int(cfg.size[0] / cfg.horizontal_scale), int(cfg.size[1] / cfg.horizontal_scale)
+    x = np.arange(nx)[:, None] * cfg.horizontal_scale
+    y = np.arange(ny)[None, :] * cfg.horizontal_scale
+    parity = (np.floor(y / cfg.lane_w) % 2) * 0.5 * cfg.period
+    xm = np.mod(x + parity, cfg.period)
+    z = h * np.clip(1.0 - np.abs(xm - cfg.period / 2) / (cfg.base / 2), 0.0, None)
+    return np.rint(z / cfg.vertical_scale).astype(np.int16)
+
+
+@configclass
+class StaggeredRidgesTerrainCfg(HfTerrainBaseCfg):
+    function = staggered_ridges_terrain
+    height_range: tuple[float, float] = (0.01, 0.06)   # 사용자: 약 5 cm
+    base: float = 0.35                                  # 밑변 (길게)
+    period: float = 0.60
+    lane_w: float = 0.20                                # 바퀴 간 폭 0.198 -> 좌우 바퀴가 다른 차선
+
+
+# 2 단 계단: 폭 35 cm, 가운데 평면 6.9 m -> (8 - 6.9) // 0.7 + 1 = 2 단. 한 단 2 -> 9 cm (한 단 8 cm 든 합계 8 cm 든 포함)
+_STAIR2 = dict(step_height_range=(0.02, 0.09), step_width=0.35, platform_width=6.9, border_width=0.0)
+
+ROUGH_JUMP_TERRAINS_CFG = ROUGH_TERRAINS_CFG.replace(
+    num_cols=24,
+    sub_terrains={
+        "flat": MeshPlaneTerrainCfg(proportion=0.12),
+        "gravel": ROUGH_TERRAINS_CFG.sub_terrains["gravel"].replace(proportion=0.12),
+        "rugged": ROUGH_TERRAINS_CFG.sub_terrains["rugged"].replace(proportion=0.12),
+        "rough": ROUGH_TERRAINS_CFG.sub_terrains["rough"].replace(proportion=0.08),
+        "wave_long": ROUGH_TERRAINS_CFG.sub_terrains["wave_long"].replace(proportion=0.05),
+        "wave_short": ROUGH_TERRAINS_CFG.sub_terrains["wave_short"].replace(proportion=0.05),
+        "slope_up": ROUGH_TERRAINS_CFG.sub_terrains["slope_up"].replace(proportion=0.04),
+        "slope_down": ROUGH_TERRAINS_CFG.sub_terrains["slope_down"].replace(proportion=0.04),
+        "bumps": ROUGH_TERRAINS_CFG.sub_terrains["bumps"].replace(proportion=0.06),
+        "stairs2_up": MeshInvertedPyramidStairsTerrainCfg(proportion=0.12, **_STAIR2),   # 가운데 구덩이 -> 2 단 오르기
+        "stairs2_down": MeshPyramidStairsTerrainCfg(proportion=0.06, **_STAIR2),         # 가운데 꼭대기 -> 2 단 내려가기
+        "ridges": StaggeredRidgesTerrainCfg(proportion=0.14, **_HF),
+    },
+)
+
+
+def _wheel_scanner(link):
+    # 바퀴 중심에서 바로 아래로 1 줄 (월드 기준). 바퀴가 돌아도 방향이 안 바뀌게 ray_alignment world.
+    return RayCasterCfg(prim_path="{ENV_REGEX_NS}/Robot/" + link, offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 0.0)),
+                        ray_alignment="world", pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[0.0, 0.0]),
+                        debug_vis=False, mesh_prim_paths=["/World/ground"])
+
+
+L_WHEEL_SCANNER_CFG = _wheel_scanner("l_wheel")
+R_WHEEL_SCANNER_CFG = _wheel_scanner("r_wheel")
+
+
+def wheel_clearance(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """(N, 2) 좌우 바퀴 바닥의 지면 위 높이 [m] = 바퀴 중심 z - R - 바로 아래 지면 z. 광선이 빗나가면 0."""
+    asset = env.scene["robot"]
+    ids = asset.find_bodies(["l_wheel", "r_wheel"], preserve_order=True)[0]
+    zc = asset.data.body_pos_w[:, ids, 2]
+    hit = torch.stack([env.scene.sensors[s].data.ray_hits_w[:, 0, 2] for s in ("l_wheel_scanner", "r_wheel_scanner")], dim=1)
+    c = zc - R_WHEEL - hit
+    return torch.nan_to_num(c, nan=0.0, posinf=0.0, neginf=0.0)

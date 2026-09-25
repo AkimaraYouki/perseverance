@@ -25,7 +25,8 @@ task_of() {
     flat) echo "Isaac-WheeledBiped-Balance-v0" ;;
     cad)  echo "Isaac-WheeledBiped-CAD-v0" ;;
     r2)   echo "LEGACY" ;;
-    r[3-9]*|r[1-9][0-9]*) echo "Isaac-WheeledBiped-CAD-Rough-v0" ;;
+    r3|r4|r5) echo "Isaac-WheeledBiped-CAD-Rough-v0" ;;
+    r[6-9]*|r[1-9][0-9]*) echo "Isaac-WheeledBiped-CAD-Jump-v0" ;;   # 점프 + 대회 장애물, 관측 26
     *)    echo "" ;;
   esac
 }

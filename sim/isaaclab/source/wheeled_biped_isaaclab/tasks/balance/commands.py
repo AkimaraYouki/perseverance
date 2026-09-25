@@ -45,7 +45,11 @@ class WheelLegCommand(CommandTerm):
         self._cad = "L_joint_M" in self.robot.joint_names       # CAD 폐루프 모델이면 모터각 -> 다리 관절값
         self._leg_ids = None if self._cad else self.robot.find_joints(cfg.leg_joint_names)[0]
         # vx, wz, h_ref (+ m: 0 수동 / 1 자동)
-        self._cmd = torch.zeros(self.num_envs, 4 if cfg.with_mode else 3, device=self.device)
+        n_cmd = 3 + int(cfg.with_mode) + int(cfg.with_jump)
+        self._cmd = torch.zeros(self.num_envs, n_cmd, device=self.device)
+        # 점프 (with_jump): 명령 마지막 칸 j. 버튼을 누르면 jump_pulse_s 동안 1. jump_window_s 동안 "점프 중" (보상 문).
+        self.jump_timer = torch.full((self.num_envs,), 99.0, device=self.device)
+        self.jump_trigger_d = torch.empty(self.num_envs, device=self.device).uniform_(*cfg.jump_trigger_dist)
         self.h_target = torch.full((self.num_envs,), cfg.default_height, device=self.device)
         self.pinned = False
         self.metrics["error_vx"] = torch.zeros(self.num_envs, device=self.device)
@@ -65,6 +69,16 @@ class WheelLegCommand(CommandTerm):
     def pin(self, on: bool = True):
         """재추첨을 멈춘다. 이후 set() 으로만 명령이 바뀐다."""
         self.pinned = bool(on)
+
+    @property
+    def jump_window(self) -> torch.Tensor:
+        return self.jump_timer < self.cfg.jump_window_s
+
+    def trigger_jump(self, env_ids=None):
+        """조종자 버튼 (재생·조이스틱용). 쿨다운 중이면 무시."""
+        ids = slice(None) if env_ids is None else env_ids
+        ok = self.jump_timer[ids] > self.cfg.jump_cooldown_s
+        self.jump_timer[ids] = torch.where(ok, torch.zeros_like(self.jump_timer[ids]), self.jump_timer[ids])
 
     def set(self, vx=None, wz=None, h=None, env_ids=None, mode=None):
         """mode: 0 수동 / 1 자동 (with_mode 일 때). 자동이면 h 는 무시하고 공칭 높이로 간다."""
@@ -147,6 +161,7 @@ class WheelLegCommand(CommandTerm):
     def reset(self, env_ids: Sequence[int] | None = None):
         extras = super().reset(env_ids)
         ids = slice(None) if env_ids is None else env_ids
+        self.jump_timer[ids] = 99.0
         # 기준 높이는 현재 다리에서 출발한다 (리셋 순간 목표로 순간이동하지 않게)
         self._cmd[ids, 2] = self._leg_h(ids)
         return extras
@@ -155,6 +170,39 @@ class WheelLegCommand(CommandTerm):
         step = self.cfg.max_height_rate * self._env.step_dt
         d = torch.clamp(self.h_target - self._cmd[:, 2], -step, step)
         self._cmd[:, 2] += d
+        if self.cfg.with_jump:
+            self._update_jump()
+
+    def _update_jump(self):
+        """학습 중 점프 발동: (1) 장애물 앞 자동 — 전진 명령 >= 0.2 m/s 이고 앞 d 지점이 발밑보다 3 cm 이상 높을 때.
+        d 는 env 마다 jump_trigger_dist 에서 무작위라 일부러 이르거나 늦은 점프가 섞인다 (잘못 착지 -> 회복 학습, 사용자 요청).
+        (2) 어디서나 무작위 (평지·험지 점프). 재생 중(pinned)에는 자동 발동을 끄고 trigger_jump() 로만."""
+        dt = self._env.step_dt
+        self.jump_timer += dt
+        if not self.pinned:
+            ready = self.jump_timer > self.cfg.jump_cooldown_s
+            rnd = torch.rand(self.num_envs, device=self.device) < self.cfg.jump_rand_rate * dt
+            auto = torch.zeros_like(ready)
+            sens = self._env.scene.sensors.get("critic_scanner") if hasattr(self._env.scene, "sensors") else None
+            if sens is not None:
+                hits = sens.data.ray_hits_w                                   # (N, P, 3)
+                rel = hits[..., :2] - sens.data.pos_w[:, None, :2]
+                yaw = torch.atan2(2 * (self.robot.data.root_quat_w[:, 0] * self.robot.data.root_quat_w[:, 3]
+                                       + self.robot.data.root_quat_w[:, 1] * self.robot.data.root_quat_w[:, 2]),
+                                  1 - 2 * (self.robot.data.root_quat_w[:, 2] ** 2 + self.robot.data.root_quat_w[:, 3] ** 2))
+                c, s_ = torch.cos(yaw)[:, None], torch.sin(yaw)[:, None]
+                xl = c * rel[..., 0] + s_ * rel[..., 1]
+                yl = -s_ * rel[..., 0] + c * rel[..., 1]
+                z = torch.nan_to_num(hits[..., 2], nan=-1e3, posinf=-1e3, neginf=-1e3)
+                here = torch.where((xl.abs() < 0.1) & (yl.abs() < 0.15), z, torch.full_like(z, -1e3)).amax(dim=1)
+                d = self.jump_trigger_d[:, None]
+                ahead = torch.where((xl > d) & (xl < d + 0.1) & (yl.abs() < 0.15), z, torch.full_like(z, -1e3)).amax(dim=1)
+                auto = (ahead - here > self.cfg.jump_step_thresh) & (self._cmd[:, 0] >= 0.2)
+            fire = ready & (rnd | auto)
+            if fire.any():
+                self.jump_timer[fire] = 0.0
+                self.jump_trigger_d[fire] = torch.empty(int(fire.sum()), device=self.device).uniform_(*self.cfg.jump_trigger_dist)
+        self._cmd[:, -1] = (self.jump_timer < self.cfg.jump_pulse_s).float()
 
 
 @configclass
@@ -174,6 +222,13 @@ class WheelLegCommandCfg(CommandTermCfg):
     auto_mode_prob: float = 0.0            # 재추첨 때 자동 모드 확률 (평지 타일에서)
     manual_flat_only: bool = False         # True: 거친 지형 타일 위에서는 항상 자동
     auto_height: float = 0.1825            # 자동 모드 공칭 높이 (다리 관절값, 범위 중앙)
+    with_jump: bool = False                # True 면 명령 마지막 칸 = 점프 버튼 j (r6~)
+    jump_pulse_s: float = 0.3              # 버튼 신호 길이
+    jump_window_s: float = 0.7             # 점프 보상 문 (이륙~착지)
+    jump_cooldown_s: float = 1.5
+    jump_rand_rate: float = 0.05           # 초당 무작위 점프 확률 (평지·험지)
+    jump_trigger_dist: tuple = (0.05, 0.40)  # 장애물 앞 자동 발동 거리 (무작위 = 이른/늦은 점프 섞기)
+    jump_step_thresh: float = 0.03         # 앞이 발밑보다 이만큼 높으면 장애물
 
     @configclass
     class Ranges:

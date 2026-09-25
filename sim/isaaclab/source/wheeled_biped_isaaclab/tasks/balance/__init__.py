@@ -68,3 +68,9 @@ gym.register(
         "rsl_rl_cfg_entry_point": "wheeled_biped_isaaclab.agents.rsl_rl_ppo_cfg:RoughPPORunnerCfg",
     },
 )
+
+for _id, _cfg in (("Isaac-WheeledBiped-CAD-Jump-v0", "WheeledBipedCADJumpEnvCfg"),
+                  ("Isaac-WheeledBiped-CAD-Jump-Play-v0", "WheeledBipedCADJumpEnvCfg_PLAY")):
+    gym.register(id=_id, entry_point="isaaclab.envs:ManagerBasedRLEnv", disable_env_checker=True,
+                 kwargs={"env_cfg_entry_point": f"{__name__}.env_cfg:{_cfg}",
+                         "rsl_rl_cfg_entry_point": "wheeled_biped_isaaclab.agents.rsl_rl_ppo_cfg:RoughPPORunnerCfg"})
