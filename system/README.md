@@ -12,6 +12,7 @@
 | `networkmanager/90-gen2-dds` | `/etc/NetworkManager/dispatcher.d/` (root, 755) | restart gen2-bench when the Wi-Fi IPv4 address appears/changes/disappears (DDS mode re-selection) |
 | `sysctl/99-gen2-arp.conf` | `/etc/sysctl.d/` | answer ARP only for addresses on the receiving interface (the Jetson answered for l4tbr0's 192.168.55.1 on the campus LAN) |
 | `usb-device-mode/nv-l4t-usb-device-mode-config.sh` | `/opt/nvidia/l4t-usb-device-mode/` | USB device-mode network moved 192.168.55.x → **192.168.66.x** (campus LAN uses 192.168.55.x). Package file: re-apply after `nvidia-l4t-usb-service` upgrades |
+| `networkmanager/91-gen2-wired-peers` + `gen2/wired_peers.conf` | `/etc/NetworkManager/dispatcher.d/`, `/etc/gen2/` | desk debugging: when the wired port comes up, pin each peer (on-link /32 route + permanent ARP) — the campus LAN has an ARP spoofer |
 | `udev/90-ax210-btusb.rules` | `/etc/udev/rules.d/` | load btusb for AX210 Bluetooth (NVIDIA rule blocks it) |
 | `scripts/st7789_test.py` | `~/lcd_test/` | standalone LCD wiring test |
 | `scripts/can_scope.sh` | `~/can_test/` | repeating CAN frames for oscilloscope checks |
@@ -27,6 +28,8 @@ sudo iw dev wlP1p1s0 set power_save off   # now, without reconnecting
 sudo cp system/chrony/gen2-lan-server.conf /etc/chrony/conf.d/ && sudo systemctl restart chrony
 sudo cp system/sysctl/99-gen2-arp.conf /etc/sysctl.d/ && sudo sysctl --system
 sudo cp system/usb-device-mode/nv-l4t-usb-device-mode-config.sh /opt/nvidia/l4t-usb-device-mode/
+sudo install -m 755 system/networkmanager/91-gen2-wired-peers /etc/NetworkManager/dispatcher.d/
+sudo mkdir -p /etc/gen2 && sudo cp system/gen2/wired_peers.conf /etc/gen2/
 sudo systemctl daemon-reload
 sudo systemctl enable --now can0-up lcd-pinmux gen2-bench
 ```
@@ -41,3 +44,6 @@ Not stored here (rebuild on the Jetson if the kernel changes):
 Wired network (campus LAN, 2026-09-26): `Wired connection 1` = DHCP client with `ipv4.never-default yes`
 (Wi-Fi keeps the default route). **Never set it to "Shared to other computers"** on the campus LAN —
 that runs a DHCP server for the whole segment. Current lease: 192.168.54.23/24, gateway 192.168.54.1.
+The campus LAN has an **ARP spoofer** (`2c:f0:5d:8f:e4:12` answers for the gateway and for other hosts;
+40–60 % loss). With the peer pinned (91-gen2-wired-peers): 0 % loss, 0.68 ms to the desktop PC.
+Wired is for desk debugging only; competition/outdoor uses Wi-Fi only (dedicated TP-Link AP).
