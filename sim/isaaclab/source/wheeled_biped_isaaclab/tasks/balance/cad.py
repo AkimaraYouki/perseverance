@@ -102,6 +102,26 @@ def joint_vel_like_simple(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = 
     return torch.cat([hd, w], dim=1)
 
 
+def leg_vel(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")):
+    """[dh_L, dh_R] [m/s] — joint_vel_like_simple 의 앞 두 칸. 잡음을 바퀴와 따로 주려고 나눴다."""
+    return leg_state(env.scene[asset_cfg.name])[1]
+
+
+def wheel_vel(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")):
+    """[w_L, w_R] [rad/s], +y 규약 — joint_vel_like_simple 의 뒤 두 칸."""
+    asset = env.scene[asset_cfg.name]
+    wid = asset.find_joints(WHEEL_JOINTS, preserve_order=True)[0]
+    return asset.data.joint_vel[:, wid] * torch.tensor(WHEEL_SIGN, device=asset.device)
+
+
+def leg_torque(env: "ManagerBasedRLEnv", scale: float = 5.0, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")):
+    """고관절 모터 토크 [L, R] / scale. 부호: + = 다리를 펴는 쪽 (M_SIGN). 실기: 전류 x Kt."""
+    asset = env.scene[asset_cfg.name]
+    ids = asset.find_joints(LEG_JOINTS, preserve_order=True)[0]
+    sgn = torch.tensor([M_SIGN["L"], M_SIGN["R"]], device=asset.device)
+    return asset.data.applied_torque[:, ids] * sgn / scale
+
+
 def leg_h_mean(asset: Articulation):
     h, _ = leg_state(asset)
     return h.mean(dim=1)

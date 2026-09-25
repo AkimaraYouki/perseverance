@@ -379,6 +379,52 @@ class RoughSceneCfg(SceneCfg):
         debug_vis=False,
     )
     height_scanner = rough.HEIGHT_SCANNER_CFG
+    critic_scanner = rough.CRITIC_SCANNER_CFG      # 크리틱 전용 (정책은 지형을 안 본다)
+
+
+@configclass
+class RoughObservationsCfg:
+    """관측 v3 (2026-09-25): 정책 25 = 예전 20 + IMU 비력 3 + 고관절 토크 2. 새 항은 뒤에 붙여서
+    이어 학습 때 첫 층에 0 열만 덧붙이면 된다 (scripts/add_obs_v3.py).
+    다리 속도 잡음 0.5 -> 0.05 m/s (예전 값은 신호보다 커서 정책이 못 썼다). 바퀴 속도는 0.5 rad/s 유지."""
+
+    @configclass
+    class PolicyCfg(ObsGroup):
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2))
+        projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.05, n_max=0.05))
+        velocity_commands = ObsTerm(func=mdp.generated_commands, params={"command_name": "base_velocity"})
+        joint_pos = ObsTerm(func=cad.leg_pos_rel, params={"default": LEG_MID}, noise=Unoise(n_min=-0.002, n_max=0.002))
+        leg_vel = ObsTerm(func=cad.leg_vel, noise=Unoise(n_min=-0.05, n_max=0.05))
+        wheel_vel = ObsTerm(func=cad.wheel_vel, noise=Unoise(n_min=-0.5, n_max=0.5))
+        actions = ObsTerm(func=mdp.last_action)
+        imu_acc = ObsTerm(func=custom_rewards.imu_specific_force_g, noise=Unoise(n_min=-0.03, n_max=0.03))
+        leg_torque = ObsTerm(func=cad.leg_torque, params={"scale": 5.0}, noise=Unoise(n_min=-0.04, n_max=0.04))
+
+        def __post_init__(self):
+            self.enable_corruption = True
+            self.concatenate_terms = True
+
+    @configclass
+    class CriticCfg(ObsGroup):
+        """비대칭 크리틱: 정책 관측(잡음 없음) + 몸체 선속도 + 넓은 지형 스캔 117 점 = 145."""
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
+        projected_gravity = ObsTerm(func=mdp.projected_gravity)
+        velocity_commands = ObsTerm(func=mdp.generated_commands, params={"command_name": "base_velocity"})
+        joint_pos = ObsTerm(func=cad.leg_pos_rel, params={"default": LEG_MID})
+        leg_vel = ObsTerm(func=cad.leg_vel)
+        wheel_vel = ObsTerm(func=cad.wheel_vel)
+        actions = ObsTerm(func=mdp.last_action)
+        imu_acc = ObsTerm(func=custom_rewards.imu_specific_force_g)
+        leg_torque = ObsTerm(func=cad.leg_torque, params={"scale": 5.0})
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
+        height_scan = ObsTerm(func=rough.height_scan_rel, params={"sensor_cfg": SceneEntityCfg("critic_scanner")})
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    policy: PolicyCfg = PolicyCfg()
+    critic: CriticCfg = CriticCfg()
 
 
 @configclass
@@ -408,6 +454,7 @@ class RoughCurriculumCfg:
 @configclass
 class WheeledBipedCADRoughEnvCfg(WheeledBipedCADEnvCfg):
     scene: RoughSceneCfg = RoughSceneCfg(num_envs=4096, env_spacing=2.5)
+    observations: RoughObservationsCfg = RoughObservationsCfg()
     rewards: RoughRewardsCfg = RoughRewardsCfg()
     curriculum: RoughCurriculumCfg = RoughCurriculumCfg()
 
@@ -415,11 +462,14 @@ class WheeledBipedCADRoughEnvCfg(WheeledBipedCADEnvCfg):
         super().__post_init__()
         self.rewards.track_height = None
         self.rewards.lin_vel_z = None
+        # CAD 부모가 넣은 joint_vel(4 칸 묶음)은 leg_vel / wheel_vel 로 나눠 대체했다
+        self.observations.policy.joint_vel = None
         self.terminations.too_low = DoneTerm(func=rough.base_below_ground,
                                              params={"minimum_height": 0.12,
                                                      "sensor_cfg": SceneEntityCfg("height_scanner")})
         # 레이캐스트는 정책 주기(200 Hz)마다 한 번이면 된다
         self.scene.height_scanner.update_period = self.decimation * self.sim.dt
+        self.scene.critic_scanner.update_period = self.decimation * self.sim.dt
         # 높이 모드 (commands.py): 명령 = [vx, wz, h_ref, m]. 자동 공칭 = CAD 기본자세 (M = 0, 사용자 지정 IDLE)
         c = self.commands.base_velocity
         c.with_mode = True

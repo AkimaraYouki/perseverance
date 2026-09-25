@@ -41,10 +41,12 @@ torch.onnx.export(pol, ex, os.path.join(out, "policy.onnx"), input_names=["obs"]
                   dynamic_axes={"obs": {0: "batch"}, "actions": {0: "batch"}}, opset_version=17)
 meta = {"source": os.path.abspath(src), "iteration": ck.get("iter"), "n_obs": n_obs, "n_act": 4,
         "obs_layout": ("ang_vel_b(3) proj_gravity_b(3) cmd[vx,wz,h_ref,m](4) leg_h-0.1825(2) leg_hdot(2) "
+                       "wheel_w(2) last_action(4) imu_specific_force_g(3) hip_torque/5Nm(2, + = extend)") if n_obs == 25 else
+                      ("ang_vel_b(3) proj_gravity_b(3) cmd[vx,wz,h_ref,m](4) leg_h-0.1825(2) leg_hdot(2) "
                        "wheel_w(2) last_action(4)") if n_obs == 20 else
                       "ang_vel_b(3) proj_gravity_b(3) cmd[vx,wz,h_ref](3) leg_h-0.1825(2) leg_hdot(2) wheel_w(2) last_action(4)",
         "action_layout": "leg_L leg_R wheel_L wheel_R, clip to [-1,1] in the controller",
-        "leg_scale_m": 0.12 if n_obs == 20 else 0.03, "wheel_scale_nm": 1.5, "wheel_lpf_hz": 20.0,
+        "leg_scale_m": 0.12 if n_obs in (20, 25) else 0.03, "wheel_scale_nm": 1.5, "wheel_lpf_hz": 20.0,
         "control_hz": 200}
 json.dump(meta, open(os.path.join(out, "policy_meta.json"), "w"), indent=1)
 with torch.no_grad():

@@ -229,3 +229,18 @@ def leg_stroke_margin(env: "ManagerBasedRLEnv", command_name: str, margin: float
     if cmd.shape[1] > 3:
         pen = pen * (cmd[:, 3] > 0.5).float()
     return pen
+
+
+# --- 관측: IMU 가속도계 (비력) -----------------------------------------------------------------------
+def imu_specific_force_g(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """몸체 좌표 비력 f_b = R^T (a_w - g_w) [g 단위]. 가만히 있으면 (0, 0, +1).
+
+    iAHRS 가속도 출력과 같은 양이다 (단위 g). 몸체 COM 가속도를 쓴다 — 실기 IMU 는 COM 에서 몇 cm 떨어져
+    있어 회전에 의한 항이 더 붙는다 (관측 잡음으로 덮는다).
+    수직 충격(요철)을 정책이 느낄 유일한 직접 신호라 짐벌 학습에 넣었다 (5600 까지 격리율 1.0).
+    """
+    from isaaclab.utils.math import quat_apply_inverse
+    asset: Articulation = env.scene[asset_cfg.name]
+    a_w = asset.data.body_com_lin_acc_w[:, 0, :].clone()
+    a_w[:, 2] += 9.81
+    return quat_apply_inverse(asset.data.root_quat_w, a_w) / 9.81

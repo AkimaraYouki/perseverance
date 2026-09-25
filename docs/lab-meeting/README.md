@@ -4,7 +4,7 @@
 
 | 구분 | 문서 | 핵심 |
 |---|---|---|
-| 소프트웨어 | [① 학습](software/01_learning.md) | POMDP, **관측 20 / 행동 4 벡터**, 보상 식, PPO 시간 규모, 지형 커리큘럼, 짐벌, VMC+LQR |
+| 소프트웨어 | [① 학습](software/01_learning.md) | POMDP, **관측 25 / 행동 4 벡터**, 비대칭 크리틱(학습 전용), 보상 식, PPO 시간 규모, 지형 커리큘럼(자갈길·험지), 짐벌, VMC+LQR |
 | | [② 통신](software/02_communication.md) | CAN 1 Mbit/s (부하 식 → 500 Hz 상한), SHR1 센서허브 프레임, IMU 설정, 에이전트 우편함 |
 | | [③ ROS 2](software/03_ros2.md) | "ROS 는 위, 균형은 아래" 구조, 패키지·토픽, 조종 매핑, 기동·시험 순서 |
 | 하드웨어 | [① CAD](hardware/01_cad.md) | **4절링크 최적화 (asd.py: 수식·제약 → 링크 길이)**, 최적해 vs CAD, 무게 예산, 센서 프레임, Onshape → Isaac 폐루프 |
@@ -17,7 +17,7 @@
 flowchart LR
   CAD["Onshape CAD<br/>4절링크 폐루프"] --> URDF["URDF + 폐루프 관절<br/>(Isaac Sim)"]
   URDF --> RL["PPO 4096 병렬<br/>평지 → 거친 지형"]
-  RL --> POL["정책 o∈R²⁰ → a∈R⁴<br/>200 Hz"]
+  RL --> POL["정책 o∈R²⁵ → a∈R⁴<br/>200 Hz"]
   POL --> JET["Jetson 균형 프로세스<br/>CAN · IMU 직접"]
   LQR["VMC+LQR<br/>(첫 기동)"] --> JET
   JET <--> ROS["ROS 2 Jazzy<br/>teleop · 로그 · 자율(예정)"]

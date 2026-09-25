@@ -7,7 +7,9 @@
 지형 높이(레이캐스트)는 **보상과 종료 판정에만** 쓴다.
 
 지형 종류 (행 = 난이도 0 -> 1, 열 = 종류):
-  flat        평지 — 평지 성능을 잊지 않게
+  flat        평지 — 평지 성능을 잊지 않게, 수동 높이 모드는 여기서만
+  gravel      자갈길: 10 cm 격자 무작위 높이 ±(0.4 -> 2.0) cm, 평활 없음
+  rugged      험지: 2 m 기복(0 -> 6 cm) + 40 cm 굵은 요철 ±(0.5 -> 3) cm + 10 cm 자갈 ±(0.2 -> 1.2) cm
   rough       무작위 요철. 25 cm 격자에서 높이 ±(0.5 -> 3.5) cm
   wave_long   파장 2 m, x·y 성분 각각 ±(0 -> 5) cm (겹치면 피크-피크 20 cm), 경사 최대 9 deg
   wave_short  파장 1 m, 성분 ±(0 -> 3) cm, 경사 최대 10.7 deg
@@ -22,6 +24,8 @@ from __future__ import annotations
 
 import copy
 from typing import TYPE_CHECKING
+
+import numpy as np
 
 import torch
 from isaaclab.assets import Articulation
@@ -62,6 +66,45 @@ class RoughScaledTerrainCfg(HfRandomUniformTerrainCfg):
     noise_amp: tuple[float, float] = (0.003, 0.02)
 
 
+# --- 험지: 긴 기복 + 굵은 요철 + 자갈 요철을 겹친다 (2026-09-25 사용자: "자갈길이나 험지") ---------------------
+from isaaclab.terrains.height_field.utils import height_field_to_mesh  # noqa: E402
+from isaaclab.terrains.height_field.hf_terrains_cfg import HfTerrainBaseCfg  # noqa: E402
+
+_uniform_raw = hf_terrains.random_uniform_terrain.__wrapped__      # 메시 변환 전 높이 배열을 주는 원함수
+_wave_raw = hf_terrains.wave_terrain.__wrapped__
+
+
+@height_field_to_mesh
+def rugged_terrain(difficulty: float, cfg: "RuggedTerrainCfg"):
+    d = difficulty
+
+    def lerp(r):
+        return r[0] + d * (r[1] - r[0])
+
+    w = copy.copy(cfg)
+    w.amplitude_range = (lerp(cfg.wave_amp), lerp(cfg.wave_amp))
+    w.num_waves = cfg.num_waves
+    hf = _wave_raw(d, w).astype(np.int32)
+    for amp, ds in ((cfg.coarse_amp, cfg.coarse_scale), (cfg.fine_amp, cfg.fine_scale)):
+        u = copy.copy(cfg)
+        a = max(lerp(amp), cfg.noise_step)
+        u.noise_range, u.downsampled_scale = (-a, a), ds
+        hf += _uniform_raw(d, u).astype(np.int32)
+    return np.clip(hf, -32000, 32000).astype(np.int16)
+
+
+@configclass
+class RuggedTerrainCfg(HfTerrainBaseCfg):
+    function = rugged_terrain
+    wave_amp: tuple[float, float] = (0.0, 0.06)      # 파장 2 m 기복 (성분 진폭의 2 배, wave_terrain 정의)
+    num_waves: int = 4
+    coarse_amp: tuple[float, float] = (0.005, 0.030)  # 40 cm 격자 굵은 요철 ±
+    coarse_scale: float = 0.4
+    fine_amp: tuple[float, float] = (0.002, 0.012)    # 10 cm 격자 자갈 ±
+    fine_scale: float = 0.1
+    noise_step: float = 0.002
+
+
 _HF = dict(border_width=0.25)
 
 ROUGH_TERRAINS_CFG = TerrainGeneratorCfg(
@@ -70,25 +113,30 @@ ROUGH_TERRAINS_CFG = TerrainGeneratorCfg(
     size=(8.0, 8.0),
     border_width=20.0,
     num_rows=10,
-    num_cols=16,
+    num_cols=20,
     horizontal_scale=0.1,
     vertical_scale=0.002,       # 기본 5 mm 는 파도가 5 mm 계단으로 깎인다
     slope_threshold=None,       # 가파른 칸을 수직벽으로 바꾸지 않는다 (위 bumps 설명)
     use_cache=False,
     sub_terrains={
-        # 평지 0.12 -> 0.20: 수동 높이 모드는 평지에서만 학습한다 (사용자: "수동은 평지용")
-        "flat": MeshPlaneTerrainCfg(proportion=0.20),
+        # 평지: 수동 높이 모드는 평지에서만 학습한다 (사용자: "수동은 평지용")
+        "flat": MeshPlaneTerrainCfg(proportion=0.15),
+        # 자갈길: 10 cm 격자 무작위 높이, 평활 없음 ±(0.4 -> 2.0) cm. 바퀴 R 60 이 굴러 넘는 크기
+        "gravel": RoughScaledTerrainCfg(proportion=0.15, noise_amp=(0.004, 0.020), noise_step=0.002,
+                                        downsampled_scale=0.1, **_HF),
+        # 험지: 2 m 기복 + 40 cm 굵은 요철 + 10 cm 자갈을 겹침
+        "rugged": RuggedTerrainCfg(proportion=0.15, **_HF),
         # 2026-09-25 첫 판(요철 ±2 cm, 파도 6/3 cm, 경사 0.25, 턱 3 cm)은 평지 정책이 84/84 버텼다
         # (rough_probe, 바퀴가 겪는 요철 σ 최대 6 mm) -> 강건성 학습이 안 된다. 키웠다.
         # (파도 amplitude 는 IsaacLab 정의상 성분 진폭의 2 배: h = amp/2 (cos y + sin x))
-        "rough": RoughScaledTerrainCfg(proportion=0.22, noise_amp=(0.005, 0.035), noise_step=0.002,
+        "rough": RoughScaledTerrainCfg(proportion=0.12, noise_amp=(0.005, 0.035), noise_step=0.002,
                                        downsampled_scale=0.25, **_HF),
-        "wave_long": HfWaveTerrainCfg(proportion=0.14, amplitude_range=(0.0, 0.10), num_waves=4, **_HF),
-        "wave_short": HfWaveTerrainCfg(proportion=0.14, amplitude_range=(0.0, 0.06), num_waves=8, **_HF),
-        "slope_up": HfPyramidSlopedTerrainCfg(proportion=0.10, slope_range=(0.0, 0.30), platform_width=2.0, **_HF),
-        "slope_down": HfInvertedPyramidSlopedTerrainCfg(proportion=0.10, slope_range=(0.0, 0.30),
+        "wave_long": HfWaveTerrainCfg(proportion=0.08, amplitude_range=(0.0, 0.10), num_waves=4, **_HF),
+        "wave_short": HfWaveTerrainCfg(proportion=0.09, amplitude_range=(0.0, 0.06), num_waves=8, **_HF),
+        "slope_up": HfPyramidSlopedTerrainCfg(proportion=0.07, slope_range=(0.0, 0.30), platform_width=2.0, **_HF),
+        "slope_down": HfInvertedPyramidSlopedTerrainCfg(proportion=0.07, slope_range=(0.0, 0.30),
                                                         platform_width=2.0, **_HF),
-        "bumps": HfDiscreteObstaclesTerrainCfg(proportion=0.18, obstacle_height_mode="choice",
+        "bumps": HfDiscreteObstaclesTerrainCfg(proportion=0.12, obstacle_height_mode="choice",
                                                obstacle_height_range=(0.01, 0.04), obstacle_width_range=(0.3, 1.0),
                                                num_obstacles=40, platform_width=1.0, **_HF),
     },
@@ -170,3 +218,24 @@ def on_flat_tile(env: "ManagerBasedRLEnv", env_ids) -> torch.Tensor:
     xy = env.scene["robot"].data.root_pos_w[env_ids, :2]
     idx = torch.cdist(xy, org).argmin(dim=1)
     return flat_col[idx % ncol]
+
+
+# --- 크리틱 전용 (비대칭 액터-크리틱): 넓은 지형 스캔 ------------------------------------------------------
+# 정책은 여전히 지형을 안 본다 (실기 이식). 크리틱만 1.2 x 0.8 m, 10 cm 간격 117 점을 본다.
+CRITIC_SCANNER_CFG = RayCasterCfg(
+    prim_path="{ENV_REGEX_NS}/Robot/base_link",
+    offset=RayCasterCfg.OffsetCfg(pos=(0.08, -0.08, 20.0)),
+    ray_alignment="yaw",
+    pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.2, 0.8]),
+    debug_vis=False,
+    mesh_prim_paths=["/World/ground"],
+)
+
+
+def height_scan_rel(env: "ManagerBasedRLEnv", sensor_cfg: SceneEntityCfg, offset: float = 0.25,
+                    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """몸체 COM 높이 - 지면 높이 - offset, ±0.5 m 로 자름. 빗나간 광선은 0."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    z = env.scene.sensors[sensor_cfg.name].data.ray_hits_w[..., 2]
+    rel = asset.data.root_com_pos_w[:, 2:3] - z - offset
+    return torch.nan_to_num(rel, nan=0.0, posinf=0.0, neginf=0.0).clamp(-0.5, 0.5)
