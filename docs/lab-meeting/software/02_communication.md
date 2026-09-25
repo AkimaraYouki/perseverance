@@ -166,7 +166,23 @@ sequenceDiagram
 
 ---
 
-## 5. 열린 항목
+## 5. 데스크톱 ↔ 로봇 Wi-Fi 시험 (2026-09-26) [측정]
+
+같은 공유기(데스크톱 Humble/FastDDS ↔ Jetson Jazzy/CycloneDDS). 시계 차는 Jetson NTP 질의로 재서(+19.7 ms) 보정했다.
+
+| 경로 | 중앙 | 95 % | 최대 | 기타 |
+|---|---|---|---|---|
+| 카메라 촬영 → PC 수신 | 14.3 ms | 56.8 | 159.5 | 29.0 fps, 20.9 KB/장 |
+| DDS 왕복 (Best Effort / Reliable) | 5.8 / 5.5 ms | 72 / 41 | 200 / 125 | 손실 1.1 / 0.4 % |
+| 토픽 주기 | 전원 98.7 Hz, 카메라 29.1 Hz, GPS 5 Hz, 진단 3 Hz | | | |
+
+- 중앙값은 조종·영상·모니터링에 충분하다. 50–200 ms 꼬리는 ICMP 에도 있는 **Wi-Fi 절전**(양쪽 `power_save on`) 탓으로 본다 → 끄기 요청.
+- **균형 루프(200 Hz = 5 ms)에는 Wi-Fi 를 넣지 않는다**는 설계가 수치로 확인됐다. 명령 워치독은 0.3–0.5 s 이상.
+- 막혔던 것: ① 로봇 `cyclonedds.xml` 이 lo 를 주 인터페이스로 잡아 Wi-Fi 송신 실패 → 로봇이 Wi-Fi 모드/로컬 모드 자동 선택으로 수정.
+  ② 데스크톱 유선 192.168.55.x 가 Jetson USB 망(l4tbr0 192.168.55.1)과 겹침 → 데스크톱 FastDDS 를 Wi-Fi 로만 제한
+  (`tools/dds/fastdds_desktop_wifi_peer.xml`).
+
+## 6. 열린 항목
 
 | 항목 | 상태 |
 |---|---|

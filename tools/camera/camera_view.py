@@ -24,6 +24,8 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--topic", default="/camera/image_raw/compressed")
 ap.add_argument("--no-show", action="store_true")
 ap.add_argument("--seconds", type=float, default=0.0, help="0 이면 창을 닫을 때까지")
+ap.add_argument("--offset_ms", type=float, default=0.0,
+                help="시계 차 (발행 기계 - 이 PC) [ms]. tools/dds/ntp_offset.py 로 잰 값. 지연에 더해 보정한다")
 args = ap.parse_args()
 
 
@@ -36,7 +38,7 @@ class Viewer(Node):
 
     def cb(self, msg):
         now = self.get_clock().now().nanoseconds
-        lat = (now - (msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec)) / 1e6
+        lat = (now - (msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec)) / 1e6 + args.offset_ms
         t0 = time.perf_counter()
         img = cv2.imdecode(np.frombuffer(msg.data, np.uint8), cv2.IMREAD_COLOR)
         dec = (time.perf_counter() - t0) * 1e3
