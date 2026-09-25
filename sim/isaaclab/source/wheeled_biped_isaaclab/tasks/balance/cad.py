@@ -208,3 +208,17 @@ CAD_ROBOT_CFG = ArticulationCfg(
     },
     soft_joint_pos_limit_factor=1.0,
 )
+
+
+# --- 고관절 토크-속도 모델 (점프·턱 오르기 시험용, 2026-09-26) ---------------------------------------
+# IdealPD 는 |tau| <= 9 만 자르고 속도가 오를 때 토크가 줄어드는 걸 모른다 -> 빠른 동작(점프)을 낙관한다.
+# DCMotor = 같은 explicit PD + 4 사분면 토크-속도 직선. AK60-6 KV80 @ 24 V: 무부하 = 80 rpm/V x 24 V / 6 = 320 rpm
+# = 33.5 rad/s (출력축) [계산, 역기전력 기준 — 실측 전], 피크 9 N·m.
+AK60_NO_LOAD_RAD_S = 33.5
+CAD_ROBOT_CFG_DCHIP = CAD_ROBOT_CFG.replace(
+    actuators={
+        **CAD_ROBOT_CFG.actuators,
+        "legs": DCMotorCfg(joint_names_expr=[".*_joint_M"], stiffness=60.0, damping=1.5,
+                           saturation_effort=9.0, effort_limit=9.0, velocity_limit=AK60_NO_LOAD_RAD_S),
+    }
+)

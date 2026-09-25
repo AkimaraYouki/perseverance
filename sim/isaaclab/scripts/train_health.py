@@ -88,8 +88,14 @@ def main():
           f" | std {cur(std):.3f} | lr {cur(lr):.2e}")
 
     warn = []
-    if lr and cur(lr) <= LR_FLOOR:
-        warn.append(f"학습률이 adaptive 하한({cur(lr):.1e})에 붙었다 — KL 초과로 계속 깎인 것. 곡선이 움직여도 실질 학습은 거의 멈춘 상태일 수 있다.")
+    if lr:
+        # 순간값이 아니라 최근 100 iter 중 바닥 비율로 본다. adaptive 스케줄은 KL 에 따라 출렁여서 잠깐 바닥에 닿았다가
+        # 돌아오는 건 정상이다 (r4: 최근 200 iter 중 24 % 가 바닥, 곧 1e-3 대로 회복). 오리의 경고 뜻은 "붙어서 안 떨어짐".
+        recent = [v for _, v in lr[-100:]]
+        frac = sum(v <= LR_FLOOR for v in recent) / len(recent)
+        print(f"  학습률 바닥 비율 (최근 {len(recent)} iter) {frac*100:.0f} %")
+        if frac >= 0.8:
+            warn.append(f"학습률이 adaptive 하한({LR_FLOOR:.0e})에 최근 {frac*100:.0f} % 붙어 있다 — 실질 학습이 거의 멈춘 상태다.")
     if std and cur(std) < STD_COLLAPSE:
         warn.append(f"행동 std 붕괴({cur(std):.3f}) — 탐색이 사라졌다.")
     if std and cur(std) > STD_TOO_WIDE:
