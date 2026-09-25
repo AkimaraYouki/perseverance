@@ -42,6 +42,13 @@
       #   can_id: ?                # read from bus when delivered
       #   zero: CAD zero pose M=0° = h 196.5 mm = leg_map θ 45.0°; L/R M have opposite signs
       #   (sim/model, comms 2026-09-25_0030). Rated 3 N·m; static hip load ≈2.3–2.4 N·m (80 %).
+      #   Driver AK60-4820-1C-A2 (V3.2.0 §1.1): input 48 V, working 18–52 V, 20 A rms / 60 A peak.
+      #   Kt 0.5994 is OUTPUT-shaft per V3.2.0 §4.2 ("T = Kt·Iq, T at the output shaft"); desktop's
+      #   asd.py assumed 0.81 (3 N·m / 3.70 A) -> confirm with a torque arm (verified.kt).
+      #   MIT (force) mode: ID 8<<8|id, kp 0–500 (12 bit), kd 0–5 (12 bit), p 16 bit, v ±60 rad/s,
+      #   t ±12 N·m. AK60-6 position range is blank in the manual table: verify before use. Vendor
+      #   pack_cmd example clamps p_des/v_des to 0 and float_to_uint overflows at max — do not copy.
+      #   Enable the 0x2A int32 position feedback (0.01°) for leg control (0x29 is only 0.1°).
     # motor_cli bench limits (never exceed the per-motor limits above)
     cli:
       max_test_current_a: 1.0

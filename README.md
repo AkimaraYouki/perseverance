@@ -125,6 +125,9 @@ Accuracy depends on the PM02 current calibration.
 - AK45-10 datasheet: Kt 0.127 N·m/A rotor side → 1.27 N·m/A output (config), 14 pole pairs,
   rated 2.1 A / peak 5 A. The drive's own current limit (AppParams `l_current_max` 35 A) is far
   above the motor's peak: lower it to ≈5 A in the CubeMars tool. Confirm Kt with a torque arm.
+- Measured: wheel outer-to-outer 228 mm, wheel thickness 30 mm → track width b ≈ 198 mm
+  (contact assumed at wheel mid-plane).
+- RPLIDAR C1 not delivered yet; its USB–UART adapter is a CP2102 (`10c4:ea60`, serial `0001`).
 - Robot has **4 actuators**: wheels AK45-10 ×2, legs AK60-6 V3.0 ×2 (L = +y, R = -y).
   Only one AK45-10 (id 69) is on the bus so far; add the others to `motors.yaml` with their IDs.
   AK60-6 V3.0 supports disable (mode 15) and has Kt 0.5994 N·m/A in the V3.2.0 manual table.
