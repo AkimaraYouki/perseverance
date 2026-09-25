@@ -2,9 +2,9 @@
 
 Layout (landscape):   header: C-WANG by suhopark [robot state]   HH:MM
   +-----------------+-----------------+
-  | 1 PC            | 2 SENSORS       |
+  | 1. PC           | 2. SENSORS      |
   +-----------------+-----------------+
-  | 3 MOTORS        | 4 NET & POWER   |
+  | 3. MOTORS       | 4. NET & POWER  |
   +-----------------+-----------------+
 """
 import math
@@ -157,7 +157,7 @@ def _txt(d, xy, text, font, col):
 
 # ------------------------------------------------------------------ panels
 def _pc(d, box, sy):
-    x, y = _panel(d, box, '1 PC', sy.get('power_mode') and f"{sy['power_mode']}")
+    x, y = _panel(d, box, '1. PC', sy.get('power_mode') and f"{sy['power_mode']}")
     w = box[2] - x - 6
     for label, pct, temp in (('CPU', sy.get('cpu'), sy.get('t_cpu')),
                              ('GPU', sy.get('gpu'), sy.get('t_gpu'))):
@@ -179,7 +179,7 @@ def _pc(d, box, sy):
 
 
 def _sensors(d, box, s):
-    x, y = _panel(d, box, '2 SENSORS')
+    x, y = _panel(d, box, '2. SENSORS')
     w = box[2] - x - 6
     rows = []
     hub = s.get('hub', {})
@@ -217,7 +217,7 @@ def _motors(d, box, s):
     """One line per motor: configured motors, then drives found on the bus but not in
     motors.yaml ("id_70?", warning), then dim placeholders up to motors_expected (default 4)."""
     can = s.get('can_rate')
-    x, y = _panel(d, box, '3 MOTORS', f"CAN {_fmt(can, '.0f')}/s", OK if can else BAD)
+    x, y = _panel(d, box, '3. MOTORS', f"CAN {_fmt(can, '.0f')}/s", OK if can else BAD)
     w = box[2] - x - 6
     motors = list(s.get('motors', []))
     expected = int(s.get('motors_expected', 4))
@@ -275,7 +275,7 @@ def _motors(d, box, s):
 
 def _netpower(d, box, s):
     sy = s.get('sys', {})
-    x, y = _panel(d, box, '4 NET & POWER')
+    x, y = _panel(d, box, '4. NET & POWER')
     w = box[2] - x - 6
     if sy.get('wifi_up'):
         dbm = sy.get('wifi_dbm')
