@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- 데스크톱(Humble, FastDDS) -> Jetson(Jazzy, CycloneDDS). 192.168.147.160 = 이 PC Wi-Fi, 192.168.147.250 = Jetson.
+     IP 가 바뀌면 두 주소만 고친다. 유선(192.168.55.x)은 Jetson l4tbr0(192.168.55.1/24)와 대역이 겹쳐서 뺀다.
+     사용: export ROS_DOMAIN_ID=42 FASTRTPS_DEFAULT_PROFILES_FILE=<이 파일> -->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+<transport_descriptors><transport_descriptor><transport_id>wifi_udp</transport_id><type>UDPv4</type><interfaceWhiteList><address>192.168.147.160</address></interfaceWhiteList></transport_descriptor></transport_descriptors>
+<participant profile_name="wifi_only" is_default_profile="true"><rtps><userTransports><transport_id>wifi_udp</transport_id></userTransports><useBuiltinTransports>false</useBuiltinTransports><builtin><initialPeersList>
+<locator><udpv4><address>192.168.147.250</address><port>17910</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17912</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17914</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17916</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17918</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17920</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17922</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17924</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17926</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17928</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17930</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17932</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17934</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17936</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17938</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17940</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17942</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17944</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17946</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17948</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17950</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17952</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17954</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17956</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17958</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17960</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17962</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17964</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17966</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17968</port></udpv4></locator>
+<locator><udpv4><address>192.168.147.250</address><port>17970</port></udpv4></locator>
+</initialPeersList></builtin></rtps></participant></profiles>
