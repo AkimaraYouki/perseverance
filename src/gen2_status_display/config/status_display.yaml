@@ -12,7 +12,7 @@ status_display:
     pin_bl: 18
     invert_colors: true
     bgr: false
-    rotate_180: true          # panel mounted upside down
+    rotate_180: false         # panel orientation (true = flip 180°)
     gps_expected: true        # GPS connected (NEO-M8N @230400): missing NAV-PVT blinks
     compute_cells: 3
     motor_cells: 6
