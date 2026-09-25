@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>gen2_camera</name>
+  <version>0.1.0</version>
+  <description>Low-latency CSI camera (IMX219) publisher: GStreamer ISP capture -> JPEG -> sensor_msgs/CompressedImage, best-effort depth 1</description>
+  <maintainer email="choding860@gmail.com">parksudo</maintainer>
+  <license>MIT</license>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>diagnostic_msgs</exec_depend>
+  <exec_depend>python3-gi</exec_depend>
+  <exec_depend>gstreamer1.0-plugins-good</exec_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>
