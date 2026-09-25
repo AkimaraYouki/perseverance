@@ -541,3 +541,78 @@ class WheeledBipedCADJumpEnvCfg_PLAY(WheeledBipedCADJumpEnvCfg):
         self.events.push = None
         self.curriculum.terrain_levels = None
         self.scene.terrain.max_init_terrain_level = None
+
+
+@configclass
+class JumpRewardsCfgV7(JumpRewardsCfg):
+    jump_takeoff = RewTerm(func=custom_rewards.jump_takeoff, weight=3.0,
+                           params={"command_name": "base_velocity", "t_max": 0.3, "v_target": 1.2})
+
+
+@configclass
+class WheeledBipedCADJumpEnvCfgV7(WheeledBipedCADJumpEnvCfg):
+    """r7: r6 + 이륙 유도 보상, 점프 높이 가중치 4 -> 6."""
+    rewards: JumpRewardsCfgV7 = JumpRewardsCfgV7()
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.rewards.jump_clear.weight = 6.0
+
+
+@configclass
+class WheeledBipedCADJumpEnvCfgV7_PLAY(WheeledBipedCADJumpEnvCfgV7):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 16
+        self.observations.policy.enable_corruption = False
+        self.events.push = None
+        self.curriculum.terrain_levels = None
+        self.scene.terrain.max_init_terrain_level = None
+
+
+# ---------------------------------------------------------------------------
+# j1: 점프 전용 정책 (JUMP_REFERENCES.md 의 B). 3 s 짧은 에피소드: 달리다(0.3~0.8 m/s) 턱 앞 무작위 거리에서 버튼 ->
+# 점프 -> 착지 -> 안정. 2 단 계단 구덩이(가운데 6.9 m) 의 +x 벽을 향해 2.8~3.1 m 지점(벽까지 약 0.25~0.6 m)에서 출발.
+# 평지 타일에서는 에피소드마다 한 번 무작위 버튼. 관측은 r6/r7 과 같은 26 -> r7 에서 이어 시작.
+# ---------------------------------------------------------------------------
+@configclass
+class JumpSkillRewardsCfg(JumpRewardsCfgV7):
+    jump_ref = RewTerm(func=custom_rewards.jump_leg_ref, weight=3.0, params={"command_name": "base_velocity", "sigma": 0.02})
+
+
+@configclass
+class WheeledBipedCADJumpSkillEnvCfg(WheeledBipedCADJumpEnvCfgV7):
+    rewards: JumpSkillRewardsCfg = JumpSkillRewardsCfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.episode_length_s = 3.0
+        gen = rough.ROUGH_JUMP_TERRAINS_CFG
+        self.scene.terrain.terrain_generator = gen.replace(
+            num_cols=10, sub_terrains={"flat": gen.sub_terrains["flat"].replace(proportion=0.3),
+                                       "stairs2_up": gen.sub_terrains["stairs2_up"].replace(proportion=0.7)})
+        self.scene.terrain.max_init_terrain_level = 3
+        self.events.reset_base.params["pose_range"] = {"x": (2.77, 3.12), "y": (-1.0, 1.0), "yaw": (-0.1, 0.1)}
+        self.events.reset_base.params["velocity_range"] = {"x": (0.3, 0.8)}
+        c = self.commands.base_velocity
+        c.resampling_time_range = (100.0, 100.0)          # 에피소드 동안 명령 고정
+        c.ranges.lin_vel_x = (0.3, 0.8)
+        c.ranges.ang_vel_z = (0.0, 0.0)
+        c.ranges.height = (0.18, 0.18)
+        c.zero_vel_prob = 0.0
+        c.pure_axis_prob = 0.0
+        c.fast_turn_prob = 0.0
+        c.auto_mode_prob = 0.0
+        c.jump_rand_rate = 0.3                            # 평지 3 s 안 59 %, 계단 벽 전 조기 발동 약 16 % (나쁜 타이밍 표본)
+        c.jump_cooldown_s = 5.0                           # 에피소드당 한 번
+        self.events.push = None
+
+
+@configclass
+class WheeledBipedCADJumpSkillEnvCfg_PLAY(WheeledBipedCADJumpSkillEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 16
+        self.observations.policy.enable_corruption = False
+        self.curriculum.terrain_levels = None
+        self.scene.terrain.max_init_terrain_level = None

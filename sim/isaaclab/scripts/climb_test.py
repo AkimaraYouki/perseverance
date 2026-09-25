@@ -28,6 +28,7 @@ ap.add_argument("--t_crouch", type=float, default=0.25)
 ap.add_argument("--t_air", type=float, default=0.20, help="공중 수축 유지 시간 [s]")
 ap.add_argument("--h_land", type=float, default=0.16, help="착지 다리 길이 [m]")
 ap.add_argument("--hip", choices=("dc", "ideal"), default="dc")
+ap.add_argument("--hip_w0", type=float, default=None, help="고관절 무부하 속도 [rad/s] 덮어쓰기 (24 V 33.5, 6S 처짐 21 V 29.3)")
 ap.add_argument("--seconds", type=float, default=8.0)
 ap.add_argument("--record", default=None, metavar="DIR")
 ap.add_argument("--out", default=None)
@@ -60,6 +61,8 @@ cfg.scene.terrain = TerrainImporterCfg(
                                                     static_friction=1.0, dynamic_friction=1.0))
 if args.hip == "dc":
     cfg.scene.robot = cad.CAD_ROBOT_CFG_DCHIP.replace(prim_path="{ENV_REGEX_NS}/Robot")
+    if args.hip_w0:
+        cfg.scene.robot.actuators["legs"].velocity_limit = args.hip_w0
 cfg.events.reset_base.params["pose_range"] = {}
 cfg.events.reset_base.params["velocity_range"] = {}
 cfg.events.base_mass = None
@@ -187,7 +190,7 @@ L = log
 bottom = np.array([min(r["wz_l"], r["wz_r"]) - R for r in L])        # 두 바퀴 중 낮은 쪽 바닥 높이
 tau_max = max(max(abs(r["tau_l"]), abs(r["tau_r"])) for r in L)
 w_max = max(max(abs(r["w_l"]), abs(r["w_r"])) for r in L)
-res = dict(mode=args.mode, hip=args.hip, height=args.step_h, length=args.length, v=args.v, trigger=args.trigger,
+res = dict(mode=args.mode, hip=args.hip, hip_w0=args.hip_w0, height=args.step_h, length=args.length, v=args.v, trigger=args.trigger,
            fell=fell, tau_hip_max_nm=tau_max, hip_speed_max_rad_s=w_max,
            current_max_a_kt060=tau_max / 0.5994, current_max_a_kt081=tau_max / 0.81)
 if args.mode in ("jump", "none"):
@@ -208,7 +211,7 @@ else:
     res["stance_time_s"] = (fell_t - 2.0) if fell else (len(ok) * dt)
     res["roll_drift_deg"] = [float(min(r["roll"] for r in lift)), float(max(r["roll"] for r in lift))] if lift else None
 print("\n" + json.dumps(res, ensure_ascii=False, indent=1), flush=True)
-out = args.out or os.path.expanduser(f"~/pv_out/climb/{args.mode}_{args.hip}_{int(args.step_h*1000)}mm.json")
+out = args.out or os.path.expanduser(f"~/pv_out/climb/{args.mode}_{args.hip}{int(args.hip_w0 or 0)}_{int(args.step_h*1000)}mm.json")
 os.makedirs(os.path.dirname(out), exist_ok=True)
 json.dump(dict(result=res, log=L[:: max(1, len(L) // 2000)]), open(out, "w"), ensure_ascii=False)
 print(f"저장: {out}" + (f"\n영상: {rec_path}" if rec is not None else ""), flush=True)

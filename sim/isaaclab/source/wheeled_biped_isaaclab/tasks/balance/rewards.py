@@ -287,3 +287,34 @@ def airtime_outside_jump(env: "ManagerBasedRLEnv", command_name: str, thresh: fl
     term = env.command_manager.get_term(command_name)
     air = (wheel_clearance(env).min(dim=1).values > thresh).float()
     return air * (~term.jump_window).float()
+
+
+def jump_takeoff(env: "ManagerBasedRLEnv", command_name: str, t_max: float = 0.3, v_target: float = 1.2,
+                 asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """버튼 후 t_max 동안 몸통 COM 상승 속도 (0~1, v_target 에서 포화). 점프를 스스로 발견하게 하는 유도 보상.
+    r6 (높이 보상만) 은 500 iter 에서 점프 보상이 0.0098 -> 0.0039 로 줄었다 — 뛰다 넘어지는 경험 때문에 안 뛰는 쪽을 택했다.
+    계산상 이륙 속도 1.4~1.8 m/s (climb_test 스크립트 점프: 바퀴 바닥 148 mm)."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    term = env.command_manager.get_term(command_name)
+    vz = asset.data.root_com_lin_vel_w[:, 2].clamp(0.0, v_target) / v_target
+    return vz * (term.jump_timer < t_max).float()
+
+
+# 스크립트 점프 (climb_test --mode jump, 바퀴 바닥 142~147 mm) 의 다리 길이 곡선. 버튼 후 시간 [s] -> 다리 관절값 [m]
+JUMP_REF = ((0.00, 0.1825), (0.25, 0.1225), (0.40, 0.2425), (0.60, 0.1225), (1.00, 0.16))
+
+
+def jump_leg_ref(env: "ManagerBasedRLEnv", command_name: str, sigma: float = 0.02) -> torch.Tensor:
+    """점프 구간(버튼 후 1 s)에서 두 다리가 스크립트 기준 궤적을 따라가는지 (0~1). 선행 연구(Ascento 등)의 단계 구조를
+    참조 궤적으로 준 것 — r6/r7 은 높이 보상만으로 점프를 발견하지 못했다 (JUMP_REFERENCES.md B 방식)."""
+    from .cad import leg_state
+    term = env.command_manager.get_term(command_name)
+    t = term.jump_timer
+    ts = torch.tensor([p[0] for p in JUMP_REF], device=t.device)
+    hs = torch.tensor([p[1] for p in JUMP_REF], device=t.device)
+    idx = torch.clamp(torch.searchsorted(ts, t.contiguous()), 1, len(ts) - 1)
+    t0, t1, h0, h1 = ts[idx - 1], ts[idx], hs[idx - 1], hs[idx]
+    href = h0 + (h1 - h0) * ((t - t0) / (t1 - t0)).clamp(0, 1)
+    h = leg_state(env.scene["robot"])[0]
+    r = torch.exp(-torch.mean(torch.square(h - href[:, None]), dim=1) / sigma**2)
+    return r * (t < ts[-1]).float()

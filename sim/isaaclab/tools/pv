@@ -25,8 +25,10 @@ task_of() {
     flat) echo "Isaac-WheeledBiped-Balance-v0" ;;
     cad)  echo "Isaac-WheeledBiped-CAD-v0" ;;
     r2)   echo "LEGACY" ;;
+    j[0-9]*) echo "Isaac-WheeledBiped-CAD-JumpSkill-v0" ;;   # 점프 전용 정책 (B), 관측 26
     r3|r4|r5) echo "Isaac-WheeledBiped-CAD-Rough-v0" ;;
-    r[6-9]*|r[1-9][0-9]*) echo "Isaac-WheeledBiped-CAD-Jump-v0" ;;   # 점프 + 대회 장애물, 관측 26
+    r6) echo "Isaac-WheeledBiped-CAD-Jump-v0" ;;   # 점프 + 대회 장애물, 관측 26
+    r[7-9]*|r[1-9][0-9]*) echo "Isaac-WheeledBiped-CAD-Jump-v1" ;;   # + 이륙 유도 보상
     *)    echo "" ;;
   esac
 }
