@@ -35,6 +35,8 @@ ap.add_argument("--vx", type=float, default=0.5)
 ap.add_argument("--wz", type=float, default=1.0)
 ap.add_argument("--h", type=float, default=0.1825, help="수동 모드 높이 명령")
 ap.add_argument("--modes", nargs="+", default=["manual", "auto"], choices=["manual", "auto"])
+ap.add_argument("--manual_terrains", nargs="+", default=["flat"],
+                help="수동 모드를 잴 지형 (사용자: 수동은 평지용). all 이면 전부")
 ap.add_argument("--out", default=None)
 AppLauncher.add_app_launcher_args(ap)
 args = ap.parse_args()
@@ -63,7 +65,8 @@ prop = prop / prop.sum()
 col_type = [int(np.min(np.where(c / gen.num_cols + 0.001 < np.cumsum(prop))[0])) for c in range(gen.num_cols)]
 first_col = {names[t]: col_type.index(t) for t in range(len(names))}
 
-CASES = [(n, lv, md) for md in args.modes for n in names for lv in args.levels]
+CASES = [(n, lv, md) for md in args.modes for n in names for lv in args.levels
+         if md == "auto" or "all" in args.manual_terrains or n in args.manual_terrains]
 N = len(CASES) * args.repeats
 cfg = parse_env_cfg(task, num_envs=N, use_fabric=True)
 cfg.scene.terrain.terrain_generator = gen.replace(seed=args.seed)
@@ -154,6 +157,7 @@ for c, (name, lv, md) in enumerate(CASES):
         body_sd = float(seg("body").std(axis=0).mean())
         ground_sd = float(seg("ground").std(axis=0).mean())
         r.update(body_sd_mm=body_sd * 1e3, ground_sd_mm=ground_sd * 1e3,
+                 ground_mean_mm=float(seg("ground").mean() * 1e3),     # 평지면 0 이어야 한다 (바퀴 접지 - 지면 평균)
                  isolation=body_sd / ground_sd if ground_sd > 0.003 else None,
                  vz_rms=float(np.sqrt((seg("vz") ** 2).mean())),
                  az_rms=float(np.sqrt((seg("az") ** 2).mean())),

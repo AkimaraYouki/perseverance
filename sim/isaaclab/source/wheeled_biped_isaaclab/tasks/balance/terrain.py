@@ -76,7 +76,8 @@ ROUGH_TERRAINS_CFG = TerrainGeneratorCfg(
     slope_threshold=None,       # 가파른 칸을 수직벽으로 바꾸지 않는다 (위 bumps 설명)
     use_cache=False,
     sub_terrains={
-        "flat": MeshPlaneTerrainCfg(proportion=0.12),
+        # 평지 0.12 -> 0.20: 수동 높이 모드는 평지에서만 학습한다 (사용자: "수동은 평지용")
+        "flat": MeshPlaneTerrainCfg(proportion=0.20),
         # 2026-09-25 첫 판(요철 ±2 cm, 파도 6/3 cm, 경사 0.25, 턱 3 cm)은 평지 정책이 84/84 버텼다
         # (rough_probe, 바퀴가 겪는 요철 σ 최대 6 mm) -> 강건성 학습이 안 된다. 키웠다.
         # (파도 amplitude 는 IsaacLab 정의상 성분 진폭의 2 배: h = amp/2 (cos y + sin x))
@@ -140,3 +141,32 @@ def base_below_ground(env: "ManagerBasedRLEnv", minimum_height: float, sensor_cf
     """몸체가 (그 자리 지면 기준으로) 너무 낮다 — 평지 과제의 root z < 0.12 를 지형 기준으로."""
     asset: Articulation = env.scene[asset_cfg.name]
     return asset.data.root_pos_w[:, 2] - ground_patch_mean(env, sensor_cfg) < minimum_height
+
+
+# --- 지금 서 있는 타일이 평지인가 (수동 높이 모드는 평지 전용 — 사용자 2026-09-25) --------------------------
+_TILE_CACHE = {}
+
+
+def on_flat_tile(env: "ManagerBasedRLEnv", env_ids) -> torch.Tensor:
+    """env_ids 로봇이 지금 평지 타일 위에 있는지. 평면 지형(plane)이면 전부 True.
+
+    가장 가까운 타일 원점으로 열을 찾고, 열 -> 지형 종류는 TerrainGenerator 의 비율 규칙과 같다.
+    """
+    terrain = env.scene.terrain
+    gen = getattr(terrain.cfg, "terrain_generator", None)
+    if gen is None or terrain.cfg.terrain_type != "generator":
+        return torch.ones(len(env_ids), dtype=torch.bool, device=env.device)
+    key = id(terrain)
+    if key not in _TILE_CACHE:
+        import numpy as np
+        names = list(gen.sub_terrains.keys())
+        prop = np.array([gen.sub_terrains[n].proportion for n in names]); prop = prop / prop.sum()
+        col_type = [int(np.min(np.where(c / gen.num_cols + 0.001 < np.cumsum(prop))[0])) for c in range(gen.num_cols)]
+        flat_idx = names.index("flat") if "flat" in names else -1
+        flat_col = torch.tensor([t == flat_idx for t in col_type], device=env.device)
+        org = terrain.terrain_origins[..., :2].reshape(-1, 2)              # (rows*cols, 2)
+        _TILE_CACHE[key] = (org, flat_col, gen.num_cols)
+    org, flat_col, ncol = _TILE_CACHE[key]
+    xy = env.scene["robot"].data.root_pos_w[env_ids, :2]
+    idx = torch.cdist(xy, org).argmin(dim=1)
+    return flat_col[idx % ncol]

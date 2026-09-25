@@ -197,3 +197,35 @@ def base_vertical_acc_exp(env: "ManagerBasedRLEnv", std: float,
     asset: Articulation = env.scene[asset_cfg.name]
     az = asset.data.body_com_lin_acc_w[:, 0, 2]      # 0 = 루트(base_link)
     return torch.exp(-torch.square(az) / std**2)
+
+
+def leg_action_rate_phys(env: "ManagerBasedRLEnv", scale_ratio: float) -> torch.Tensor:
+    """다리 행동 변화를 **실제 다리 이동량** 기준으로 (행동 0, 1 = 다리 L, R).
+
+    다리 권한을 0.03 -> 0.12 m 로 넓히면(scale_ratio 4) 같은 action_rate 벌점이 실제 다리 움직임으로는 1/16 이
+    된다. m5100 에서 평지 수직가속 RMS 0.4 -> 1~3 m/s^2 (다리 떨림)로 나타났다. 예전 물리량 기준을 되살린다.
+    """
+    d = env.action_manager.action[:, :2] - env.action_manager.prev_action[:, :2]
+    return torch.sum(torch.square(d), dim=1) * scale_ratio**2
+
+
+def leg_stroke_margin(env: "ManagerBasedRLEnv", command_name: str, margin: float, h_min: float, h_max: float,
+                      asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """자동 모드에서 다리가 행정 양끝 margin 안으로 붙는 것 (0~, 다리마다 (1 - 여유/margin)^2).
+
+    m5100 자동 모드는 모든 지형에서 다리 119.7 mm (하한 122.5 아래, 처짐 포함)에 붙었다 — 낮을수록 안정하니
+    제일 쉬운 답이지만, 하한에서는 더 줄일 수 없어 요철을 못 흡수한다 (파도 roll 7 deg). 수동 모드는 사용자
+    높이라 끈다.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    if "L_joint_M" in asset.joint_names:
+        from .cad import leg_state
+        h = leg_state(asset)[0]
+    else:
+        h = asset.data.joint_pos[:, asset.find_joints(".*_leg")[0]]
+    d = torch.minimum(h - h_min, h_max - h)
+    pen = torch.sum(torch.square(torch.clamp(1.0 - d / margin, min=0.0)), dim=1)
+    cmd = env.command_manager.get_command(command_name)
+    if cmd.shape[1] > 3:
+        pen = pen * (cmd[:, 3] > 0.5).float()
+    return pen

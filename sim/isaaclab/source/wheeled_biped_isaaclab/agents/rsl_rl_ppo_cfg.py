@@ -66,3 +66,18 @@ class BalancePPORunnerCfg(RslRlOnPolicyRunnerCfg):
         desired_kl=0.01,
         max_grad_norm=1.0,
     )
+
+
+@configclass
+class RoughPPORunnerCfg(BalancePPORunnerCfg):
+    """거친 지형 + 높이 모드 과제. 엔트로피 0.006 -> 0.002.
+
+    2026-09-25 첫 판(0.006, Adam 모멘트 비움)에서 새 지형으로 넘어가자 행동 std 가 150 iter 동안
+    전 차원에서 단조 증가(평균 0.31 -> 1.00)하고 완주율이 64 % -> 39 % 로 떨어졌다. 크리틱이 새 보상·지형에
+    맞춰지기 전에는 추종 기울기가 잡음이라, 방향이 일정한 엔트로피 기울기만 Adam 에서 누적된다.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        # 0.002 로도 5050 -> 5100 사이 다리 std 0.25 -> 0.33 (실제 3 -> 4 cm) 로 다시 가팔라져서 0.001.
+        self.algorithm.entropy_coef = 0.001

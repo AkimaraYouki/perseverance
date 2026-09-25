@@ -388,8 +388,14 @@ class RoughRewardsCfg(RewardsCfg):
     gimbal_height = RewTerm(func=custom_rewards.gimbal_height_exp, weight=1.5,
                             params={"command_name": "base_velocity", "std": 0.02, "std_auto": 0.05,
                                     "sensor_cfg": SceneEntityCfg("height_scanner")})
-    # 짐벌 본체: 몸통 수직가속도. std 3 m/s^2 은 첫 추정 — rough_probe 의 az RMS 로 확인한다.
-    ride = RewTerm(func=custom_rewards.base_vertical_acc_exp, weight=1.0, params={"std": 3.0})
+    # 짐벌 본체: 몸통 수직가속도. 첫 판 std 3 m/s^2 은 너무 느슨했다 (기준선 az RMS 0.2~3 이 전부 0.6 이상 보상).
+    ride = RewTerm(func=custom_rewards.base_vertical_acc_exp, weight=1.0, params={"std": 1.0})
+    # 다리 권한 0.12 m 에 맞춘 다리 부드러움 (실제 이동량 기준 예전과 같게, 0.12/0.03 = 4)
+    leg_rate = RewTerm(func=custom_rewards.leg_action_rate_phys, weight=-0.1, params={"scale_ratio": 4.0})
+    # 자동 모드: 다리를 행정 양끝 10 mm 안에 붙이지 않기 (요철 흡수 여유)
+    stroke_margin = RewTerm(func=custom_rewards.leg_stroke_margin, weight=-1.0,
+                            params={"command_name": "base_velocity", "margin": 0.010,
+                                    "h_min": 0.1225, "h_max": 0.2425})
     # (몸통 수직속도 L2 는 뺐다 — 경사를 일정하게 오를 때(v x 경사)와 자동 모드 높이 변경까지 벌한다.
     #  평지의 lin_vel_z 도 끈다. 튀는 것은 아래 ride(수직가속도)가 잡는다.)
 
@@ -417,7 +423,8 @@ class WheeledBipedCADRoughEnvCfg(WheeledBipedCADEnvCfg):
         # 높이 모드 (commands.py): 명령 = [vx, wz, h_ref, m]. 자동 공칭 = CAD 기본자세 (M = 0, 사용자 지정 IDLE)
         c = self.commands.base_velocity
         c.with_mode = True
-        c.auto_mode_prob = 0.5
+        c.auto_mode_prob = 0.5          # 평지 타일에서. 거친 지형 타일 위에서는 항상 자동 (수동은 평지용)
+        c.manual_flat_only = True
         c.auto_height = cad.H0_JOINT
         # 다리 권한: 어떤 h_ref 에서든 최소·최대 양끝까지 (사용자). 0.12 m = 전체 행정 0.1225~0.2425.
         # 예전 0.03 에서 이어받을 때는 add_mode_input.py 가 다리 출력을 1/4 로 환산한다.

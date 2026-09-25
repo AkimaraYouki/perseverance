@@ -9,7 +9,10 @@
        -> actor 출력층 다리 행(0, 1)과 행동 std 를 1/4 로.
        관측 속 "직전 행동" 다리 두 칸(새 인덱스 16, 17)도 값이 1/4 이 되므로 정규화가 같은 값을 내도록
        mean' = mean/4,  std' + eps = (std + eps)/4   (rsl_rl: (x - mean) / (std + eps), eps = 0.01)
-  3. Adam 모멘트는 비운다 (첫 층 모양이 바뀌었다).
+  3. Adam 모멘트는 **같은 수술로 변환해 보존**한다. 첫 판에서 비웠더니 새 지형에서 크리틱이 틀리는 동안
+     방향이 일정한 엔트로피 항만 누적돼 행동 std 가 150 iter 만에 다리 0.11 -> 0.61, 바퀴 0.54 -> 1.2 로
+     폭주했다 (완주율 64 % -> 39 %). 매개변수 x -> Kx 이면 기울기는 1/K 배라 m -> m/K, v -> v/K^2.
+     옵티마이저 매개변수 순서: 0 std, 1-8 actor mlp (0.w, 0.b, 2.w, 2.b, 4.w, 4.b, 6.w, 6.b), 9-16 critic mlp.
 
     isaaclab.sh -p add_mode_input.py <in model_N.pt> <out model_N.pt>
 """
@@ -50,6 +53,12 @@ a = ck["actor_state_dict"]
 a["mlp.6.weight"][:2] *= K
 a["mlp.6.bias"][:2] *= K
 a["distribution.std_param"][:2] *= K
-ck["optimizer_state_dict"]["state"] = {}
+st = ck["optimizer_state_dict"]["state"]
+for i in (1, 9):                                   # 첫 층 weight: 모드 열 0 삽입
+    for k in ("exp_avg", "exp_avg_sq"):
+        st[i][k] = insert_col(st[i][k], INS, 0.0)
+for i, rows in ((0, slice(0, 2)), (7, slice(0, 2)), (8, slice(0, 2))):   # std, 출력층 다리 행
+    st[i]["exp_avg"][rows] /= K
+    st[i]["exp_avg_sq"][rows] /= K * K
 torch.save(ck, dst)
 print(f"저장 {dst}: 관측 19->20 (모드 @{INS}), 다리 행동 x{K}, 다리 std {a['distribution.std_param'][:2].tolist()}")

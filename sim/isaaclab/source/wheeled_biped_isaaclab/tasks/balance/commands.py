@@ -17,7 +17,7 @@
   조이스틱에서는 스틱이 h_target 을 올리고 내리므로 실기와 같은 구조가 된다.
 
 높이 모드 (2026-09-25 사용자, with_mode=True 일 때만 — 명령이 4 개가 된다: [vx, wz, h_ref, m]):
-  m = 0  수동: 평균 높이 = 사용자 h_ref (촘촘히 추종). 좌우 수평·요철 흡수는 계속 한다.
+  m = 0  수동: 평균 높이 = 사용자 h_ref (촘촘히 추종). **평지 전용** (manual_flat_only).
   m = 1  자동: 평균 높이도 정책이 외란·지형에 맞춰 정한다. h_ref 는 공칭값(auto_height)으로 가고
                보상에서 느슨한 선호로만 쓴다 (rewards.gimbal_height_exp 의 std_auto).
   with_mode=False(평지 과제 기본)면 예전과 똑같이 3 개 — 기존 정책/스크립트 호환.
@@ -133,6 +133,11 @@ class WheelLegCommand(CommandTerm):
         wz[zero] = 0.0
         if self.cfg.with_mode:
             auto = torch.rand(n, device=dev) < self.cfg.auto_mode_prob
+            if self.cfg.manual_flat_only:
+                # 수동 높이 모드는 평지 전용 (사용자 2026-09-25). 거친 지형 위에서는 항상 자동.
+                from .terrain import on_flat_tile
+                ids_t = torch.as_tensor(env_ids, device=dev) if not isinstance(env_ids, slice) else torch.arange(self.num_envs, device=dev)
+                auto |= ~on_flat_tile(self._env, ids_t)
             h[auto] = self.cfg.auto_height
             self._cmd[env_ids, 3] = auto.float()
         self._cmd[env_ids, 0] = vx
@@ -166,7 +171,8 @@ class WheelLegCommandCfg(CommandTermCfg):
     fast_turn_vx: tuple = (0.50, 0.85)     # |vx| [m/s]
     fast_turn_wz: tuple = (0.40, 1.00)     # |wz| [rad/s]
     with_mode: bool = False                # True 면 명령 4 번째 = 높이 모드 (0 수동 / 1 자동)
-    auto_mode_prob: float = 0.0            # 재추첨 때 자동 모드 확률
+    auto_mode_prob: float = 0.0            # 재추첨 때 자동 모드 확률 (평지 타일에서)
+    manual_flat_only: bool = False         # True: 거친 지형 타일 위에서는 항상 자동
     auto_height: float = 0.1825            # 자동 모드 공칭 높이 (다리 관절값, 범위 중앙)
 
     @configclass
