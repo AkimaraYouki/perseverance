@@ -79,5 +79,9 @@ class RoughPPORunnerCfg(BalancePPORunnerCfg):
 
     def __post_init__(self):
         super().__post_init__()
-        # 0.002 로도 5050 -> 5100 사이 다리 std 0.25 -> 0.33 (실제 3 -> 4 cm) 로 다시 가팔라져서 0.001.
-        self.algorithm.entropy_coef = 0.001
+        # 0.002 로도 5050 -> 5100 사이 다리 std 0.25 -> 0.33 (실제 3 -> 4 cm) 로 다시 가팔라져서 0.001 (r3).
+        # 그런데 0.001 로 이어 학습한 r3 는 std 0.19 까지 줄고, 작은 std 에서는 같은 평균 변화에도 KL 이 커서
+        # adaptive 스케줄이 학습률을 하한 1e-5 까지 깎았다 (r3 끝, train_health 경고). r4 부터는 오리처럼
+        # **처음부터** 학습하므로 평지에서 검증된 0.006 으로 되돌린다. 이어서 학습 시험은 --from 과 함께
+        # `agent.algorithm.entropy_coef=0.001` 을 준다.
+        self.algorithm.entropy_coef = 0.006

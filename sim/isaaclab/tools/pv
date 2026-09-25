@@ -102,19 +102,19 @@ tb_start() {   # tb_start [all]
     [ -d "$d" ] || continue
     b="$(basename "$d")"
     case "$b" in *_smoke|*_init|*_init2) continue ;; esac                  # 스모크·수술용 디렉터리 제외
-    if [ "$sel" != "all" ]; then
-      # 기본: 거친 지형 계열만. 평지 옛 런까지 겹치면 관측·보상이 달라 곡선을 오독한다.
-      case "$b" in *rough_modes*|*rough_v3|*_pv_*) ;; *) continue ;; esac
-    fi
-    ls "$d"/events.out.tfevents.* >/dev/null 2>&1 || continue
+    # 이름 붙이기. 기본 화면에는 "지금 비교할 것" 만: r3 (관측 v3) 과 pv_ 새 버전들. 중단·시험 런은 뺀다.
     case "$b" in
-      *_rough_modes2) nm="r2a_${b%%_rough*}" ;;
-      *_rough_modes3) nm="r2" ;;
-      *_rough_modes)  nm="r2x_${b%%_rough*}" ;;
-      *_rough_v3)     nm="r3" ;;
-      *_pv_*)         nm="${b##*_pv_}" ;;
-      *)              nm="$b" ;;
+      *_rough_v3)     nm="r3";        keep=1 ;;
+      *_pv_*warm*)    nm="${b##*_pv_}"; keep=0 ;;             # 중단한 이어-학습 시험 (r4warm)
+      *_pv_*)         nm="${b##*_pv_}"; keep=1 ;;
+      *_rough_modes3) nm="r2";        keep=0 ;;               # 관측 v2 — 관측·보상이 달라 겹치면 오독
+      *_rough_modes2) nm="old_r2a";   keep=0 ;;
+      *_rough_modes)  nm="old_r2x";   keep=0 ;;
+      *_rough_gimbal) nm="old_gimbal"; keep=0 ;;
+      *)              nm="old_${b}";  keep=0 ;;
     esac
+    [ "$sel" = "all" ] || [ "$keep" = 1 ] || continue
+    ls "$d"/events.out.tfevents.* >/dev/null 2>&1 || continue
     ln -sfn "$d" "$L/$nm"; n=$((n+1))
   done
   setsid nohup "$IL" -p -m tensorboard.main --logdir "$L" --bind_all --port "$TB_PORT" \
@@ -157,6 +157,12 @@ train)
   echo "학습 시작: $ver ($task, envs=$envs, iters=$iters)"
   echo "로그: $RUNLOG/train_$ver.log     진행: pv watch $ver"
   tb_start      # 학습을 시작하면 텐서보드도 같이 (odm 습관)
+  # 수렴하면 자동 정지 (PV_NO_AUTOSTOP=1 이면 끈다). 처음부터면 최소 1500 iter, 이어서면 500 iter 뒤부터 판정.
+  if [ -z "${PV_NO_AUTOSTOP:-}" ]; then
+    mi=$([ -n "$ck" ] && echo 500 || echo 1500)
+    setsid nohup "$0" autostop "$ver" 300 "$mi" > "$RUNLOG/autostop_$ver.log" 2>&1 < /dev/null &
+    echo "  수렴 자동 정지 감시: 5 분마다 (최소 $mi iter 뒤부터)   로그: $RUNLOG/autostop_$ver.log"
+  fi
   # 새 런 디렉터리는 앱이 뜬 뒤(약 1 분)에 생긴다 -> 생기면 텐서보드를 한 번 더 열어 새 런을 붙인다
   ( for i in $(seq 1 120); do ls -d "$LOGROOT"/*_pv_"$ver" >/dev/null 2>&1 && break; sleep 2; done
     "$0" tb >/dev/null 2>&1 ) </dev/null >/dev/null 2>&1 &
@@ -246,6 +252,37 @@ compare)
 
 tb) tb_start "${1:-}" ;;
 
+health)
+  # pv health <ver>   텐서보드 이벤트만 읽어 건강·수렴 판정 (Isaac 안 띄움, 학습 중에도 가능)
+  ver="${1:-r3}"; run="$(latest_run "$ver")"; [ -n "$run" ] || { echo "런 없음: $ver" >&2; exit 1; }
+  cd "$PROJ"; env -u PYTHONPATH "$IL" -p scripts/train_health.py --run "$run" "${@:2}" 2>&1 | grep -vE "^cat:|Using python|H    H"
+  ;;
+
+autostop)
+  # pv autostop <ver> [주기 s] [최소 iter]   수렴하면 학습을 멈춘다 (pv train 이 자동으로 띄운다)
+  ver="${1:-}"; every="${2:-300}"; mi="${3:-500}"
+  [ -n "$ver" ] || { echo "사용법: pv autostop <ver> [주기] [최소iter]" >&2; exit 1; }
+  echo "$(date '+%F %T') 감시 시작: $ver, ${every}s 마다, 최소 ${mi} iter"
+  run=""; for i in $(seq 1 120); do run="$(latest_run "$ver")"; [ -n "$run" ] && [ -d "$run" ] && break; sleep 2; done
+  [ -n "$run" ] || { echo "런 디렉터리가 안 생겼다"; exit 1; }
+  sleep 60
+  while [ -n "$(isaac_pids)" ]; do
+    out="$(cd "$PROJ" && env -u PYTHONPATH "$IL" -p scripts/train_health.py --run "$run" --min_iters "$mi" 2>&1 | grep -vE "^cat:|Using python|H    H" || true)"
+    st="$(echo "$out" | sed -n 's/^STATUS //p' | tail -1)"
+    echo "$(date '+%F %T') $(echo "$out" | sed -n '1p' | sed 's/^\[[^]]*\]  //') -> ${st:-?}"
+    echo "$out" | grep "경고" || true
+    if [ "$st" = "CONVERGED" ]; then
+      echo "$out"
+      echo "$(date '+%F %T') 수렴 -> 학습 정지"
+      "$0" stop
+      echo "AUTOSTOP $ver $(basename "$run")"
+      exit 0
+    fi
+    sleep "$every"
+  done
+  echo "$(date '+%F %T') 학습 프로세스가 끝나서 감시 종료"
+  ;;
+
 onnx)
   # pv onnx <ver> [iter]  실기용 policy.pt + policy.onnx + policy_meta.json (Isaac 안 띄움, 학습 중에도 가능)
   ver="${1:-r3}"; it="${2:-}"
@@ -299,6 +336,8 @@ pv — PERSEVERANCE 휠-레그 원스톱 (odm 과 같은 문법)
   pv measure[ver] [iter]                    거친 지형 측정 (지형 x 난이도 x 모드). flat/cad 는 6방향 측정
   pv compare <ver>:<iter> <ver>:<iter>      두 측정 비교표
   pv tb     [all]                           텐서보드 :6007 (기본 거친 지형 계열, all 이면 전부)
+  pv health [ver]                           건강·수렴 판정 (학습률 바닥, std 붕괴, 지형·완주·추종 평탄) — 학습 중에도
+  pv autostop <ver> [주기] [최소iter]        수렴하면 학습 정지 (pv train 이 자동으로 띄움, PV_NO_AUTOSTOP=1 로 끔)
   pv onnx   [ver] [iter]                    실기용 policy.pt / .onnx / meta (학습 중에도 가능)
   pv stop                                   Isaac 정리
   pv list                                   버전·런·체크포인트
