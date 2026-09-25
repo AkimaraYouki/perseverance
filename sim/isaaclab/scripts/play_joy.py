@@ -4,7 +4,10 @@
                        왼스틱 세로=전후, 오른스틱 가로=조향, RT/LT=높이 올림/내림, A=비상정지, B=높이 기본값
                        카메라: 십자키 좌우=로봇 주위 회전, 십자키 위아래=카메라 높이,
                                LB=축소(멀리) RB=확대(가까이), Y=카메라 초기화
+                       X = 높이 모드 전환 (수동: 트리거로 높이 / 자동: 정책이 지형·외란 보고 높이 결정)
     --cycle            정지 → 전진 → 후진 → 좌회전 → 우회전 → 올라가기 → 내려가기 를 --hold 초씩
+    --rough            거친 지형 + 높이 모드 과제 (Isaac-WheeledBiped-CAD-Rough-Play-v0).
+                       --terrain 종류 --level 난이도(0~9) 타일 가운데에서 시작. --cycle 은 수동/자동 구간을 섞는다
     (둘 다 없으면)     --vx --wz --h 고정 명령
 
 명령은 pin 해서 학습용 재추첨이 덮어쓰지 않게 한다. 카메라는 로봇을 따라간다.
@@ -23,6 +26,12 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--policy", required=True)
 ap.add_argument("--task", default="Isaac-WheeledBiped-Balance-Play-v0")
 ap.add_argument("--cad", action="store_true", help="CAD 4절링크 폐루프 모델 (Isaac-WheeledBiped-CAD-Play-v0)")
+ap.add_argument("--rough", action="store_true", help="거친 지형 + 높이 모드 (CAD-Rough-Play). --cad 포함")
+ap.add_argument("--terrain", default="wave_short",
+                choices=("flat", "rough", "wave_long", "wave_short", "slope_up", "slope_down", "bumps"))
+ap.add_argument("--level", type=int, default=6, help="지형 난이도 행 0~9")
+ap.add_argument("--mode", choices=("manual", "auto"), default="manual", help="시작 높이 모드 (--rough)")
+ap.add_argument("--terrain_seed", type=int, default=7, help="지형 seed (학습은 42 — 기본은 안 본 지형)")
 ap.add_argument("--num_envs", type=int, default=1)
 ap.add_argument("--joystick", nargs="?", const="/dev/input/js0", default=None, metavar="DEV")
 ap.add_argument("--pad", choices=("auto", "classic", "modern"), default="auto",
@@ -65,11 +74,18 @@ FRICTION_NM = 0.82          # 바퀴 하나 마찰 한계 추정 (HUD 에서 % �
 
 # 패드 추가 입력 (고전 xpad 기준. 최신 hid/블루투스는 버튼 번호가 다를 수 있다)
 DPAD_X, DPAD_Y = 6, 7
-BTN_Y, BTN_LB, BTN_RB = 3, 4, 5
+BTN_X, BTN_Y, BTN_LB, BTN_RB = 2, 3, 4, 5
 
-if args.cad:
+if args.rough:
+    args.cad = True
+    args.task = "Isaac-WheeledBiped-CAD-Rough-Play-v0"
+elif args.cad:
     args.task = "Isaac-WheeledBiped-CAD-Play-v0"
 cfg = parse_env_cfg(args.task, num_envs=args.num_envs, use_fabric=True)
+if args.rough:
+    cfg.scene.terrain.terrain_generator = cfg.scene.terrain.terrain_generator.replace(seed=args.terrain_seed)
+    cfg.events.reset_base.params["pose_range"] = {"x": (0.0, 0.0), "y": (0.0, 0.0), "yaw": (0.0, 0.0)}
+    cfg.events.reset_base.params["velocity_range"] = {}
 cfg.viewer.origin_type = "asset_root"
 cfg.viewer.asset_name = "robot"
 cfg.viewer.env_index = 0
@@ -81,7 +97,44 @@ dev = env.device
 cmd = env.command_manager.get_term("base_velocity")
 rng = cmd.cfg.ranges
 cmd.pin(True)
-policy = torch.jit.load(args.policy, map_location=dev).eval()
+
+
+def load_policy(path):
+    """TorchScript(policy.pt) 또는 rsl_rl 체크포인트(model_N.pt) — 체크포인트면 결정적(평균) 행동."""
+    try:
+        return torch.jit.load(path, map_location=dev).eval()
+    except RuntimeError:
+        pass
+    sd = torch.load(path, map_location=dev, weights_only=False)["actor_state_dict"]
+    layers = []
+    for i in range(4):
+        w = sd[f"mlp.{2*i}.weight"]
+        lin = torch.nn.Linear(w.shape[1], w.shape[0]).to(dev)
+        lin.weight.data[:] = w
+        lin.bias.data[:] = sd[f"mlp.{2*i}.bias"]
+        layers += [lin] + ([torch.nn.ELU()] if i < 3 else [])
+    mlp = torch.nn.Sequential(*layers).eval()
+    mean, std = sd["obs_normalizer._mean"], sd["obs_normalizer._std"]
+    return lambda x: mlp((x - mean) / (std + 1e-2))
+
+
+policy = load_policy(args.policy)
+HAS_MODE = cmd.command.shape[1] > 3          # 높이 모드 과제 (명령 [vx, wz, h_ref, m])
+hmode = 1.0 if (HAS_MODE and args.mode == "auto") else 0.0
+_x_prev = False
+if args.rough:
+    # 로봇 0 을 고른 지형 타일 가운데로 (rough_probe 와 같은 열 규칙)
+    import numpy as _np
+    _gen = cfg.scene.terrain.terrain_generator
+    _names = list(_gen.sub_terrains.keys())
+    _prop = _np.array([_gen.sub_terrains[n].proportion for n in _names]); _prop /= _prop.sum()
+    _col = [int(_np.min(_np.where(c / _gen.num_cols + 0.001 < _np.cumsum(_prop))[0])) for c in range(_gen.num_cols)]
+    _terr = env.scene.terrain
+    _terr.terrain_levels[:] = args.level
+    _terr.terrain_types[:] = _col.index(_names.index(args.terrain))
+    _terr.env_origins[:] = _terr.terrain_origins[_terr.terrain_levels, _terr.terrain_types]
+    print(f"[지형] {args.terrain} 난이도 행 {args.level} (seed {args.terrain_seed}), 시작 모드 {args.mode}", flush=True)
+_scan = env.scene.sensors.get("height_scanner") if hasattr(env.scene, "sensors") else None
 _r = env.scene["robot"]
 WHEEL_IDS = _r.find_joints("L_joint_W|R_joint_W" if args.cad else ".*_wheel_joint", preserve_order=True)[0]
 LEG_IDS = _r.find_joints("L_joint_M|R_joint_M" if args.cad else ".*_leg", preserve_order=True)[0]
@@ -182,7 +235,8 @@ def mode_en_of(lab):
     return {"패드": "PAD", "비상정지": "E-STOP", "패드 끊김→정지": "PAD LOST -> STOP", "고정": "FIXED",
             "정지": "STOP", "전진": "FORWARD", "후진": "BACKWARD", "좌회전": "TURN LEFT", "우회전": "TURN RIGHT",
             "올라가기": "RAISE", "내려가기": "LOWER", "고속전진": "FAST FWD", "좌코너": "CORNER LEFT",
-            "복귀": "RETURN"}.get(lab, lab)
+            "복귀": "RETURN", "자동 정지": "AUTO STOP", "자동 전진": "AUTO FORWARD", "자동 좌회전": "AUTO TURN LEFT",
+            "자동 고속": "AUTO FAST", "자동 코너": "AUTO CORNER", "자동 후진": "AUTO BACKWARD"}.get(lab, lab)
 
 
 pad = None
@@ -196,12 +250,20 @@ if args.joystick:
     print(f"[패드] {args.joystick} 배치: {pad.layout}", flush=True)
 
 h_mid = 0.5 * (h_lo + h_hi)
-CYCLE = [  # (이름, vx, wz, h) — 이 로봇의 6방향(전후·좌우회전·상하) + 고속
-    ("정지", 0.0, 0.0, h_mid), ("전진", 0.5, 0.0, h_mid), ("후진", -0.5, 0.0, h_mid),
-    ("좌회전", 0.0, 1.5, h_mid), ("우회전", 0.0, -1.5, h_mid),
-    ("올라가기", 0.0, 0.0, h_hi), ("내려가기", 0.0, 0.0, h_lo),
-    ("고속전진", 0.8, 0.0, h_mid), ("좌코너", 0.6, 1.5, h_mid), ("복귀", 0.0, 0.0, h_mid),
+CYCLE = [  # (이름, vx, wz, h, 높이모드) — 이 로봇의 6방향(전후·좌우회전·상하) + 고속
+    ("정지", 0.0, 0.0, h_mid, 0), ("전진", 0.5, 0.0, h_mid, 0), ("후진", -0.5, 0.0, h_mid, 0),
+    ("좌회전", 0.0, 1.5, h_mid, 0), ("우회전", 0.0, -1.5, h_mid, 0),
+    ("올라가기", 0.0, 0.0, h_hi, 0), ("내려가기", 0.0, 0.0, h_lo, 0),
+    ("고속전진", 0.8, 0.0, h_mid, 0), ("좌코너", 0.6, 1.5, h_mid, 0), ("복귀", 0.0, 0.0, h_mid, 0),
 ]
+if HAS_MODE:   # 거친 지형: 수동(사용자 높이) 과 자동(정책이 높이 결정) 을 번갈아
+    CYCLE = [
+        ("정지", 0.0, 0.0, h_mid, 0), ("전진", 0.5, 0.0, h_mid, 0), ("올라가기", 0.0, 0.0, h_hi, 0),
+        ("전진", 0.5, 0.0, h_hi, 0), ("후진", -0.5, 0.0, h_mid, 0),
+        ("자동 정지", 0.0, 0.0, h_mid, 1), ("자동 전진", 0.5, 0.0, h_mid, 1), ("자동 좌회전", 0.0, 1.5, h_mid, 1),
+        ("자동 고속", 0.8, 0.0, h_mid, 1), ("자동 코너", 0.6, 1.5, h_mid, 1), ("자동 후진", -0.5, 0.0, h_mid, 1),
+        ("복귀", 0.0, 0.0, h_mid, 0),
+    ]
 
 rec = None
 if args.record:
@@ -210,7 +272,8 @@ if args.record:
     import numpy as np
     from PIL import Image, ImageDraw, ImageFont
     os.makedirs(args.record, exist_ok=True)
-    rec_path = os.path.join(args.record, f"cycle_{'cad' if args.cad else 'simple'}_{datetime.datetime.now():%Y%m%d_%H%M%S}.mp4")
+    _tag = f"rough_{args.terrain}{args.level}" if args.rough else ("cad" if args.cad else "simple")
+    rec_path = os.path.join(args.record, f"cycle_{_tag}_{datetime.datetime.now():%Y%m%d_%H%M%S}.mp4")
     rec = imageio.get_writer(rec_path, fps=args.rec_fps, codec="libx264", quality=8, macro_block_size=8)
     rec_every = max(1, round(1.0 / (env.step_dt * args.rec_fps)))
     rec_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 22)
@@ -234,6 +297,11 @@ with torch.inference_mode():
             h_t = min(h_hi, max(h_lo, h_t + dh * args.height_rate * dt))
             if reset_h:
                 h_t = cmd.cfg.default_height
+            _x = pad.button(BTN_X)
+            if HAS_MODE and _x and not _x_prev:
+                hmode = 1.0 - hmode
+                print(f"[높이 모드] {'자동' if hmode else '수동'}", flush=True)
+            _x_prev = _x
             label = "비상정지" if estop else ("패드" if pad.connected else "패드 끊김→정지")
             if not pad.connected:
                 vx = wz = 0.0
@@ -254,11 +322,14 @@ with torch.inference_mode():
                 apply_cam()
         elif args.cycle:
             i = int(sim_t // args.hold) % len(CYCLE)
-            label, vx, wz, h_t = CYCLE[i]
+            label, vx, wz, h_t, hmode = CYCLE[i]
         else:
             vx, wz = args.vx, args.wz
             label = "고정"
-        cmd.set(vx, wz, h_t)
+        if HAS_MODE:
+            cmd.set(vx, wz, h_t, mode=float(hmode))
+        else:
+            cmd.set(vx, wz, h_t)
         obs, _, term, trunc, _ = env.step(policy(obs["policy"]))
         r = env.scene["robot"]
         if bool(term[0]):
@@ -276,6 +347,20 @@ with torch.inference_mode():
         roll_d = math.degrees(math.atan2(-float(g[1]), -float(g[2])))
         v_now = float(r.data.root_com_lin_vel_b[0, 0]); w_now = float(r.data.root_ang_vel_b[0, 2])
         q_now = float(cmd._leg_h()[0])       # 두 모델 공통 (CAD 는 모터각 -> 다리 관절값 변환)
+        h_cmd_txt = "AUTO" if (HAS_MODE and hmode) else f"{(h_t+R_WHEEL)*1000:5.1f} mm"
+        hmode_txt = ("AUTO (policy picks height)" if hmode else "MANUAL (triggers)") if HAS_MODE else "-"
+        if args.cad:
+            from wheeled_biped_isaaclab.tasks.balance.cad import leg_state as _ls
+            _hl = _ls(r)[0][0]
+            legs_txt = f"L {(float(_hl[0])+R_WHEEL)*1000:5.1f}  R {(float(_hl[1])+R_WHEEL)*1000:5.1f} mm"
+        else:
+            legs_txt = "-"
+        if _scan is not None:
+            _z = _scan.data.ray_hits_w[0, :, 2]
+            _z = _z[torch.isfinite(_z)]
+            body_txt = f"{(float(r.data.root_com_pos_w[0, 2]) - float(_z.mean()))*1000:5.1f} mm" if len(_z) else "-"
+        else:
+            body_txt = "-"
         tau = r.data.applied_torque[0, WHEEL_IDS].clone()
         if prev_tau is not None:
             chat_win.append(torch.sign(tau - prev_tau))
@@ -293,12 +378,13 @@ with torch.inference_mode():
             img = Image.fromarray(np.asarray(env.render())[..., :3])
             dr = ImageDraw.Draw(img)
             lines = [f"{mode_en_of(label):10s}  t {sim_t:5.1f} s   {'CAD 4-bar' if args.cad else 'simplified'}",
-                     f"CMD  vx {vx:+.2f}  wz {wz:+.2f}  h {(h_t+R_WHEEL)*1000:5.1f} mm",
+                     f"CMD  vx {vx:+.2f}  wz {wz:+.2f}  h {h_cmd_txt}   HEIGHT {'AUTO' if (HAS_MODE and hmode) else 'MANUAL'}",
+                     f"LEGS {legs_txt}   BODY above ground {body_txt}",
                      f"ACT  vx {v_now:+.2f}  wz {w_now:+.2f}  h {(q_now+R_WHEEL)*1000:5.1f} mm  ({abs(v_now)*3.6:.2f} km/h)",
                      f"TILT pitch {pitch_d:+5.1f}  roll {roll_d:+5.1f} deg",
                      f"HIP  Nm L {float(_h[0]):+5.2f} R {float(_h[1]):+5.2f}   WHEEL Nm L {float(_w[0]):+5.2f} R {float(_w[1]):+5.2f}",
                      f"FALLS {falls}"]
-            dr.rectangle([8, 8, 8 + 760, 8 + 30 * len(lines) + 10], fill=(0, 0, 0))
+            dr.rectangle([8, 8, 8 + 860, 8 + 30 * len(lines) + 10], fill=(0, 0, 0))
             for i, ln in enumerate(lines):
                 dr.text((18, 14 + 30 * i), ln, font=rec_font, fill=(255, 255, 255))
             rec.append_data(np.asarray(img))
@@ -311,7 +397,10 @@ with torch.inference_mode():
             trk_w = f"{100*w_now/wz:4.0f}%" if abs(wz) > 1e-3 else "  --"
             hud.text = "\n".join([
                 f"MODE      {mode_en}",
-                f"CMD       vx {vx:+.2f}  wz {wz:+.2f}  h {(h_t+R_WHEEL)*1000:5.1f} mm",
+                f"HEIGHT    {hmode_txt}",
+                f"CMD       vx {vx:+.2f}  wz {wz:+.2f}  h {h_cmd_txt}",
+                f"LEGS      {legs_txt}",
+                f"BODY      {body_txt} above ground",
                 f"ACTUAL    vx {v_now:+.2f}  wz {w_now:+.2f}  h {(q_now+R_WHEEL)*1000:5.1f} mm",
                 f"TRACKING  vx {trk_v}   wz {trk_w}   h err {(q_now-float(cmd.command[0,2]))*1000:+5.1f} mm",
                 f"SPEED     {abs(v_now)*3.6:4.2f} km/h",
