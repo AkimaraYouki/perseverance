@@ -157,6 +157,10 @@ train)
   echo "학습 시작: $ver ($task, envs=$envs, iters=$iters)"
   echo "로그: $RUNLOG/train_$ver.log     진행: pv watch $ver"
   tb_start      # 학습을 시작하면 텐서보드도 같이 (odm 습관)
+  # 새 런 디렉터리는 앱이 뜬 뒤(약 1 분)에 생긴다 -> 생기면 텐서보드를 한 번 더 열어 새 런을 붙인다
+  ( for i in $(seq 1 120); do ls -d "$LOGROOT"/*_pv_"$ver" >/dev/null 2>&1 && break; sleep 2; done
+    "$0" tb >/dev/null 2>&1 ) </dev/null >/dev/null 2>&1 &
+  echo "  (새 런 폴더가 생기면 텐서보드를 자동으로 다시 엽니다)"
   ;;
 
 watch)

@@ -244,3 +244,17 @@ def imu_specific_force_g(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = S
     a_w = asset.data.body_com_lin_acc_w[:, 0, :].clone()
     a_w[:, 2] += 9.81
     return quat_apply_inverse(asset.data.root_quat_w, a_w) / 9.81
+
+
+def stand_still_exp(env: "ManagerBasedRLEnv", command_name: str, std: float = 0.05,
+                    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """정지 명령(vx = wz = 0)일 때 제자리 유지. 몸체 COM 수평속도 기준, 문은 명령이 0 에 가까울 때만 열린다.
+
+    r3 측정(7099): 정지 명령인데 2.5 s 에 수동 평지 10 cm, 자동 4.4 cm 밀렸다. 추종 보상 exp(-v^2/0.25^2) 는
+    v = 0.04 m/s 에서 0.97 이라 거의 벌하지 않는다. std 0.05 면 같은 속도에서 0.53.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    cmd = env.command_manager.get_command(command_name)
+    gate = ((cmd[:, 0].abs() < 0.02) & (cmd[:, 1].abs() < 0.05)).float()
+    v = asset.data.root_com_lin_vel_b[:, :2]
+    return gate * torch.exp(-torch.sum(torch.square(v), dim=1) / std**2)

@@ -438,6 +438,9 @@ class RoughRewardsCfg(RewardsCfg):
     ride = RewTerm(func=custom_rewards.base_vertical_acc_exp, weight=1.0, params={"std": 1.0})
     # 다리 권한 0.12 m 에 맞춘 다리 부드러움 (실제 이동량 기준 예전과 같게, 0.12/0.03 = 4)
     leg_rate = RewTerm(func=custom_rewards.leg_action_rate_phys, weight=-0.1, params={"scale_ratio": 4.0})
+    # 정지 명령일 때 제자리 유지 (r3 에서 정지 중 밀림 수동 10 cm / 자동 4.4 cm)
+    stand_still = RewTerm(func=custom_rewards.stand_still_exp, weight=1.0,
+                          params={"command_name": "base_velocity", "std": 0.05})
     # 자동 모드: 다리를 행정 양끝 10 mm 안에 붙이지 않기 (요철 흡수 여유)
     stroke_margin = RewTerm(func=custom_rewards.leg_stroke_margin, weight=-1.0,
                             params={"command_name": "base_velocity", "margin": 0.010,

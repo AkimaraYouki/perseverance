@@ -8,8 +8,8 @@
 
 지형 종류 (행 = 난이도 0 -> 1, 열 = 종류):
   flat        평지 — 평지 성능을 잊지 않게, 수동 높이 모드는 여기서만
-  gravel      자갈길: 10 cm 격자 무작위 높이 ±(0.4 -> 2.0) cm, 평활 없음
-  rugged      험지: 2 m 기복(0 -> 6 cm) + 40 cm 굵은 요철 ±(0.5 -> 3) cm + 10 cm 자갈 ±(0.2 -> 1.2) cm
+  gravel      자갈길: 10 cm 격자 무작위 높이 ±(1.0 -> 3.0) cm, 평활 없음 (사용자 목표 1 -> 3 cm)
+  rugged      험지: 2 m 기복(0 -> 6 cm) + 40 cm 굵은 요철 ±(0.5 -> 3) cm + 10 cm 자갈 ±(0.5 -> 1.5) cm
   rough       무작위 요철. 25 cm 격자에서 높이 ±(0.5 -> 3.5) cm
   wave_long   파장 2 m, x·y 성분 각각 ±(0 -> 5) cm (겹치면 피크-피크 20 cm), 경사 최대 9 deg
   wave_short  파장 1 m, 성분 ±(0 -> 3) cm, 경사 최대 10.7 deg
@@ -100,7 +100,7 @@ class RuggedTerrainCfg(HfTerrainBaseCfg):
     num_waves: int = 4
     coarse_amp: tuple[float, float] = (0.005, 0.030)  # 40 cm 격자 굵은 요철 ±
     coarse_scale: float = 0.4
-    fine_amp: tuple[float, float] = (0.002, 0.012)    # 10 cm 격자 자갈 ±
+    fine_amp: tuple[float, float] = (0.005, 0.015)    # 10 cm 격자 자갈 ± (2026-09-25 0.2~1.2 -> 0.5~1.5 cm)
     fine_scale: float = 0.1
     noise_step: float = 0.002
 
@@ -121,8 +121,9 @@ ROUGH_TERRAINS_CFG = TerrainGeneratorCfg(
     sub_terrains={
         # 평지: 수동 높이 모드는 평지에서만 학습한다 (사용자: "수동은 평지용")
         "flat": MeshPlaneTerrainCfg(proportion=0.15),
-        # 자갈길: 10 cm 격자 무작위 높이, 평활 없음 ±(0.4 -> 2.0) cm. 바퀴 R 60 이 굴러 넘는 크기
-        "gravel": RoughScaledTerrainCfg(proportion=0.15, noise_amp=(0.004, 0.020), noise_step=0.002,
+        # 자갈길: 10 cm 격자 무작위 높이, 평활 없음. 2026-09-25 사용자: "요철이 너무 낮다, 1 cm -> 3 cm 까지 목표"
+        # ±(0.4 -> 2.0) cm 에서 ±(1.0 -> 3.0) cm 로.
+        "gravel": RoughScaledTerrainCfg(proportion=0.15, noise_amp=(0.010, 0.030), noise_step=0.002,
                                         downsampled_scale=0.1, **_HF),
         # 험지: 2 m 기복 + 40 cm 굵은 요철 + 10 cm 자갈을 겹침
         "rugged": RuggedTerrainCfg(proportion=0.15, **_HF),
