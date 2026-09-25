@@ -35,10 +35,19 @@ ap.add_argument("--wz", type=float, default=0.0)
 ap.add_argument("--h", type=float, default=None, help="다리 관절값 [m] (고관절~바퀴중심). 기본=명령 기본값")
 ap.add_argument("--height_rate", type=float, default=0.10, help="스틱 끝까지 밀 때 높이 변화 [m/s]")
 ap.add_argument("--seconds", type=float, default=1e9)
+ap.add_argument("--record", type=str, default=None, metavar="DIR",
+                help="6방향 순환을 mp4 로 녹화 (오리 play_fixed_cmd --record 와 같은 기능). 헤드리스 가능. "
+                     "프레임을 시뮬 시간 기준으로 찍으므로 시뮬이 느려도 영상은 실제 속도로 재생된다. "
+                     "명령·실제속도·높이·토크를 영상에 글자로 박는다 (뷰포트 HUD 는 녹화에 안 담긴다)")
+ap.add_argument("--rec_fps", type=int, default=50)
 ap.add_argument("--cam", type=float, nargs=3, default=(1.0, -1.0, 0.5), help="초기 카메라 오프셋 (로봇 기준) [m]")
 ap.add_argument("--no-hud", dest="hud", action="store_false")
 AppLauncher.add_app_launcher_args(ap)
 args = ap.parse_args()
+if args.record:
+    args.enable_cameras = True      # 오프스크린 렌더 (헤드리스에서도 필요)
+    args.cycle = True
+    args.joystick = None
 app = AppLauncher(args).app
 
 import gymnasium as gym  # noqa: E402
@@ -47,6 +56,9 @@ import torch  # noqa: E402
 import wheeled_biped_isaaclab.tasks  # noqa: F401,E402
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
 from wheeled_biped_isaaclab import joystick_input as J  # noqa: E402
+import sys as _sys  # noqa: E402
+_sys.path.insert(0, os.path.expanduser("~/perseverance/sim/model"))
+import leg_map  # noqa: E402
 
 R_WHEEL = 0.060
 FRICTION_NM = 0.82          # 바퀴 하나 마찰 한계 추정 (HUD 에서 % 로 보여준다)
@@ -63,7 +75,8 @@ cfg.viewer.asset_name = "robot"
 cfg.viewer.env_index = 0
 cfg.viewer.eye = tuple(args.cam)
 cfg.viewer.lookat = (0.0, 0.0, 0.1)
-env = gym.make(args.task, cfg=cfg).unwrapped
+cfg.viewer.resolution = (1280, 720)
+env = gym.make(args.task, cfg=cfg, render_mode="rgb_array" if args.record else None).unwrapped
 dev = env.device
 cmd = env.command_manager.get_term("base_velocity")
 rng = cmd.cfg.ranges
@@ -71,6 +84,28 @@ cmd.pin(True)
 policy = torch.jit.load(args.policy, map_location=dev).eval()
 _r = env.scene["robot"]
 WHEEL_IDS = _r.find_joints("L_joint_W|R_joint_W" if args.cad else ".*_wheel_joint", preserve_order=True)[0]
+LEG_IDS = _r.find_joints("L_joint_M|R_joint_M" if args.cad else ".*_leg", preserve_order=True)[0]
+# 부호 통일: 고관절 + = 다리 펴는 방향, 바퀴 + = 전진 방향
+if args.cad:
+    from wheeled_biped_isaaclab.tasks.balance import cad as _cad
+    HIP_SIGN = torch.tensor([_cad.M_SIGN["L"], _cad.M_SIGN["R"]], device=dev)
+    WHEEL_SIGN_T = torch.tensor(_cad.WHEEL_SIGN, device=dev)
+else:
+    HIP_SIGN = torch.tensor([-1.0, -1.0], device=dev)     # 직선관절 축이 아래(-z): + 힘 = 다리 펴기 -> 부호는 아래서 맞춘다
+    WHEEL_SIGN_T = torch.tensor([1.0, 1.0], device=dev)
+
+
+def hip_wheel_torque():
+    """(고관절 L, R [Nm], 바퀴 L, R [Nm]). 단순화 모델은 직선관절 힘[N] x dh/dtheta 로 고관절 토크 환산."""
+    d = _r.data
+    wt = d.applied_torque[0, WHEEL_IDS] * WHEEL_SIGN_T
+    if args.cad:
+        ht = d.applied_torque[0, LEG_IDS] * HIP_SIGN
+    else:
+        f = d.applied_torque[0, LEG_IDS]                  # 직선관절 힘 [N], 관절축 -z (다리 펴는 쪽 +)
+        th = torch.tensor([leg_map.theta_of_h(float(q) + R_WHEEL) for q in d.joint_pos[0, LEG_IDS]], device=dev)
+        ht = f * torch.tensor([leg_map.dh_dtheta(float(t)) for t in th], device=dev)
+    return ht, wt
 h_lo, h_hi = rng.height
 h0 = args.h if args.h is not None else cmd.cfg.default_height
 
@@ -137,9 +172,18 @@ def push(key, val):
     del h[0]
 
 
+rtf_mark = (0.0, None)       # (sim_t, wall_t) — 실시간 대비 속도 계산용
+rtf = float("nan")
 chat_win = []               # 바퀴 토크 변화 부호 — 오리의 CHATTER 와 같은 정의 (50 % = 백색잡음)
 prev_tau = None
 falls = 0
+
+def mode_en_of(lab):
+    return {"패드": "PAD", "비상정지": "E-STOP", "패드 끊김→정지": "PAD LOST -> STOP", "고정": "FIXED",
+            "정지": "STOP", "전진": "FORWARD", "후진": "BACKWARD", "좌회전": "TURN LEFT", "우회전": "TURN RIGHT",
+            "올라가기": "RAISE", "내려가기": "LOWER", "고속전진": "FAST FWD", "좌코너": "CORNER LEFT",
+            "복귀": "RETURN"}.get(lab, lab)
+
 
 pad = None
 if args.joystick:
@@ -152,11 +196,26 @@ if args.joystick:
     print(f"[패드] {args.joystick} 배치: {pad.layout}", flush=True)
 
 h_mid = 0.5 * (h_lo + h_hi)
-CYCLE = [  # (이름, vx, wz, h)
-    ("정지", 0.0, 0.0, h_mid), ("전진", 0.3, 0.0, h_mid), ("후진", -0.3, 0.0, h_mid),
-    ("좌회전", 0.0, 0.8, h_mid), ("우회전", 0.0, -0.8, h_mid),
-    ("올라가기", 0.0, 0.0, h_hi), ("내려가기", 0.0, 0.0, h_lo), ("복귀", 0.0, 0.0, h_mid),
+CYCLE = [  # (이름, vx, wz, h) — 이 로봇의 6방향(전후·좌우회전·상하) + 고속
+    ("정지", 0.0, 0.0, h_mid), ("전진", 0.5, 0.0, h_mid), ("후진", -0.5, 0.0, h_mid),
+    ("좌회전", 0.0, 1.5, h_mid), ("우회전", 0.0, -1.5, h_mid),
+    ("올라가기", 0.0, 0.0, h_hi), ("내려가기", 0.0, 0.0, h_lo),
+    ("고속전진", 0.8, 0.0, h_mid), ("좌코너", 0.6, 1.5, h_mid), ("복귀", 0.0, 0.0, h_mid),
 ]
+
+rec = None
+if args.record:
+    import datetime
+    import imageio.v2 as imageio
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFont
+    os.makedirs(args.record, exist_ok=True)
+    rec_path = os.path.join(args.record, f"cycle_{'cad' if args.cad else 'simple'}_{datetime.datetime.now():%Y%m%d_%H%M%S}.mp4")
+    rec = imageio.get_writer(rec_path, fps=args.rec_fps, codec="libx264", quality=8, macro_block_size=8)
+    rec_every = max(1, round(1.0 / (env.step_dt * args.rec_fps)))
+    rec_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 22)
+    args.seconds = len(CYCLE) * args.hold
+    print(f"[녹화] {rec_path}  {args.seconds:.0f} s (시뮬 시간), {args.rec_fps} fps, {rec_every} 스텝마다 1 프레임", flush=True)
 
 obs, _ = env.reset()
 h_t = h0
@@ -204,6 +263,13 @@ with torch.inference_mode():
         r = env.scene["robot"]
         if bool(term[0]):
             falls += 1
+        # 실시간 대비 속도: 최근 구간의 (흐른 시뮬 시간) / (흐른 실제 시간)
+        _now = time.time()
+        if rtf_mark[1] is None:
+            rtf_mark = (k * dt, _now)
+        elif _now - rtf_mark[1] >= 1.0:
+            rtf = (k * dt - rtf_mark[0]) / (_now - rtf_mark[1])
+            rtf_mark = (k * dt, _now)
         # --- HUD 지표 (env 0) ---
         g = r.data.projected_gravity_b[0]
         pitch_d = math.degrees(math.atan2(float(g[0]), -float(g[2])))
@@ -222,11 +288,25 @@ with torch.inference_mode():
             chat = float((S[1:] * S[:-1] < 0).float().mean())
         push("vx", v_now / 0.45); push("wz", w_now / 1.0); push("h", (q_now - float(cmd.command[0, 2])) / 0.03)
         push("pitch", pitch_d / 20.0); push("chat", (chat - 0.5) * 2.0)
+        if rec is not None and k % rec_every == 0:
+            _h, _w = hip_wheel_torque()
+            img = Image.fromarray(np.asarray(env.render())[..., :3])
+            dr = ImageDraw.Draw(img)
+            lines = [f"{mode_en_of(label):10s}  t {sim_t:5.1f} s   {'CAD 4-bar' if args.cad else 'simplified'}",
+                     f"CMD  vx {vx:+.2f}  wz {wz:+.2f}  h {(h_t+R_WHEEL)*1000:5.1f} mm",
+                     f"ACT  vx {v_now:+.2f}  wz {w_now:+.2f}  h {(q_now+R_WHEEL)*1000:5.1f} mm  ({abs(v_now)*3.6:.2f} km/h)",
+                     f"TILT pitch {pitch_d:+5.1f}  roll {roll_d:+5.1f} deg",
+                     f"HIP  Nm L {float(_h[0]):+5.2f} R {float(_h[1]):+5.2f}   WHEEL Nm L {float(_w[0]):+5.2f} R {float(_w[1]):+5.2f}",
+                     f"FALLS {falls}"]
+            dr.rectangle([8, 8, 8 + 760, 8 + 30 * len(lines) + 10], fill=(0, 0, 0))
+            for i, ln in enumerate(lines):
+                dr.text((18, 14 + 30 * i), ln, font=rec_font, fill=(255, 255, 255))
+            rec.append_data(np.asarray(img))
         if hud is not None and k % 5 == 0:
             tmax = float(tau.abs().max())
-            mode_en = {"패드": "PAD", "비상정지": "E-STOP", "패드 끊김→정지": "PAD LOST -> STOP", "고정": "FIXED",
-                       "정지": "STOP", "전진": "FORWARD", "후진": "BACKWARD", "좌회전": "TURN LEFT",
-                       "우회전": "TURN RIGHT", "올라가기": "RAISE", "내려가기": "LOWER", "복귀": "RETURN"}.get(label, label)
+            _h, _w = hip_wheel_torque()
+            ht = [float(x) for x in _h]; wt = [float(x) for x in _w]
+            mode_en = mode_en_of(label)
             trk_v = f"{100*v_now/vx:4.0f}%" if abs(vx) > 1e-3 else "  --"
             trk_w = f"{100*w_now/wz:4.0f}%" if abs(wz) > 1e-3 else "  --"
             hud.text = "\n".join([
@@ -239,8 +319,12 @@ with torch.inference_mode():
                 f"TILT      pitch {pitch_d:+6.2f} deg  roll {roll_d:+6.2f} deg",
                 f"GYRO      y {float(r.data.root_ang_vel_b[0,1]):+5.2f}  z {w_now:+5.2f} rad/s",
                 f"CHATTER   {chat*100:4.1f} %  (50% = noise)",
-                f"WHEEL TAU {tmax:4.2f} Nm  ({100*tmax/FRICTION_NM:3.0f}% of friction {FRICTION_NM})",
+                f"HIP   Nm  L {ht[0]:+5.2f}  R {ht[1]:+5.2f}   (rated 3, peak 9)",
+                f"WHEEL Nm  L {wt[0]:+5.2f}  R {wt[1]:+5.2f}   (friction {FRICTION_NM}, peak 7)",
                 f"FALLS     {falls}",
+                "",
+                (f"SIM SPEED {rtf:4.2f}x real-time" + (f"  ({1/rtf:.1f}x slower)" if rtf < 0.98 else "  (real-time)"))
+                if rtf == rtf else "SIM SPEED measuring...",
             ])
             for kk, pl in plots.items():
                 pl.set_data(*hist[kk])
@@ -253,11 +337,15 @@ with torch.inference_mode():
             pitch = torch.rad2deg(torch.asin(g[0].clamp(-1, 1))).item()
             print(f"[{label:6s}] 명령 vx {vx:+.2f} wz {wz:+.2f} h {(h_t+R_WHEEL)*1000:5.1f}mm | "
                   f"실제 vx {v:+.2f} wz {w:+.2f} h {(q+R_WHEEL)*1000:5.1f}mm pitch {pitch:+5.1f}°"
+                  + (f"  실시간 {rtf:.2f}x" if rtf == rtf else "")
                   + ("  [넘어짐→리셋]" if bool(term[0]) else ""), flush=True)
         k += 1
         # 실시간 맞추기 (시뮬이 더 빠르면 기다린다)
         lag = k * dt - (time.time() - t0)
-        if lag > 0:
+        if lag > 0 and rec is None:
             time.sleep(lag)
+if rec is not None:
+    rec.close()
+    print(f"[녹화] 저장 완료: {rec_path}", flush=True)
 env.close()
 app.close()

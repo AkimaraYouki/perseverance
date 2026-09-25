@@ -121,3 +121,31 @@ def roll_track_exp(env: "ManagerBasedRLEnv", std: float,
     asset: Articulation = env.scene[asset_cfg.name]
     err = asset.data.projected_gravity_b[:, 1] - roll_lean_target(env, asset_cfg)
     return torch.exp(-torch.square(err) / std**2)
+
+
+def spin_in_place_exp(env: "ManagerBasedRLEnv", command_name: str, asset_cfg: SceneEntityCfg,
+                      std: float = 0.5, vx_blend: tuple = (0.05, 0.15), wz_blend: tuple = (0.1, 0.3)) -> torch.Tensor:
+    """정지 명령에서 회전할 때 두 바퀴가 서로 반대로 같은 크기로 돌게 한다 (2026-09-25 사용자 요청).
+
+    두 바퀴 각속도 평균(+y 규약) = 차축 중점의 직진 성분. 0 이 아니면 한쪽 바퀴를 축으로 원을 그린다
+    (측정: 0.5 rad/s 제자리 회전에서 L -0.32 / R +1.35 rad/s, 6 s 에 중심 24 cm 이동).
+
+    **정지 명령 AND 회전 명령일 때만** 켜진다. 첫 판(L2 벌점, 정지면 항상)은 외란을 받아낼 때 필요한
+    양쪽 바퀴 같은 방향 회전까지 벌해서 정책이 넘어지는 쪽을 택했다 (완주율 0.005 로 붕괴).
+    그래서 켜지는 조건을 좁히고, 상한 있는 보상(0~1)으로 바꿨다 — 죽는 편이 이득이 되지 않는다.
+    asset_cfg 에 바퀴 관절 (좌, 우 순서) 을 준다.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    w = asset.data.joint_vel[:, asset_cfg.joint_ids]
+    if "L_joint_W" in asset.joint_names:          # CAD 폐루프 모델: 왼쪽 바퀴축이 -y
+        from .cad import WHEEL_SIGN
+        w = w * torch.tensor(WHEEL_SIGN, device=w.device)
+    common = w.mean(dim=1)
+    cmd = env.command_manager.get_command(command_name)
+
+    def smooth(x, lo, hi):
+        t = ((x - lo) / (hi - lo)).clamp(0.0, 1.0)
+        return t * t * (3.0 - 2.0 * t)
+
+    gate = (1.0 - smooth(cmd[:, 0].abs(), *vx_blend)) * smooth(cmd[:, 1].abs(), *wz_blend)
+    return gate * torch.exp(-torch.square(common) / std**2)

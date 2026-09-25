@@ -257,6 +257,11 @@ class RewardsCfg:
     wheel_effort = RewTerm(func=custom_rewards.wheel_effort_l2, weight=-0.1,
                            params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_wheel_joint"])})
     action_range = RewTerm(func=custom_rewards.action_out_of_range, weight=-0.5)
+    # 정지 명령 + 회전: 두 바퀴 반대로 같은 크기 (제자리 회전). 주행 중에는 꺼진다.
+    spin_in_place = RewTerm(func=custom_rewards.spin_in_place_exp, weight=1.0,
+                            params={"command_name": "base_velocity",
+                                    "asset_cfg": SceneEntityCfg("robot", joint_names=["l_wheel_joint", "r_wheel_joint"],
+                                                                preserve_order=True)})
     leg_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.002,
                       params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_leg"])})
     joint_limits = RewTerm(func=mdp.joint_pos_limits, weight=-1.0,
@@ -332,6 +337,7 @@ class WheeledBipedCADEnvCfg(WheeledBipedBalanceEnvCfg):
         rw = self.rewards
         rw.track_height.params["asset_cfg"] = SceneEntityCfg("robot", joint_names=cad.LEG_JOINTS)
         rw.wheel_effort.params["asset_cfg"] = SceneEntityCfg("robot", joint_names=cad.WHEEL_JOINTS)
+        rw.spin_in_place.params["asset_cfg"] = SceneEntityCfg("robot", joint_names=cad.WHEEL_JOINTS, preserve_order=True)
         rw.leg_vel.params["asset_cfg"] = SceneEntityCfg("robot", joint_names=cad.LEG_JOINTS)
         rw.joint_limits.params["asset_cfg"] = SceneEntityCfg("robot", joint_names=cad.LEG_JOINTS)
         # 관절 무작위 리셋은 폐루프를 깨뜨린다 (M 만 바꾸면 I, K 가 안 맞는다) -> CAD 영점에서 시작
