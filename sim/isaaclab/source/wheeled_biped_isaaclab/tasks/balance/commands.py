@@ -15,6 +15,12 @@
   목표(h_target)는 튀어도, 실제로 따라갈 기준(h_ref)은 max_height_rate 로만 움직인다.
   명령 텐서의 세 번째 값은 h_ref 다 — 정책이 보는 것도, 다리 액션의 기준도 이것이다.
   조이스틱에서는 스틱이 h_target 을 올리고 내리므로 실기와 같은 구조가 된다.
+
+높이 모드 (2026-09-25 사용자, with_mode=True 일 때만 — 명령이 4 개가 된다: [vx, wz, h_ref, m]):
+  m = 0  수동: 평균 높이 = 사용자 h_ref (촘촘히 추종). 좌우 수평·요철 흡수는 계속 한다.
+  m = 1  자동: 평균 높이도 정책이 외란·지형에 맞춰 정한다. h_ref 는 공칭값(auto_height)으로 가고
+               보상에서 느슨한 선호로만 쓴다 (rewards.gimbal_height_exp 의 std_auto).
+  with_mode=False(평지 과제 기본)면 예전과 똑같이 3 개 — 기존 정책/스크립트 호환.
 """
 
 from __future__ import annotations
@@ -38,7 +44,8 @@ class WheelLegCommand(CommandTerm):
         self.robot = env.scene[cfg.asset_name]
         self._cad = "L_joint_M" in self.robot.joint_names       # CAD 폐루프 모델이면 모터각 -> 다리 관절값
         self._leg_ids = None if self._cad else self.robot.find_joints(cfg.leg_joint_names)[0]
-        self._cmd = torch.zeros(self.num_envs, 3, device=self.device)      # vx, wz, h_ref
+        # vx, wz, h_ref (+ m: 0 수동 / 1 자동)
+        self._cmd = torch.zeros(self.num_envs, 4 if cfg.with_mode else 3, device=self.device)
         self.h_target = torch.full((self.num_envs,), cfg.default_height, device=self.device)
         self.pinned = False
         self.metrics["error_vx"] = torch.zeros(self.num_envs, device=self.device)
@@ -59,8 +66,16 @@ class WheelLegCommand(CommandTerm):
         """재추첨을 멈춘다. 이후 set() 으로만 명령이 바뀐다."""
         self.pinned = bool(on)
 
-    def set(self, vx=None, wz=None, h=None, env_ids=None):
+    def set(self, vx=None, wz=None, h=None, env_ids=None, mode=None):
+        """mode: 0 수동 / 1 자동 (with_mode 일 때). 자동이면 h 는 무시하고 공칭 높이로 간다."""
         ids = slice(None) if env_ids is None else env_ids
+        if mode is not None and self.cfg.with_mode:
+            self._cmd[ids, 3] = mode
+            if h is None:
+                h = torch.where(self._cmd[ids, 3] > 0.5, self.cfg.auto_height, self.h_target[ids])
+        if self.cfg.with_mode and h is not None:
+            h = torch.where(self._cmd[ids, 3] > 0.5, torch.full_like(self.h_target[ids], self.cfg.auto_height),
+                            torch.as_tensor(h, device=self.device, dtype=torch.float).expand_as(self.h_target[ids]))
         if vx is not None:
             self._cmd[ids, 0] = vx
         if wz is not None:
@@ -116,6 +131,10 @@ class WheelLegCommand(CommandTerm):
         zero = torch.rand(n, device=dev) < self.cfg.zero_vel_prob
         vx[zero] = 0.0
         wz[zero] = 0.0
+        if self.cfg.with_mode:
+            auto = torch.rand(n, device=dev) < self.cfg.auto_mode_prob
+            h[auto] = self.cfg.auto_height
+            self._cmd[env_ids, 3] = auto.float()
         self._cmd[env_ids, 0] = vx
         self._cmd[env_ids, 1] = wz
         self.h_target[env_ids] = h
@@ -146,6 +165,9 @@ class WheelLegCommandCfg(CommandTermCfg):
     fast_turn_prob: float = 0.0
     fast_turn_vx: tuple = (0.50, 0.85)     # |vx| [m/s]
     fast_turn_wz: tuple = (0.40, 1.00)     # |wz| [rad/s]
+    with_mode: bool = False                # True 면 명령 4 번째 = 높이 모드 (0 수동 / 1 자동)
+    auto_mode_prob: float = 0.0            # 재추첨 때 자동 모드 확률
+    auto_height: float = 0.1825            # 자동 모드 공칭 높이 (다리 관절값, 범위 중앙)
 
     @configclass
     class Ranges:

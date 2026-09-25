@@ -149,3 +149,51 @@ def spin_in_place_exp(env: "ManagerBasedRLEnv", command_name: str, asset_cfg: Sc
 
     gate = (1.0 - smooth(cmd[:, 0].abs(), *vx_blend)) * smooth(cmd[:, 1].abs(), *wz_blend)
     return gate * torch.exp(-torch.square(common) / std**2)
+
+
+# --- 거친 지형: 짐벌처럼 몸통 고정 (terrain.py) -----------------------------------------------------
+def gimbal_height_exp(env: "ManagerBasedRLEnv", command_name: str, std: float, sensor_cfg: SceneEntityCfg,
+                      asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), std_auto: float | None = None) -> torch.Tensor:
+    """몸통 높이를 **바퀴 밑이 아니라 몸통 아래 넓은 지면 평균** 기준으로 h_ref 에 맞춘다.
+
+        오차 = (바퀴 접지 높이 - 지면 평균) + (다리 평균 - h_ref)
+
+    바퀴가 턱 위(+2 cm)에 올라가면 다리를 2 cm 줄여야 오차 0 -> 몸통은 그 자리. 파인 곳이면 다리를 편다.
+    평지에서는 첫 항이 0 이라 기존 track_height(다리 평균 = h_ref)와 같다.
+    몸체 원점-고관절 간 기하 오프셋이 식에서 빠져서 보정 상수가 필요 없다.
+    """
+    from .terrain import ground_patch_mean, wheel_ground_mean
+
+    asset: Articulation = env.scene[asset_cfg.name]
+    h_ref = env.command_manager.get_command(command_name)[:, 2]
+    if "L_joint_M" in asset.joint_names:
+        from .cad import leg_state
+        hj = leg_state(asset)[0].mean(dim=1)
+    else:
+        hj = asset.data.joint_pos[:, asset.find_joints(".*_leg")[0]].mean(dim=1)
+    err = (wheel_ground_mean(asset) - ground_patch_mean(env, sensor_cfg)) + (hj - h_ref)
+    cmd = env.command_manager.get_command(command_name)
+    if std_auto is not None and cmd.shape[1] > 3:
+        # 자동 모드(m=1): 평균 높이는 정책이 정한다 -> 공칭 높이는 느슨한 선호로만
+        s = torch.where(cmd[:, 3] > 0.5, std_auto, std)
+    else:
+        s = std
+    return torch.exp(-torch.square(err) / s**2)
+
+
+def base_vz_world_l2(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """몸통(COM) 월드 수직속도. 요철을 넘을 때 몸이 튀는 것을 직접 벌한다."""
+    asset: Articulation = env.scene[asset_cfg.name]
+    return torch.square(asset.data.root_com_lin_vel_w[:, 2])
+
+
+def base_vertical_acc_exp(env: "ManagerBasedRLEnv", std: float,
+                          asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    """몸통 COM 수직가속도 (짐벌 지표, 승차감 ISO 2631 과 같은 축).
+
+    속도가 아니라 가속도라서 경사를 일정하게 오르내리거나 높이를 천천히 바꾸는 건 벌하지 않고,
+    요철에서 몸이 튀는 것만 잡는다. 두 모드 공통.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    az = asset.data.body_com_lin_acc_w[:, 0, 2]      # 0 = 루트(base_link)
+    return torch.exp(-torch.square(az) / std**2)

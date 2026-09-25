@@ -353,3 +353,83 @@ class WheeledBipedCADEnvCfg_PLAY(WheeledBipedCADEnvCfg):
         self.scene.env_spacing = 3.0
         self.observations.policy.enable_corruption = False
         self.events.push = None
+
+
+# ---------------------------------------------------------------------------
+# 거친 지형 + "짐벌처럼 몸통 고정" (terrain.py). CAD 모델, 정책 입출력은 그대로 (블라인드).
+# 지형 높이는 보상/종료 판정에만 쓴다.
+# ---------------------------------------------------------------------------
+from isaaclab.managers import CurriculumTermCfg as CurrTerm  # noqa: E402
+
+from . import terrain as rough  # noqa: E402
+
+
+@configclass
+class RoughSceneCfg(SceneCfg):
+    terrain = TerrainImporterCfg(
+        prim_path="/World/ground",
+        terrain_type="generator",
+        terrain_generator=rough.ROUGH_TERRAINS_CFG,
+        # 평지 정책에서 이어 받으므로 쉬운 3 단계(난이도 0~0.3)에서 출발
+        max_init_terrain_level=2,
+        collision_group=-1,
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="multiply", restitution_combine_mode="multiply",
+            static_friction=1.0, dynamic_friction=1.0),
+        debug_vis=False,
+    )
+    height_scanner = rough.HEIGHT_SCANNER_CFG
+
+
+@configclass
+class RoughRewardsCfg(RewardsCfg):
+    # 짐벌: 몸통 높이 = 넓은 지면 평균 + h_ref (바퀴 밑 요철은 다리가 흡수). 평지 track_height 를 대체한다.
+    # 수동 모드 std 2 cm (사용자 높이에 붙인다), 자동 모드 std 5 cm (공칭 = CAD 기본자세, 느슨한 선호).
+    gimbal_height = RewTerm(func=custom_rewards.gimbal_height_exp, weight=1.5,
+                            params={"command_name": "base_velocity", "std": 0.02, "std_auto": 0.05,
+                                    "sensor_cfg": SceneEntityCfg("height_scanner")})
+    # 짐벌 본체: 몸통 수직가속도. std 3 m/s^2 은 첫 추정 — rough_probe 의 az RMS 로 확인한다.
+    ride = RewTerm(func=custom_rewards.base_vertical_acc_exp, weight=1.0, params={"std": 3.0})
+    # (몸통 수직속도 L2 는 뺐다 — 경사를 일정하게 오를 때(v x 경사)와 자동 모드 높이 변경까지 벌한다.
+    #  평지의 lin_vel_z 도 끈다. 튀는 것은 아래 ride(수직가속도)가 잡는다.)
+
+
+@configclass
+class RoughCurriculumCfg:
+    terrain_levels = CurrTerm(func=rough.terrain_levels_survival)
+
+
+@configclass
+class WheeledBipedCADRoughEnvCfg(WheeledBipedCADEnvCfg):
+    scene: RoughSceneCfg = RoughSceneCfg(num_envs=4096, env_spacing=2.5)
+    rewards: RoughRewardsCfg = RoughRewardsCfg()
+    curriculum: RoughCurriculumCfg = RoughCurriculumCfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.rewards.track_height = None
+        self.rewards.lin_vel_z = None
+        self.terminations.too_low = DoneTerm(func=rough.base_below_ground,
+                                             params={"minimum_height": 0.12,
+                                                     "sensor_cfg": SceneEntityCfg("height_scanner")})
+        # 레이캐스트는 정책 주기(200 Hz)마다 한 번이면 된다
+        self.scene.height_scanner.update_period = self.decimation * self.sim.dt
+        # 높이 모드 (commands.py): 명령 = [vx, wz, h_ref, m]. 자동 공칭 = CAD 기본자세 (M = 0, 사용자 지정 IDLE)
+        c = self.commands.base_velocity
+        c.with_mode = True
+        c.auto_mode_prob = 0.5
+        c.auto_height = cad.H0_JOINT
+        # 다리 권한: 어떤 h_ref 에서든 최소·최대 양끝까지 (사용자). 0.12 m = 전체 행정 0.1225~0.2425.
+        # 예전 0.03 에서 이어받을 때는 add_mode_input.py 가 다리 출력을 1/4 로 환산한다.
+        self.actions.legs.leg_scale = 0.12
+
+
+@configclass
+class WheeledBipedCADRoughEnvCfg_PLAY(WheeledBipedCADRoughEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 16
+        self.observations.policy.enable_corruption = False
+        self.events.push = None
+        self.curriculum.terrain_levels = None
+        self.scene.terrain.max_init_terrain_level = None
