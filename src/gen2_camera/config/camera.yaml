@@ -1,0 +1,17 @@
+# gen2_camera — 저지연 설정. 값을 바꾸면 README 의 지연 측정으로 다시 확인할 것.
+/**:
+  ros__parameters:
+    source: "argus"        # argus = CSI (nvarguscamerasrc, ISP 거침) | v4l2 = USB 웹캠 (MJPEG) | test = videotestsrc
+    sensor_id: 0           # CSI 포트 번호. IMX219 가 CAM1 이면 1 일 수 있다 — `ls /dev/video*` 와 nvargus 로그로 확인
+    width: 640
+    height: 480
+    fps: 30
+    jpeg_quality: 80       # 80 이면 640x480 한 장 약 30~60 KB
+    flip_method: 0         # nvvidconv flip-method: 0 그대로, 2 상하좌우 180도 (거꾸로 달았을 때)
+    encoder: "nvjpeg"      # nvjpeg = nvjpegenc (NVMM) | cpu = jpegenc. 로봇 측정: nvjpeg CPU 21% vs 32%, 지연 3.8 vs 7.0 ms
+    stamp_source: "capture"  # capture = 촬영 시각 추정 (now - 파이프라인 버퍼 나이) | publish = 받은 시각
+    restart_delay_s: 2.0   # 파이프라인 오류/무프레임 뒤 재시작 대기
+    stall_timeout_s: 3.0   # 이 시간 동안 프레임이 없으면 재시작
+    frame_id: "camera_link"
+    topic: "camera/image_raw/compressed"
+    pipeline: ""           # 비어 있지 않으면 위 설정을 무시하고 이 파이프라인을 그대로 쓴다 (끝은 JPEG, appsink 는 자동으로 붙음)

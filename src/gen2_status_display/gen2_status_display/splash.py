@@ -6,7 +6,7 @@ from .render import W, H, _font, _FB, _MB
 F_TITLE = _font(_FB, 26)
 F_SUB = _font(_FB, 13)
 F_BY = _font(_MB, 12)
-TITLE = 'PERSEVERANCE'
+TITLE = 'C-WANG'
 DURATION_S = 3.6
 
 

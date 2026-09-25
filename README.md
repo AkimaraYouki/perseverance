@@ -22,7 +22,8 @@ gen2_status_display (Python, 1 Hz, /diagnostics only) ──SPI──> ST7789 2"
 | `gen2_msgs` | `GnssPvt`, `MotorState(Array)`, `MotorTestStatus`, `MotorTest.srv` |
 | `gen2_sensor_hub` | HostFrame v1 driver: CRC32, sync, seq-drop / ESP-reset detection, reconnect, iTOW de-dup, PM02 calibration, SoC + runtime estimate |
 | `gen2_hardware` | SocketCAN, CubeMars AK **servo-mode** codec (manual V1.0.15 / AK3.0 V3.2.0), MotorBus, MotorTester, monitor/test nodes, CLI |
-| `gen2_status_display` | B&W LCD "PERSEVERANCE": boot animation, then 4 sectors (1 PC · 2 sensors · 3 motors · 4 network & power). Errors blink 2 Hz (inverted), warnings 1 Hz, OK steady; only changed regions are sent; `rotate_180` option |
+| `gen2_status_display` | B&W LCD "C-WANG": boot animation, then 4 sectors (1 PC · 2 sensors · 3 motors · 4 network & power). Errors blink 2 Hz (inverted), warnings 1 Hz, OK steady; only changed regions are sent; `rotate_180` option |
+| `gen2_camera` | IMX219 → nvjpegenc → `/camera/image_raw/compressed` (Best Effort, depth 1), auto-restart, latency probe (desktop draft + robot measurements) |
 | `gen2_tools` | `hub_cli`, `motor_test_gui`, desktop shortcuts |
 | `gen2_bringup` | profiles, CycloneDDS config, systemd units, `gen2_bench_check.py` |
 
@@ -43,7 +44,8 @@ colcon test && colcon test-result --verbose     # unit tests (parser, codec, con
 |---|---|
 | `can0-up.service` | can0 1 Mbit/s, restart-ms 100 |
 | `lcd-pinmux.service` | 40-pin pinmux for the LCD (SPI1 + DC/RST/BL) |
-| `gen2-bench.service` | **bench profile** at boot: sensor hub + read-only motor monitor + LCD |
+| `chrony` | Jetson serves NTP to the LAN / phone hotspot (`system/chrony/`) for camera latency measurement |
+| `gen2-bench.service` | **bench profile** at boot: sensor hub + read-only motor monitor + LCD + camera |
 
 `journalctl -u gen2-bench -f` for logs. Motors are never commanded by anything that starts at boot.
 

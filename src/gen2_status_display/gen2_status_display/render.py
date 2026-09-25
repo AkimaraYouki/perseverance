@@ -1,6 +1,6 @@
 """Pure rendering of the 320x240 status screen (no ROS, no hardware) — testable offline.
 
-Layout (landscape):   header: PERSEVERANCE by suhopark [robot state]   HH:MM
+Layout (landscape):   header: C-WANG by suhopark [robot state]   HH:MM
   +-----------------+-----------------+
   | 1 PC            | 2 SENSORS       |
   +-----------------+-----------------+
@@ -24,7 +24,7 @@ WARN = (200, 200, 200)
 BAD = (255, 255, 254)       # distinct tuple so helpers can invert it
 ACCENT = (255, 255, 253)
 BAR_BG = (60, 60, 60)
-TITLE = 'PERSEVERANCE'
+TITLE = 'C-WANG'
 BYLINE = 'by suhopark'
 
 # Blink phases for the current render: errors blink fast (2 Hz), warnings slow (1 Hz).

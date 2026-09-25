@@ -24,8 +24,10 @@
         position_offset_rad: 0.0
         kt_nm_per_a: 1.27           # output side = 0.127 x 10; cross-check rated 2.5/2.1=1.19,
                                     # peak 7/5=1.4. verified.kt after a torque-arm measurement.
-        current_limit_a: 2.0        # below rated 2.1 A (peak 5 A); bring-up value
-        velocity_limit_rad_s: 10.0  # no-load 180 rpm = 18.8 rad/s
+        # Limits = the motor's own physical capability (user decision 2026-09-25: no artificial
+        # software cap on output, so the robot can reject disturbances). Not lower than the motor can do.
+        current_limit_a: 5.0        # datasheet peak current 5 A (peak 7 N·m); rated 2.1 A continuous
+        velocity_limit_rad_s: 20.0  # no-load 180 rpm = 18.85 rad/s (~4 km/h with r = 0.060 m) + margin
         joint_min_rad: -1.0e9       # wheel: continuous
         joint_max_rad: 1.0e9
         max_temperature_c: 80.0
