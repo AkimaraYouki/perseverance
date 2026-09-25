@@ -139,10 +139,11 @@ Accuracy depends on the PM02 current calibration.
 - Feedback upload is 50 Hz (`send_can_status_rate_hz`); balance control needs 500–1000 Hz
   uploads (AK 3.0: up to 2000 Hz) — change in CubeMars tool before step 12.
 - IMX219 on CAM1 works after reseating the ribbon cable (an earlier boot failed with I2C -121).
-- DDS (CycloneDDS 0.10): `gen2_dds.sh` writes `~/.ros/gen2_cyclonedds.xml` at start-up —
-  **Wi-Fi mode** (wlP1p1s0 only, multicast for discovery only, peers from
-  `src/gen2_bringup/config/dds_peers.txt`) when Wi-Fi has an IPv4 address, else **local mode** (lo).
-  A loopback entry next to Wi-Fi made lo the primary interface and broke Wi-Fi; and Cyclone does not
-  fail over when the Wi-Fi address disappears (tested with a dummy interface). The NetworkManager hook
-  `system/networkmanager/90-gen2-dds` restarts gen2-bench when the Wi-Fi address appears/changes/goes.
+- DDS (CycloneDDS 0.10): `gen2_dds.sh` writes `~/.ros/gen2_cyclonedds.xml` at start-up from the
+  interfaces that have IPv4: **wired** `enP8p1s0` (campus LAN, priority 20, multicast off → peers only,
+  so other ROS users on the LAN neither see nor command the robot), **Wi-Fi** `wlP1p1s0` (priority 10),
+  else **local** (lo only). Peers: `src/gen2_bringup/config/dds_peers.txt` (+ own wired IP). A loopback
+  entry next to a real interface became Cyclone's primary and broke off-board traffic; Cyclone does not
+  fail over when an address disappears (tested) → the NetworkManager hook
+  `system/networkmanager/90-gen2-dds` restarts gen2-bench when a wired/Wi-Fi address changes.
   New terminals get the same config via `~/.bashrc`.
