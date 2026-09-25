@@ -17,7 +17,8 @@ _keys = {(r["terrain"], r["level"], r["mode"]) for r in A}
 B = [r for r in B if (r["terrain"], r["level"], r["mode"]) in _keys]      # 같은 조건끼리만 비교
 MODES = [m for m in ("manual", "auto") if any(r["mode"] == m for r in A)]
 TER = list(dict.fromkeys(r["terrain"] for r in A))
-KEYS = [("falls", "낙상", "{:.0f}"), ("isolation", "격리율", "{:.2f}"), ("az_rms", "수직가속 RMS [m/s²]", "{:.2f}"),
+KEYS = [("falls", "낙상", "{:.0f}"), ("acc_trans", "가속도 전달률 (짐벌)", "{:.2f}"), ("isolation", "격리율 (참고)", "{:.2f}"),
+        ("rollrate_rms", "roll rate RMS [°/s]", "{:.1f}"), ("az_rms", "수직가속 RMS [m/s²]", "{:.2f}"),
         ("roll_rms", "roll RMS [°]", "{:.2f}"), ("pitch_sd", "pitch σ [°]", "{:.2f}"),
         ("stop_drift_cm", "정지 중 밀림 [cm]", "{:.1f}"), ("vx", "실제 vx (0.5 명령)", "{:.3f}"),
         ("h_mean_mm", "주행 중 다리 h [mm]", "{:.0f}")]

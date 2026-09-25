@@ -27,8 +27,9 @@ ap.add_argument("--policy", required=True)
 ap.add_argument("--task", default="Isaac-WheeledBiped-Balance-Play-v0")
 ap.add_argument("--cad", action="store_true", help="CAD 4절링크 폐루프 모델 (Isaac-WheeledBiped-CAD-Play-v0)")
 ap.add_argument("--rough", action="store_true", help="거친 지형 + 높이 모드 (CAD-Rough-Play). --cad 포함")
-ap.add_argument("--terrain", default="wave_short",
-                choices=("flat", "rough", "wave_long", "wave_short", "slope_up", "slope_down", "bumps"))
+ap.add_argument("--terrain", default="gravel",
+                help="지형 종류 — terrain.py ROUGH_TERRAINS_CFG 의 sub_terrains 이름 "
+                     "(flat gravel rugged rough wave_long wave_short slope_up slope_down bumps). 없는 이름이면 목록을 보여 주고 끝낸다")
 ap.add_argument("--level", type=int, default=6, help="지형 난이도 행 0~9")
 ap.add_argument("--mode", choices=("manual", "auto"), default="manual", help="시작 높이 모드 (--rough)")
 ap.add_argument("--terrain_seed", type=int, default=7, help="지형 seed (학습은 42 — 기본은 안 본 지형)")
@@ -127,6 +128,8 @@ if args.rough:
     import numpy as _np
     _gen = cfg.scene.terrain.terrain_generator
     _names = list(_gen.sub_terrains.keys())
+    if args.terrain not in _names:
+        raise SystemExit(f"[지형] '{args.terrain}' 없음. 가능: {' '.join(_names)}")
     _prop = _np.array([_gen.sub_terrains[n].proportion for n in _names]); _prop /= _prop.sum()
     _col = [int(_np.min(_np.where(c / _gen.num_cols + 0.001 < _np.cumsum(_prop))[0])) for c in range(_gen.num_cols)]
     _terr = env.scene.terrain

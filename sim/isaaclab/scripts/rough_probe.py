@@ -11,6 +11,8 @@
     몸통σ   몸체 COM 높이  - 같은 지면 평균                  의 표준편차 = 몸통이 따라 움직인 양
     격리율  몸통σ / 바닥σ.  1 = 몸통이 바퀴 따라 그대로 오르내림,  0 = 완벽한 짐벌
     az      몸통 COM 수직가속도 RMS [m/s^2] (승차감),  vz  수직속도 RMS
+    전달률  몸통 수직가속 RMS / 바퀴축 수직가속 RMS — **짐벌 주 지표** (사용자: 고정이 아니라 부드럽게 오르내리기).
+            1 이면 바퀴 충격이 그대로 몸통에, 작을수록 다리가 걸러 준다. 격리율(변위)은 참고용.
     roll    좌우 기울기 RMS (목표 0),  pitchσ  앞뒤 흔들림,  h평균  주행 중 다리 평균 (자동 모드가 고른 높이)
 
 높이 모드 (commands.py): 수동 = h 명령(--h) 추종, 자동 = 정책이 높이를 정함 (공칭 CAD 기본자세).
@@ -98,6 +100,7 @@ def load_policy(path):
 
 
 policy = load_policy(args.policy)
+wheel_ids = robot.find_bodies(["l_wheel", "r_wheel"], preserve_order=True)[0]
 
 terr = env.scene.terrain
 case_i = torch.arange(N, device=dev) // args.repeats
@@ -113,7 +116,7 @@ PLAN = [(0.0, 0.0, 0.0), (3.0, args.vx, 0.0), (9.0, 0.0, 0.0), (12.0, 0.0, args.
 T_END = 15.0
 obs, _ = env.reset()
 alive = torch.ones(N, dtype=torch.bool, device=dev)
-keys = ("t", "body", "ground", "vz", "az", "roll", "pitch", "vx", "xy", "hleg", "alive")
+keys = ("t", "body", "ground", "vz", "az", "azw", "rollrate", "roll", "pitch", "vx", "xy", "hleg", "alive")
 rec = {k: [] for k in keys}
 hv = torch.full((N,), args.h, device=dev)
 with torch.inference_mode():
@@ -134,6 +137,8 @@ with torch.inference_mode():
         rec["ground"].append(wheel_ground_mean(robot) - T0)
         rec["vz"].append(d.root_com_lin_vel_w[:, 2].clone())
         rec["az"].append(d.body_com_lin_acc_w[:, 0, 2].clone())
+        rec["azw"].append(d.body_com_lin_acc_w[:, wheel_ids, 2].mean(dim=1))   # 두 바퀴축 수직가속 평균
+        rec["rollrate"].append(d.root_ang_vel_b[:, 0].clone())
         rec["hleg"].append(cmd._leg_h().clone())
         rec["roll"].append(torch.rad2deg(torch.asin(g[:, 1].clamp(-1, 1))))
         rec["pitch"].append(torch.rad2deg(torch.asin(g[:, 0].clamp(-1, 1))))
@@ -161,6 +166,10 @@ for c, (name, lv, md) in enumerate(CASES):
                  isolation=body_sd / ground_sd if ground_sd > 0.003 else None,
                  vz_rms=float(np.sqrt((seg("vz") ** 2).mean())),
                  az_rms=float(np.sqrt((seg("az") ** 2).mean())),
+                 azw_rms=float(np.sqrt((seg("azw") ** 2).mean())),
+                 # 가속도 전달률: 바퀴축이 받은 수직 충격 중 몸통까지 온 비율 (사용자 정의 "짐벌 = 부드럽게")
+                 acc_trans=float(np.sqrt((seg("az") ** 2).mean()) / max(np.sqrt((seg("azw") ** 2).mean()), 1e-6)),
+                 rollrate_rms=float(np.degrees(np.sqrt((seg("rollrate") ** 2).mean()))),
                  h_mean_mm=float(seg("hleg").mean() * 1e3),
                  roll_rms=float(np.sqrt((seg("roll") ** 2).mean())),
                  pitch_sd=float(seg("pitch").std(axis=0).mean()),
@@ -181,7 +190,7 @@ def f(x, fmt):
 
 for md in args.modes:
     print(f"[{'수동' if md == 'manual' else '자동'} 모드]")
-    print(f"{'지형':12s}{'행':>3}{'낙상':>6}{'실제vx':>8}{'바닥σ':>9}{'몸통σ':>9}{'격리율':>8}{'azRMS':>8}{'vzRMS':>8}"
+    print(f"{'지형':12s}{'행':>3}{'낙상':>6}{'실제vx':>8}{'바닥σ':>9}{'몸통σ':>9}{'격리율':>8}{'전달률':>8}{'azRMS':>8}{'vzRMS':>8}"
           f"{'rollRMS°':>10}{'pitchσ°':>9}{'h평균':>8}{'정지중이동':>11}")
     print("-" * 124)
     for r in out_rows:
@@ -189,13 +198,14 @@ for md in args.modes:
             continue
         print(f"{r['terrain']:12s}{r['level']:>3}{r['falls']:>4}/{r['n']}"
               f"{f(r.get('vx'), '8.3f')}{f(r.get('ground_sd_mm'), '7.1f')}mm{f(r.get('body_sd_mm'), '7.1f')}mm"
-              f"{f(r.get('isolation'), '8.2f')}{f(r.get('az_rms'), '8.2f')}{f(r.get('vz_rms'), '8.3f')}"
+              f"{f(r.get('isolation'), '8.2f')}{f(r.get('acc_trans'), '8.2f')}{f(r.get('az_rms'), '8.2f')}{f(r.get('vz_rms'), '8.3f')}"
               f"{f(r.get('roll_rms'), '10.2f')}{f(r.get('pitch_sd'), '9.2f')}{f(r.get('h_mean_mm'), '6.0f')}mm"
               f"{f(r.get('stop_drift_cm'), '9.1f')}cm")
     rs = [r for r in out_rows if r["mode"] == md]
     iso = [r["isolation"] for r in rs if r.get("isolation") is not None]
     print("-" * 124)
     print(f"  낙상 {sum(r['falls'] for r in rs)}/{len(rs) * args.repeats} | 격리율 평균 {np.mean(iso):.2f} (요철 조건 {len(iso)}개)"
+          f" | 가속도 전달률 평균 {np.nanmean([r.get('acc_trans', np.nan) for r in rs]):.2f}"
           f" | az RMS 평균 {np.nanmean([r.get('az_rms', np.nan) for r in rs]):.2f} m/s^2"
           f" | roll RMS 평균 {np.nanmean([r.get('roll_rms', np.nan) for r in rs]):.2f}°"
           f" | 정지중 이동 평균 {np.nanmean([r.get('stop_drift_cm', np.nan) for r in rs]):.1f} cm\n")
