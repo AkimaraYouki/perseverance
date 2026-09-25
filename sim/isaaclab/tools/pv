@@ -1,0 +1,307 @@
+#!/bin/bash
+# PERSEVERANCE (휠-레그) 원스톱 — odm 과 같은 문법으로 학습 / 재생 / 측정 / 텐서보드.
+#
+#   pv train r4 1500 4096 --from r3      r3 최신 체크포인트에서 새 버전 r4 로 이어 학습
+#   pv train r3 800 4096 --resume        r3 자기 최신 체크포인트에서 이어서
+#   pv watch r3 / pv tb / pv play r3 --joystick / pv measure r3 6100 / pv onnx r3
+#
+# 이름이 pv 인 이유: wb 는 이 PC 에서 wandb 명령이다 (~/.local/bin/wb).
+set -euo pipefail
+
+PROJ="$HOME/wheeled_biped_isaaclab"
+IL="$HOME/Desktop/IsaacLab/isaaclab.sh"
+LOGROOT="$PROJ/logs/rsl_rl/wheeled_biped_balance"
+RUNLOG="$HOME/pv_logs"; mkdir -p "$RUNLOG"
+OUT="$HOME/pv_out"; mkdir -p "$OUT"
+TB_PORT="${PV_TB_PORT:-6007}"          # odm tb 가 6006 을 쓰므로 겹치지 않게
+
+# 버전 -> gym 태스크. 관측 구조가 다르면 체크포인트가 안 맞는다.
+#   flat  단순화(직선관절) 모델, 평지, 관측 19          (옛 런)
+#   cad   CAD 4절링크 폐루프, 평지, 관측 19               (옛 런)
+#   r2    거친 지형 + 높이모드, 관측 20 (v2)  — 지금 코드(v3, 25)로는 재생 불가, 텐서보드·목록용
+#   r3~   거친 지형 + 높이모드 + 자갈길·험지, 관측 25 (v3), 비대칭 크리틱
+task_of() {
+  case "$1" in
+    flat) echo "Isaac-WheeledBiped-Balance-v0" ;;
+    cad)  echo "Isaac-WheeledBiped-CAD-v0" ;;
+    r2)   echo "LEGACY" ;;
+    r[3-9]*|r[1-9][0-9]*) echo "Isaac-WheeledBiped-CAD-Rough-v0" ;;
+    *)    echo "" ;;
+  esac
+}
+# 버전 -> 런 디렉터리. 옛 런은 이름 규칙이 없어서 직접 박는다. r4 부터는 pv_<ver>.
+latest_run() {
+  case "$1" in
+    flat) echo "$LOGROOT/2026-09-25_04-23-43" ;;
+    cad)  echo "$LOGROOT/2026-09-25_15-51-14" ;;
+    r2)   ls -dt "$LOGROOT"/*_rough_modes3 2>/dev/null | head -1 || true ;;
+    r3)   ls -dt "$LOGROOT"/*_rough_v3 "$LOGROOT"/*_pv_r3 2>/dev/null | head -1 || true ;;
+    *)    ls -dt "$LOGROOT"/*_pv_"$1" 2>/dev/null | head -1 || true ;;
+  esac
+}
+# 번호 순으로 가장 큰 체크포인트 (ls -t 는 같은 초에 저장된 것끼리 순서가 틀릴 수 있다)
+latest_ckpt() {
+  local r; r="$(latest_run "$1")"
+  [ -n "$r" ] && [ -d "$r" ] || return 0
+  ls "$r"/model_*.pt 2>/dev/null | sort -V | tail -1 || true
+}
+ckpt_of() {   # ckpt_of <ver> [iter]
+  if [ -n "${2:-}" ]; then
+    local f; f="$(latest_run "$1")/model_$2.pt"
+    [ -f "$f" ] || { echo "체크포인트 없음: $f" >&2; exit 1; }
+    echo "$f"
+  else
+    local f; f="$(latest_ckpt "$1")"
+    [ -n "$f" ] || { echo "체크포인트 없음: $1" >&2; exit 1; }
+    echo "$f"
+  fi
+}
+
+# 네이티브 창을 띄울 X 디스플레이 (odm 과 같은 방식: gnome-shell 의 DISPLAY 를 따라간다)
+desktop_display() {
+  if [ -n "${PV_DISPLAY:-}" ]; then echo "$PV_DISPLAY"; return; fi
+  local p d
+  for p in $(pgrep -u "$USER" gnome-shell 2>/dev/null | head -3); do
+    d="$(tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | sed -n 's/^DISPLAY=//p' | head -1)"
+    [ -n "$d" ] && { echo "$d"; return; }
+  done
+  echo "${DISPLAY:-:0}"
+}
+host_ip() {
+  if [ -n "${PV_HOST_IP:-}" ]; then echo "$PV_HOST_IP"; return; fi
+  local ips
+  ips="$(ip -4 -o addr show scope global 2>/dev/null | awk '{split($4,a,"/"); print a[1]}')"
+  for ip in $ips; do case "$ip" in 192.168.137.*) echo "$ip"; return ;; esac; done
+  for ip in $ips; do case "$ip" in 100.*) ;; *) echo "$ip"; return ;; esac; done
+  echo "$ips" | awk '{print $1}'
+}
+
+# Isaac 이 떠 있는가 — 프로세스 이름이 python3 이고 명령줄에 _isaaclab_launch 가 있는 것만 (odm 과 같다).
+# 셸(bash) 명령줄에 글자가 들어 있어도 안 걸린다.
+isaac_pids() {
+  local p
+  for p in $(pgrep -x python3 2>/dev/null); do
+    tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q '_isaaclab_launch\.py' && echo "$p"
+  done
+  return 0
+}
+require_free_gpu() {
+  if [ -n "$(isaac_pids)" ]; then
+    echo "!! Isaac Sim 이 이미 떠 있습니다 (PID $(isaac_pids | tr '\n' ' ')). 두 개를 동시에 띄우지 않습니다." >&2
+    echo "   'pv stop' 으로 정리한 뒤 다시 실행하세요." >&2
+    exit 1
+  fi
+}
+
+tb_start() {   # tb_start [all]
+  local sel="${1:-}"
+  if [ -f "$RUNLOG/tb.pid" ]; then kill -9 "$(cat "$RUNLOG/tb.pid")" 2>/dev/null || true; rm -f "$RUNLOG/tb.pid"; sleep 1; fi
+  local L=/tmp/pv_tb; rm -rf "$L"; mkdir -p "$L"
+  local d b n=0
+  for d in "$LOGROOT"/*; do
+    [ -d "$d" ] || continue
+    b="$(basename "$d")"
+    case "$b" in *_smoke|*_init|*_init2) continue ;; esac                  # 스모크·수술용 디렉터리 제외
+    if [ "$sel" != "all" ]; then
+      # 기본: 거친 지형 계열만. 평지 옛 런까지 겹치면 관측·보상이 달라 곡선을 오독한다.
+      case "$b" in *rough_modes*|*rough_v3|*_pv_*) ;; *) continue ;; esac
+    fi
+    ls "$d"/events.out.tfevents.* >/dev/null 2>&1 || continue
+    case "$b" in
+      *_rough_modes2) nm="r2a_${b%%_rough*}" ;;
+      *_rough_modes3) nm="r2" ;;
+      *_rough_modes)  nm="r2x_${b%%_rough*}" ;;
+      *_rough_v3)     nm="r3" ;;
+      *_pv_*)         nm="${b##*_pv_}" ;;
+      *)              nm="$b" ;;
+    esac
+    ln -sfn "$d" "$L/$nm"; n=$((n+1))
+  done
+  setsid nohup "$IL" -p -m tensorboard.main --logdir "$L" --bind_all --port "$TB_PORT" \
+    > "$RUNLOG/tb.log" 2>&1 < /dev/null &
+  echo $! > "$RUNLOG/tb.pid"
+  echo "텐서보드: http://$(host_ip):$TB_PORT   (또는 http://localhost:$TB_PORT)  런 ${n}개: $(ls "$L" | tr '\n' ' ')"
+}
+
+cmd="${1:-help}"; shift || true
+
+case "$cmd" in
+_task) task_of "${1:-}" ;;
+_ckpt) ckpt_of "${1:-}" "${2:-}" ;;
+
+train)
+  # pv train <ver> [iters] [envs] [--resume | --from <ver> [iter]] [추가인자...]
+  ver="${1:-}"; iters="${2:-1500}"; envs="${3:-4096}"; shift 3 2>/dev/null || shift $#
+  [ -n "$ver" ] || { echo "사용법: pv train <ver> [iters] [envs] [--resume | --from <ver> [iter]]" >&2; exit 1; }
+  task="$(task_of "$ver")"
+  [ -n "$task" ] && [ "$task" != LEGACY ] || { echo "학습할 수 없는 버전: $ver" >&2; exit 1; }
+  extra=()
+  if [ "${1:-}" = "--resume" ]; then
+    ck="$(ckpt_of "$ver")"; shift
+  elif [ "${1:-}" = "--from" ]; then
+    src="${2:-}"; [ -n "$src" ] || { echo "--from 뒤에 버전" >&2; exit 1; }
+    it=""; if [[ "${3:-}" =~ ^[0-9]+$ ]]; then it="$3"; shift; fi
+    ck="$(ckpt_of "$src" "$it")"; shift 2
+  else
+    ck=""
+  fi
+  if [ -n "$ck" ]; then
+    # 재개는 진짜 CLI 플래그로 넘긴다 (hydra 오버라이드는 cli_args 가 조용히 덮어쓴다 — odm 에서 겪음)
+    extra=(--resume --load_run "$(basename "$(dirname "$ck")")" --checkpoint "$(basename "$ck")")
+    echo "이어서: $(basename "$(dirname "$ck")")/$(basename "$ck")  -> $iters iter 더"
+  fi
+  require_free_gpu
+  cd "$PROJ"
+  WB_STAGE=2 WB_TASK="$task" setsid nohup ./scripts/train.sh --num_envs "$envs" --max_iterations "$iters" \
+    --headless --run_name "pv_$ver" "${extra[@]}" "$@" > "$RUNLOG/train_$ver.log" 2>&1 < /dev/null &
+  echo "학습 시작: $ver ($task, envs=$envs, iters=$iters)"
+  echo "로그: $RUNLOG/train_$ver.log     진행: pv watch $ver"
+  tb_start      # 학습을 시작하면 텐서보드도 같이 (odm 습관)
+  ;;
+
+watch)
+  ver="${1:-r3}"; L="$RUNLOG/train_$ver.log"
+  [ -e "$L" ] || { echo "로그 없음: $L" >&2; exit 1; }
+  g() { grep -a "$1" "$L" | tail -1 | sed 's/.*: //;s/\x1b\[[0-9;]*m//g' || true; }
+  it=$(grep -a "Learning iteration" "$L" | tail -1 | sed 's/.*iteration //;s/ .*//;s/\x1b\[[0-9;]*m//g' || true)
+  c=$(grep -acE "Traceback|illegal memory|RuntimeError" "$L" || true)
+  echo "$ver  iter $it | 20s 완주(env) $(g 'Episode_Termination/time_out') | 지형단계 $(g 'Curriculum/terrain_levels')" \
+       "| std $(g 'Mean action std') | 반복 $(g 'Iteration time') | ETA $(g 'ETA') | 크래시 $c"
+  ;;
+
+play)
+  # pv play <ver> [iter] [--joystick] [play_joy.py 인자...]
+  ver="${1:-r3}"; shift || true
+  it=""; if [[ "${1:-}" =~ ^[0-9]+$ ]]; then it="$1"; shift; fi
+  task="$(task_of "$ver")"; [ "$task" = LEGACY ] && { echo "$ver 는 옛 관측(v2) 이라 지금 코드로 재생할 수 없다" >&2; exit 1; }
+  [ -n "$task" ] || { echo "알 수 없는 버전 $ver" >&2; exit 1; }
+  ck="$(ckpt_of "$ver" "$it")"
+  args=()
+  for a in "$@"; do [ "$a" = "--joystick" ] && args+=(--joystick /dev/input/js0 --pad classic) || args+=("$a"); done
+  case "$ver" in
+    flat) base=() ;;
+    cad)  base=(--cad) ;;
+    *)    base=(--rough --terrain gravel --level 5 --mode auto) ;;   # 뒤에 준 인자가 덮어쓴다
+  esac
+  require_free_gpu
+  export DISPLAY="$(desktop_display)"
+  cd "$PROJ"
+  setsid nohup "$IL" -p scripts/_isaaclab_launch.py scripts/play_joy.py --policy "$ck" \
+    "${base[@]}" "${args[@]}" > "$RUNLOG/play_$ver.log" 2>&1 < /dev/null &
+  echo "재생 시작: $ver  $(basename "$ck")   (DISPLAY $DISPLAY, 부팅 1~2분)"
+  echo "  패드: 왼스틱 세로 전후 / 오른스틱 가로 회전 / X 자동·수동 높이 / RT·LT 높이 / A 정지 / B 높이 초기화"
+  echo "  지형 바꾸기: pv play $ver --terrain rugged --level 7   (flat gravel rugged rough wave_long wave_short slope_up slope_down bumps)"
+  ;;
+
+record)
+  # pv record <ver> [iter] [--terrain X --level N]   거친 지형 순환을 mp4 로 (헤드리스, 실제 속도로 재생됨)
+  ver="${1:-r3}"; shift || true
+  it=""; if [[ "${1:-}" =~ ^[0-9]+$ ]]; then it="$1"; shift; fi
+  task="$(task_of "$ver")"; [ -n "$task" ] && [ "$task" != LEGACY ] || { echo "재생할 수 없는 버전 $ver" >&2; exit 1; }
+  ck="$(ckpt_of "$ver" "$it")"
+  case "$ver" in flat) base=() ;; cad) base=(--cad) ;; *) base=(--rough --terrain gravel --level 5) ;; esac
+  require_free_gpu
+  dir="$OUT/video/$ver"; mkdir -p "$dir"
+  cd "$PROJ"
+  echo "녹화: $ver $(basename "$ck")"
+  "$IL" -p scripts/_isaaclab_launch.py scripts/play_joy.py --policy "$ck" "${base[@]}" "$@" \
+    --record "$dir" --rec_fps 50 --headless > "$dir/play.log" 2>&1
+  f="$(ls -t "$dir"/*.mp4 2>/dev/null | head -1)"
+  [ -n "$f" ] && echo "완료: $f ($(du -h "$f" | cut -f1))" || { echo "!! 녹화 실패 — $dir/play.log" >&2; tail -15 "$dir/play.log"; exit 1; }
+  ;;
+
+measure)
+  # pv measure <ver> [iter]   거친 지형: rough_probe (지형 종류 x 난이도 x 모드), 평지: measure6
+  ver="${1:-r3}"; it="${2:-}"
+  task="$(task_of "$ver")"; [ -n "$task" ] && [ "$task" != LEGACY ] || { echo "잴 수 없는 버전 $ver" >&2; exit 1; }
+  ck="$(ckpt_of "$ver" "$it")"; tag="${ver}_$(basename "$ck" .pt | sed 's/model_//')"
+  require_free_gpu
+  cd "$PROJ"
+  mkdir -p "$OUT/measure"
+  case "$ver" in
+    flat|cad)
+      pol="$OUT/policy/$tag"
+      env -u PYTHONPATH "$IL" -p scripts/export_policy.py "$ck" "$pol" 2>&1 | grep "내보냄" || true
+      "$IL" -p scripts/_isaaclab_launch.py scripts/measure6.py --policy "$pol/policy.pt" \
+        $([ "$ver" = cad ] && echo --cad) --out "$OUT/measure/measure6_$tag.json" 2>&1 \
+        | sed -n '/6방향 × 높이 측정/,/저장/p' ;;
+    *)
+      "$IL" -p scripts/_isaaclab_launch.py scripts/rough_probe.py --policy "$ck" \
+        --out "$OUT/measure/probe_$tag.json" 2>&1 | sed -n '/거친 지형 측정/,/저장/p' ;;
+  esac
+  ;;
+
+compare)
+  # pv compare r3:5600 r3:6400   (둘 다 pv measure 로 잰 뒤)
+  a="${1:-}"; b="${2:-}"
+  [ -n "$a" ] && [ -n "$b" ] || { echo "사용법: pv compare <ver>:<iter> <ver>:<iter>" >&2; exit 1; }
+  fa="$OUT/measure/probe_${a/:/_}.json"; fb="$OUT/measure/probe_${b/:/_}.json"
+  for f in "$fa" "$fb"; do [ -f "$f" ] || { echo "측정 없음: $f  (pv measure 먼저)" >&2; exit 1; }; done
+  python3 "$PROJ/scripts/probe_compare.py" "$fa" "$fb" --names "$a" "$b"
+  ;;
+
+tb) tb_start "${1:-}" ;;
+
+onnx)
+  # pv onnx <ver> [iter]  실기용 policy.pt + policy.onnx + policy_meta.json (Isaac 안 띄움, 학습 중에도 가능)
+  ver="${1:-r3}"; it="${2:-}"
+  ck="$(ckpt_of "$ver" "$it")"; tag="${ver}_$(basename "$ck" .pt | sed 's/model_//')"
+  cd "$PROJ"
+  env -u PYTHONPATH "$IL" -p scripts/export_policy.py "$ck" "$OUT/policy/$tag" 2>&1 | grep -vE "^cat:|Using python" || true
+  echo "위치: $OUT/policy/$tag"
+  ;;
+
+stop)
+  pids="$(isaac_pids)"
+  if [ -n "$pids" ]; then
+    for p in $pids; do pp="$(ps -o ppid= -p "$p" | tr -d ' ')"; kill -TERM "$p" "$pp" 2>/dev/null || true; done
+    for i in $(seq 1 15); do [ -z "$(isaac_pids)" ] && break; sleep 1; done
+    for p in $(isaac_pids); do kill -9 "$p" 2>/dev/null || true; done
+  fi
+  sleep 1
+  echo "정리 완료 (남은 Isaac: $(isaac_pids | wc -l))"
+  ;;
+
+list)
+  printf "%-4s %-38s %-12s %s\n" "버전" "런" "최신 ckpt" "크기"
+  for v in flat cad r2 r3 $(ls -d "$LOGROOT"/*_pv_* 2>/dev/null | sed 's/.*_pv_//' | sort -u | grep -v '^r3$' || true); do
+    d="$(latest_run "$v")"; [ -n "$d" ] && [ -d "$d" ] || continue
+    ck="$(latest_ckpt "$v")"
+    printf "%-4s %-38s %-12s %s\n" "$v" "$(basename "$d")" "$([ -n "$ck" ] && basename "$ck" || echo -)" "$(du -sh "$d" | cut -f1)"
+  done
+  ;;
+
+test)
+  cd "$PROJ"; fail=0
+  for t in tests/test_*.py; do
+    if out=$(env -u PYTHONPATH "$IL" -p "$t" 2>&1); then printf "  ok    %s\n" "$(basename "$t")"
+    else printf "  FAIL  %s\n" "$(basename "$t")"; echo "$out" | tail -5 | sed 's/^/        /'; fail=1; fi
+  done
+  [ "$fail" -eq 0 ] && echo "전부 통과" || echo "실패 있음"; exit "$fail"
+  ;;
+
+*)
+  cat <<'EOF'
+pv — PERSEVERANCE 휠-레그 원스톱 (odm 과 같은 문법)
+
+  pv train  <ver> [iters] [envs]            학습 (기본 1500 4096). 시작하면 텐서보드도 같이 뜬다
+            ... --resume                    그 버전 최신 체크포인트에서 이어서
+            ... --from <ver> [iter]         다른 버전 체크포인트에서 새 버전으로 (예: pv train r4 1500 4096 --from r3)
+  pv watch  [ver]                           진행 한 줄 (20 s 완주율, 지형 단계, std, ETA, 크래시)
+  pv play   [ver] [iter] [--joystick]       재생 — 이 PC 모니터에 네이티브 창
+            ... --terrain rugged --level 7  지형 (flat gravel rugged rough wave_long wave_short slope_up slope_down bumps)
+            ... --mode manual               시작 높이 모드 (패드 X 로 전환)
+  pv record [ver] [iter] [...]              순환 주행을 mp4 로 (실제 속도)
+  pv measure[ver] [iter]                    거친 지형 측정 (지형 x 난이도 x 모드). flat/cad 는 6방향 측정
+  pv compare <ver>:<iter> <ver>:<iter>      두 측정 비교표
+  pv tb     [all]                           텐서보드 :6007 (기본 거친 지형 계열, all 이면 전부)
+  pv onnx   [ver] [iter]                    실기용 policy.pt / .onnx / meta (학습 중에도 가능)
+  pv stop                                   Isaac 정리
+  pv list                                   버전·런·체크포인트
+  pv test                                   테스트 (Isaac Sim 불필요)
+
+버전: flat (단순화, 평지)  cad (CAD 폐루프, 평지)  r2 (관측 v2, 목록·텐서보드만)  r3 (관측 v3, 현재)  r4.. (새 런 = pv_<ver>)
+Isaac Sim 이 이미 떠 있으면 두 번째는 막는다.
+EOF
+  ;;
+esac
