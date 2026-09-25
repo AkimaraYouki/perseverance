@@ -15,6 +15,7 @@
 | `isaaclab/` | Isaac Lab RL 프로젝트 소스 (체크포인트 제외) |
 | `isaaclab/scripts/pd_balance_check.py` | PD 게인 스윕 — 모델이 세워지는지 판정 |
 | `isaaclab/scripts/lqr_balance_check.py` | `gains.yaml` 을 Isaac 에서 검증 |
+| `isaaclab/JUMP_REFERENCES.md` | 점프 선행 연구 정리와 학습 방향 (학습 에이전트용 지침) |
 
 ## CAD → 모델 파이프라인
 
