@@ -69,7 +69,7 @@ def track_vx_exp(env: "ManagerBasedRLEnv", command_name: str, std: float,
     """전진 속도 추종. 옆 미끄럼(vy)은 목표 0 으로 같이 본다."""
     asset: Articulation = env.scene[asset_cfg.name]
     cmd = env.command_manager.get_command(command_name)
-    v = asset.data.root_lin_vel_b
+    v = asset.data.root_com_lin_vel_b   # COM 기준 (CAD 몸체 원점은 고관절에서 8 cm 떨어져 있다)
     err = torch.square(cmd[:, 0] - v[:, 0]) + torch.square(v[:, 1])
     return torch.exp(-err / std**2)
 
@@ -86,7 +86,11 @@ def track_height_exp(env: "ManagerBasedRLEnv", command_name: str, std: float,
     """두 다리 관절값이 높이 기준(h_ref)에 붙어 있는지. asset_cfg 는 params 로 넘길 것."""
     asset: Articulation = env.scene[asset_cfg.name]
     h = env.command_manager.get_command(command_name)[:, 2:3]
-    q = asset.data.joint_pos[:, asset_cfg.joint_ids]
+    if "L_joint_M" in asset.joint_names:          # CAD 폐루프 모델: 모터각 -> 다리 관절값
+        from .cad import leg_state
+        q, _ = leg_state(asset)
+    else:
+        q = asset.data.joint_pos[:, asset_cfg.joint_ids]
     return torch.exp(-torch.mean(torch.square(q - h), dim=1) / std**2)
 
 
@@ -107,7 +111,7 @@ def roll_lean_target(env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg = Scene
     직진이나 제자리 회전이면 v * wz = 0 이라 목표는 수평이다.
     """
     asset: Articulation = env.scene[asset_cfg.name]
-    a_c = asset.data.root_lin_vel_b[:, 0] * asset.data.root_ang_vel_b[:, 2]
+    a_c = asset.data.root_com_lin_vel_b[:, 0] * asset.data.root_ang_vel_b[:, 2]
     return torch.sin(torch.atan(a_c / 9.81))
 
 

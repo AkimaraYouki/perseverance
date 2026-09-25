@@ -308,3 +308,42 @@ class WheeledBipedBalanceEnvCfg_PLAY(WheeledBipedBalanceEnvCfg):
         self.scene.env_spacing = 3.0
         self.observations.policy.enable_corruption = False
         self.events.push = None
+
+
+# ---------------------------------------------------------------------------
+# CAD 4절링크 폐루프 모델 (cad.py). 정책 입출력은 위와 똑같다 — 기존 정책을 올리고 이어서 학습할 수 있다.
+# ---------------------------------------------------------------------------
+from . import cad  # noqa: E402
+
+
+@configclass
+class WheeledBipedCADEnvCfg(WheeledBipedBalanceEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.robot = cad.CAD_ROBOT_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        self.actions.legs = cad.CADLegActionCfg(asset_name="robot", joint_names=cad.LEG_JOINTS,
+                                                preserve_order=True, command_name="base_velocity")
+        self.actions.wheels = cad.CADWheelActionCfg(asset_name="robot", joint_names=cad.WHEEL_JOINTS,
+                                                    preserve_order=True, cutoff_hz=20.0, torque_scale=1.5)
+        pol = self.observations.policy
+        pol.joint_pos = ObsTerm(func=cad.leg_pos_rel, params={"default": LEG_MID},
+                                noise=Unoise(n_min=-0.002, n_max=0.002))
+        pol.joint_vel = ObsTerm(func=cad.joint_vel_like_simple, noise=Unoise(n_min=-0.5, n_max=0.5))
+        rw = self.rewards
+        rw.track_height.params["asset_cfg"] = SceneEntityCfg("robot", joint_names=cad.LEG_JOINTS)
+        rw.wheel_effort.params["asset_cfg"] = SceneEntityCfg("robot", joint_names=cad.WHEEL_JOINTS)
+        rw.leg_vel.params["asset_cfg"] = SceneEntityCfg("robot", joint_names=cad.LEG_JOINTS)
+        rw.joint_limits.params["asset_cfg"] = SceneEntityCfg("robot", joint_names=cad.LEG_JOINTS)
+        # 관절 무작위 리셋은 폐루프를 깨뜨린다 (M 만 바꾸면 I, K 가 안 맞는다) -> CAD 영점에서 시작
+        self.events.reset_joints = None
+        self.commands.base_velocity.default_height = cad.H0_JOINT
+
+
+@configclass
+class WheeledBipedCADEnvCfg_PLAY(WheeledBipedCADEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 16
+        self.scene.env_spacing = 3.0
+        self.observations.policy.enable_corruption = False
+        self.events.push = None

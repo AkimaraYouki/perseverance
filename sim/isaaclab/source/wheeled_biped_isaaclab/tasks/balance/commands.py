@@ -36,7 +36,8 @@ class WheelLegCommand(CommandTerm):
     def __init__(self, cfg: "WheelLegCommandCfg", env: "ManagerBasedRLEnv"):
         super().__init__(cfg, env)
         self.robot = env.scene[cfg.asset_name]
-        self._leg_ids, _ = self.robot.find_joints(cfg.leg_joint_names)
+        self._cad = "L_joint_M" in self.robot.joint_names       # CAD 폐루프 모델이면 모터각 -> 다리 관절값
+        self._leg_ids = None if self._cad else self.robot.find_joints(cfg.leg_joint_names)[0]
         self._cmd = torch.zeros(self.num_envs, 3, device=self.device)      # vx, wz, h_ref
         self.h_target = torch.full((self.num_envs,), cfg.default_height, device=self.device)
         self.pinned = False
@@ -68,12 +69,18 @@ class WheelLegCommand(CommandTerm):
             self.h_target[ids] = h
 
     # --- 내부 ---------------------------------------------------------------
+    def _leg_h(self, ids=slice(None)):
+        if self._cad:
+            from .cad import leg_h_mean
+            return leg_h_mean(self.robot)[ids]
+        return self.robot.data.joint_pos[ids][:, self._leg_ids].mean(dim=1)
+
     def _update_metrics(self):
         dt = self._env.step_dt
         max_t = self.cfg.resampling_time_range[1]
-        v = self.robot.data.root_lin_vel_b
+        v = self.robot.data.root_com_lin_vel_b
         w = self.robot.data.root_ang_vel_b
-        q = self.robot.data.joint_pos[:, self._leg_ids].mean(dim=1)
+        q = self._leg_h()
         self.metrics["error_vx"] += torch.abs(self._cmd[:, 0] - v[:, 0]) * dt / max_t
         self.metrics["error_wz"] += torch.abs(self._cmd[:, 1] - w[:, 2]) * dt / max_t
         self.metrics["error_h"] += torch.abs(self._cmd[:, 2] - q) * dt / max_t
@@ -117,7 +124,7 @@ class WheelLegCommand(CommandTerm):
         extras = super().reset(env_ids)
         ids = slice(None) if env_ids is None else env_ids
         # 기준 높이는 현재 다리에서 출발한다 (리셋 순간 목표로 순간이동하지 않게)
-        self._cmd[ids, 2] = self.robot.data.joint_pos[ids][:, self._leg_ids].mean(dim=1)
+        self._cmd[ids, 2] = self._leg_h(ids)
         return extras
 
     def _update_command(self):

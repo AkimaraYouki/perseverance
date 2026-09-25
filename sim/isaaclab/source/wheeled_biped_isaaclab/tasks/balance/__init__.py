@@ -28,3 +28,23 @@ gym.register(
         "rsl_rl_cfg_entry_point": "wheeled_biped_isaaclab.agents.rsl_rl_ppo_cfg:BalancePPORunnerCfg",
     },
 )
+
+gym.register(
+    id="Isaac-WheeledBiped-CAD-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.env_cfg:WheeledBipedCADEnvCfg",
+        "rsl_rl_cfg_entry_point": "wheeled_biped_isaaclab.agents.rsl_rl_ppo_cfg:BalancePPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-WheeledBiped-CAD-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.env_cfg:WheeledBipedCADEnvCfg_PLAY",
+        "rsl_rl_cfg_entry_point": "wheeled_biped_isaaclab.agents.rsl_rl_ppo_cfg:BalancePPORunnerCfg",
+    },
+)

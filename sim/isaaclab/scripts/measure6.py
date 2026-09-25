@@ -27,6 +27,7 @@ ap.add_argument("--vx", type=float, default=0.30)
 ap.add_argument("--wz", type=float, default=0.80)
 ap.add_argument("--vx_fast", type=float, default=0.80, help="고속 조건 vx [m/s] (0.83 = 3 km/h)")
 ap.add_argument("--hard", action="store_true")
+ap.add_argument("--cad", action="store_true", help="CAD 4절링크 폐루프 모델로 측정 (Isaac-WheeledBiped-CAD*)")
 ap.add_argument("--out", default=None)
 AppLauncher.add_app_launcher_args(ap)
 args = ap.parse_args()
@@ -41,7 +42,8 @@ import wheeled_biped_isaaclab.tasks  # noqa: F401,E402
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
 
 R_WHEEL = 0.060
-task = "Isaac-WheeledBiped-Balance-v0" if args.hard else "Isaac-WheeledBiped-Balance-Play-v0"
+_base = "Isaac-WheeledBiped-CAD" if args.cad else "Isaac-WheeledBiped-Balance"
+task = f"{_base}-v0" if args.hard else f"{_base}-Play-v0"
 
 # 조건 (이름, vx, wz, h_시작, h_끝)
 H = {"낮음": 0.135, "중간": 0.1825, "높음": 0.230}
@@ -68,8 +70,7 @@ robot = env.scene["robot"]
 cmd = env.command_manager.get_term("base_velocity")
 cmd.pin(True)
 policy = torch.jit.load(args.policy, map_location=dev).eval()
-leg_ids = robot.find_joints(".*_leg")[0]
-wheel_ids = robot.find_joints(".*_wheel_joint")[0]
+wheel_ids = robot.find_joints("L_joint_W|R_joint_W" if args.cad else ".*_wheel_joint", preserve_order=True)[0]
 
 ci = torch.arange(N, device=dev) // args.repeats
 t_vx = torch.tensor([c[1] for c in CONDS], device=dev)[ci]
@@ -92,9 +93,9 @@ with torch.inference_mode():
         alive &= ~term
         d = robot.data
         g = d.projected_gravity_b
-        rec["vx"].append(d.root_lin_vel_b[:, 0].clone())
+        rec["vx"].append(d.root_com_lin_vel_b[:, 0].clone())
         rec["wz"].append(d.root_ang_vel_b[:, 2].clone())
-        rec["hq"].append(d.joint_pos[:, leg_ids].mean(1).clone())
+        rec["hq"].append(cmd._leg_h().clone())
         rec["href"].append(cmd.command[:, 2].clone())
         rec["pitch"].append(torch.rad2deg(torch.asin(g[:, 0].clamp(-1, 1))))
         rec["roll"].append(torch.rad2deg(torch.asin((-g[:, 1]).clamp(-1, 1))))
@@ -138,7 +139,7 @@ for c, (name, vx, wz, ha, hb) in enumerate(CONDS):
 print("\n" + "=" * 110)
 print(f"  6방향 × 높이 측정 — {'어려운 조건(push·잡음·DR)' if args.hard else '기본 조건'}, "
       f"조건당 {args.repeats} env, {args.seconds:.0f} s (앞 {args.settle:.0f} s 제외)")
-print(f"  정책 {args.policy}")
+print(f"  정책 {args.policy}   모델 {'CAD 4절링크 폐루프' if args.cad else '단순화(직선관절)'}")
 print("=" * 110)
 print(f"{'조건':12s}{'명령vx':>8}{'실제vx':>8}{'명령wz':>8}{'실제wz':>8}{'높이오차':>9}{'90%도달':>8}"
       f"{'낙상':>6}{'pitchσ°':>9}{'기울기°':>8}{'목표°':>7}{'토크RMS':>9}{'반전/s':>8}")

@@ -89,6 +89,15 @@ def main():
         if j.find("child").get("link").startswith("closing_"):
             root.remove(j)
 
+    # 수동 관절(I, K) 한계 제거 — 폐루프와 겹치면 기구가 잠긴다 (2026-09-25 loop_check).
+    # 한계는 모터 관절 M 에만 남긴다.
+    for j in root.findall("joint"):
+        n = j.get("name")
+        if n.endswith("_joint_I") or n.endswith("_joint_K"):
+            lim = j.find("limit")
+            if lim is not None:
+                lim.set("lower", f"{-3.14159:.5f}"); lim.set("upper", f"{3.14159:.5f}")
+
     # 충돌체 단순화
     for l in root.findall("link"):
         for c in l.findall("collision"):

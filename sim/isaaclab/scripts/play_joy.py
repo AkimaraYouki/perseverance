@@ -22,6 +22,7 @@ from isaaclab.app import AppLauncher
 ap = argparse.ArgumentParser()
 ap.add_argument("--policy", required=True)
 ap.add_argument("--task", default="Isaac-WheeledBiped-Balance-Play-v0")
+ap.add_argument("--cad", action="store_true", help="CAD 4절링크 폐루프 모델 (Isaac-WheeledBiped-CAD-Play-v0)")
 ap.add_argument("--num_envs", type=int, default=1)
 ap.add_argument("--joystick", nargs="?", const="/dev/input/js0", default=None, metavar="DEV")
 ap.add_argument("--pad", choices=("auto", "classic", "modern"), default="auto",
@@ -54,6 +55,8 @@ FRICTION_NM = 0.82          # 바퀴 하나 마찰 한계 추정 (HUD 에서 % �
 DPAD_X, DPAD_Y = 6, 7
 BTN_Y, BTN_LB, BTN_RB = 3, 4, 5
 
+if args.cad:
+    args.task = "Isaac-WheeledBiped-CAD-Play-v0"
 cfg = parse_env_cfg(args.task, num_envs=args.num_envs, use_fabric=True)
 cfg.viewer.origin_type = "asset_root"
 cfg.viewer.asset_name = "robot"
@@ -66,6 +69,8 @@ cmd = env.command_manager.get_term("base_velocity")
 rng = cmd.cfg.ranges
 cmd.pin(True)
 policy = torch.jit.load(args.policy, map_location=dev).eval()
+_r = env.scene["robot"]
+WHEEL_IDS = _r.find_joints("L_joint_W|R_joint_W" if args.cad else ".*_wheel_joint", preserve_order=True)[0]
 h_lo, h_hi = rng.height
 h0 = args.h if args.h is not None else cmd.cfg.default_height
 
@@ -203,9 +208,9 @@ with torch.inference_mode():
         g = r.data.projected_gravity_b[0]
         pitch_d = math.degrees(math.atan2(float(g[0]), -float(g[2])))
         roll_d = math.degrees(math.atan2(-float(g[1]), -float(g[2])))
-        v_now = float(r.data.root_lin_vel_b[0, 0]); w_now = float(r.data.root_ang_vel_b[0, 2])
-        q_now = float(r.data.joint_pos[0, :2].mean())
-        tau = r.data.applied_torque[0, 2:4].clone()
+        v_now = float(r.data.root_com_lin_vel_b[0, 0]); w_now = float(r.data.root_ang_vel_b[0, 2])
+        q_now = float(cmd._leg_h()[0])       # 두 모델 공통 (CAD 는 모터각 -> 다리 관절값 변환)
+        tau = r.data.applied_torque[0, WHEEL_IDS].clone()
         if prev_tau is not None:
             chat_win.append(torch.sign(tau - prev_tau))
             if len(chat_win) > 200:
@@ -241,8 +246,8 @@ with torch.inference_mode():
                 pl.set_data(*hist[kk])
         if time.time() - last_print > 0.5:
             last_print = time.time()
-            q = r.data.joint_pos[0, :2].mean().item()
-            v = r.data.root_lin_vel_b[0, 0].item()
+            q = float(cmd._leg_h()[0])
+            v = r.data.root_com_lin_vel_b[0, 0].item()
             w = r.data.root_ang_vel_b[0, 2].item()
             g = r.data.projected_gravity_b[0]
             pitch = torch.rad2deg(torch.asin(g[0].clamp(-1, 1))).item()
