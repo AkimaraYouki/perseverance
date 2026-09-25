@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- 책상 디버그 유선: 데스크톱 eno1 192.168.55.112 -> Jetson 유선 192.168.54.23 (Jetson 유선은 멀티캐스트 꺼져 피어 필수).
+     먼저 고정 경로+ARP (학교망 ARP 스푸핑): sudo ip route replace 192.168.54.23/32 dev eno1; sudo ip neigh replace 192.168.54.23 lladdr 3c:6d:66:b5:0f:09 dev eno1 nud permanent -->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles"><transport_descriptors><transport_descriptor><transport_id>wired_udp</transport_id><type>UDPv4</type><interfaceWhiteList><address>192.168.55.112</address></interfaceWhiteList></transport_descriptor></transport_descriptors>
+<participant profile_name="wired_only" is_default_profile="true"><rtps><userTransports><transport_id>wired_udp</transport_id></userTransports><useBuiltinTransports>false</useBuiltinTransports><builtin><initialPeersList>
+<locator><udpv4><address>192.168.54.23</address><port>17910</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17912</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17914</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17916</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17918</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17920</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17922</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17924</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17926</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17928</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17930</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17932</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17934</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17936</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17938</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17940</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17942</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17944</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17946</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17948</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17950</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17952</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17954</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17956</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17958</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17960</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17962</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17964</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17966</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17968</port></udpv4></locator>
+<locator><udpv4><address>192.168.54.23</address><port>17970</port></udpv4></locator>
+</initialPeersList></builtin></rtps></participant></profiles>
