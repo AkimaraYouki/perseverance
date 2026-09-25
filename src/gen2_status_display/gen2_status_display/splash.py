@@ -22,20 +22,6 @@ def _ease(x):
 def frame(t):
     img = Image.new('RGB', (W, H), (0, 0, 0))
     d = ImageDraw.Draw(img)
-    # 1) frame border draws itself (0.0-0.5 s)
-    k = _ease(t / 0.5)
-    if k > 0:
-        x0, y0, x1, y1 = 10, 10, W - 11, H - 11
-        per = 2 * (x1 - x0) + 2 * (y1 - y0)
-        L = per * k
-        segs = [((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))]
-        for (a, b) in segs:
-            seg = abs(b[0] - a[0]) + abs(b[1] - a[1])
-            if L <= 0:
-                break
-            f = min(1.0, L / seg)
-            d.line([a, (a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f)], fill=(255, 255, 255), width=2)
-            L -= seg
     # 2) title types in letter by letter with a block cursor (0.4-1.6 s)
     n = int(len(TITLE) * min(1.0, max(0.0, (t - 0.4) / 1.2)))
     tw = d.textlength(TITLE, font=F_TITLE)
