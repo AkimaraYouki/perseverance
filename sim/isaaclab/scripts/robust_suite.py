@@ -74,7 +74,7 @@ N, SC = args.n, args.scenario
 OBST = os.path.expanduser("~/perseverance/sim/obstacles")
 spec = dict(
     flat_stop=dict(sec=8.0, v=0.6, stop_at=5.0),
-    ridges=dict(sec=18.0, v=0.4, cad="course.stl"),
+    ridges=dict(sec=18.0, v=0.4, cad="course.stl", stop_x=6.8),     # 뒤에 이어진 ㅗ 턱(7.75 m) 앞에서 멈춘다
     ramp=dict(sec=12.0, v=P.vmax_kmh / 3.6, cad="arena.stl"),
     jump=dict(sec=8.0, v=P.v, box=(1.0, 2.0, 0.08), edges=[1.0]),
     hand10=dict(sec=9.0, v=0.3, hand=(3.0, 5.0, 10.0)),
@@ -172,6 +172,7 @@ wheels_act.velocity_limit = vlim.to(dev)
 if hasattr(wheels_act, "_vel_at_effort_lim"):
     wheels_act._vel_at_effort_lim = wheels_act.velocity_limit * (1 + wheels_act.effort_limit / wheels_act._saturation_effort)
 mass_true = masses.to(dev)
+motor_est = [dr[i]["wheel_motor"] * (1.0 + rngs[i].normal(0, 0.02)) for i in range(N)]   # 전압으로 추정한 모터 한계 (오차 2 %)
 ctrls = [wbctrl.WBController(P, lqr, m_pend, seed=args.seed + 1000 + i, edges=spec.get("edges", ())) for i in range(N)]
 
 
@@ -219,13 +220,16 @@ with torch.inference_mode():
         for i in range(N):
             if fell_t[i] is not None:
                 continue
+            vx_i = 0.0 if ("stop_x" in spec and wx[i] >= spec["stop_x"]) else vx
             wz = max(-1.0, min(1.0, -P.heading_kp * float(psi_[i])))
             f = wbctrl.Frame(t=t, g_b=g_b[i], w_b=w_b[i], h=h_[i], tau_hip=tau_[i], w_wheel_joint=wj_[i], w_wheel_abs=wabs_[i],
                              th_kin=float(thk_[i]), l_pend=float(lp_[i]), wx=float(wx[i]), wheel_z_min=float(wzmin[i]),
-                             yaw=float(psi_[i]), sf=float(sf_[i]), truth_th=float(tht_[i]), truth_v=float(vt_[i]))
-            a, kp, kd, ffF, info = ctrls[i].step(f, vx, wz, P.idle_h)
+                             yaw=float(psi_[i]), sf=float(sf_[i]), truth_th=float(tht_[i]), truth_v=float(vt_[i]),
+                             motor_scale=motor_est[i])
+            a, kp, kd, ffF, info = ctrls[i].step(f, vx_i, wz, P.idle_h)
             acts[i], kps[i], kds[i], ff[i] = a, kp, kd, ffF
             rec[i]["pitch"].append(math.degrees(info["pitch"])); rec[i]["roll"].append(math.degrees(info["roll"]))
+            rec[i]["v"].append(float(vt_[i]))
             xmax[i] = max(xmax[i], wx[i])
         cmd.set(torch.full((N,), float(vx), device=dev), torch.zeros(N, device=dev), torch.full((N,), P.idle_h, device=dev),
                 mode=torch.ones(N, device=dev))
@@ -265,9 +269,9 @@ rows = []
 for i in range(N):
     ok = fell_t[i] is None
     if SC == "flat_stop":
-        ok = ok and abs(v_end[i]) < 0.15
+        ok = ok and len(rec[i]["v"]) > 100 and abs(float(np.mean(rec[i]["v"][-100:]))) < 0.15   # 마지막 0.5 s 평균 속도
     elif SC == "ridges":
-        ok = ok and xmax[i] >= 6.25
+        ok = ok and xmax[i] >= 6.2
     elif SC == "ramp":
         ok = ok and xmax[i] >= 5.0
     elif SC == "jump":

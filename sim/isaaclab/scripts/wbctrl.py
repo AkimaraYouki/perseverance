@@ -42,6 +42,7 @@ class Frame:
     sf: float                  # IMU 비력 크기 [g]
     truth_th: float            # 참 진자각 (est='truth')
     truth_v: float             # 참 바퀴축 속도 (est='truth')
+    motor_scale: float = 1.0   # 바퀴 모터 한계 추정 / 명목 (실기: 배터리 전압 / 만충 전압)
 
 
 class WBController:
@@ -64,6 +65,7 @@ class WBController:
         self.roll_pi.reset()
         self.q.clear()
         self.soft = False
+        self.th_bias, self.v_prev = 0.0, 0.0                   # 균형점 보정 (추정 진자각의 정상 상태 오프셋)
 
     # --- 센서 ------------------------------------------------------------------------------------
     def _sense(self, f: Frame):
@@ -98,6 +100,15 @@ class WBController:
         act = np.zeros(4)
         S = self._sense(f)
         th, thd, l_p, v_now, wz_now = self._state(f, S)
+        # 균형점 자동 보정: 가속이 거의 없고 흔들림이 작을 때 (참 진자각 = 0 이어야 하는 순간) 추정 진자각을 천천히 학습
+        acc_ = (v_now - self.v_prev) / DT; self.v_prev = v_now
+        # 멈춰 서 있을 때만 (경사를 일정 속도로 오를 땐 앞으로 숙이는 게 정상이라 그걸 오차로 배우면 안 됨 — pv robust 경사로 2/8)
+        if P.bal_adapt > 0 and self.phase == "drive" and not self.lift["on"] and abs(acc_) < 0.3 and abs(thd) < 0.3 \
+                and abs(v_now) < 0.05 and abs(vx) < 0.02:
+            lim = math.radians(P.bal_adapt_max_deg)
+            self.th_bias = max(-lim, min(lim, self.th_bias + P.bal_adapt * DT * (th - self.th_bias)))
+        th = th - self.th_bias
+        w_max = W_WHEEL_MAX * f.motor_scale
         a_r = 1.0 - math.exp(-2 * math.pi * P.roll_rate_lpf_hz * DT) if P.roll_rate_lpf_hz > 0 else 1.0
         self.rf += a_r * (-S["gx"] - self.rf)
         leg_kp, leg_kd = P.vmc_kp, P.vmc_kd
@@ -126,13 +137,13 @@ class WBController:
                 self.soft = False
                 self.phase, self.t_phase = "drive", t
                 self.next_edge += 1
-            if self.next_edge >= len(self.edges):
-                vx = 0.0
+            if self.next_edge >= len(self.edges) and f.wx >= self.edges[-1] + 0.4:
+                vx = 0.0                                        # 마지막 모서리 넘어 0.4 m 더 들어간 뒤 멈춘다 (모서리에 서면 굴러 내려옴)
 
         ffF = 0.0
         if self.phase in ("drive", "retract", "extract", "land"):
             th_ref = math.radians(P.retract_lean) if self.phase == "retract" else 0.0
-            vm = P.vmax_kmh / 3.6
+            vm = min(P.vmax_kmh / 3.6, P.vmax_motor_frac * w_max * R_WHEEL)
             g = self.gov
             g["vf"] += (1.0 - math.exp(-2 * math.pi * P.speed_lpf_hz * DT)) * (v_now - g["vf"])
             e = abs(g["vf"]) - vm
@@ -143,14 +154,14 @@ class WBController:
             v_ref = g["ref"]
             if abs(vx) > v_lim + 1e-3:
                 self.x_err = 0.0
-            ww = float(np.max(np.abs(f.w_wheel_joint))) / W_WHEEL_MAX
+            ww = float(np.max(np.abs(f.w_wheel_joint))) / w_max
             if ww > P.speed_guard and P.speed_guard < 1.0:
                 cut = min(1.0, (ww - P.speed_guard) / (1.0 - P.speed_guard))
                 v_ref = v_now * (1.0 - 0.6 * cut) if v_now * vx >= 0 else vx
                 self.x_err = 0.0
             self.x_err = max(-0.3, min(0.3, self.x_err + (v_now - v_ref) * DT))
             tau_w = self.lqr.torque(l_p, self.x_err, v_now - v_ref, th - th_ref, thd)
-            wz_lim = max(0.5, (P.wheel_margin * W_WHEEL_MAX * R_WHEEL - abs(v_now)) / HALF_TRACK)
+            wz_lim = max(0.5, (P.wheel_margin * w_max * R_WHEEL - abs(v_now)) / HALF_TRACK)
             wz = max(-wz_lim, min(wz_lim, wz))
             tau_y = P.yaw_kd * (wz - wz_now)
             act[2] = max(-1.0, min(1.0, (0.5 * tau_w - tau_y) / P.wheel_tau_max))
