@@ -63,6 +63,7 @@ TUNE = dict(
     # --- 접근·발동 ---
     heading_kp=2.0,      # 자동 시험 방향 유지: wz = -heading_kp x yaw [1/s] (정책이 yaw 로 흘러서 직선 주행이 안 된다). 0 = 끔. 패드는 사람이 조향
     v=0.4,               # 접근 속도 [m/s] (자동 시험용. 패드는 스틱). 바퀴 한계 18.85 rad/s x R 0.06 = 1.13 m/s, 웅크림·숙임 여유 두고 0.5~0.6
+    jump_min_v=0.2,      # 패드 점프는 앞으로 이 속도 [m/s] 이상일 때만 (0.72 km/h). 제자리·후진 중 점프 막기
     trigger=0.40,        # 바퀴 중심이 모서리 앞 이 거리에 오면 발동 [m] (자동 시험). LQR v 0.4: 이륙 -185 mm, 착지 +9 mm (2026-09-26)
     # --- 1 retract: 웅크림 (정책이 균형) ---
     t_retract=0.30,      # [s]. 앞 75 % 동안 램프로 접고 나머지는 유지. 한 번에 접으면 바퀴가 들린다.
@@ -633,6 +634,11 @@ def episode():
         if args.mode == "jump":
             tp = t - t_phase
             auto_go = pad is None and next_edge < len(edges) and wx >= edges[next_edge] - args.trigger
+            v_fwd = float(robot.data.root_com_lin_vel_b[0, 0])
+            if phase == "drive" and y_edge and v_fwd < args.jump_min_v:   # 제자리·후진 중 점프 막기
+                y_edge = False
+                stats["last"] = f"blocked: {v_fwd*3.6:+.1f} km/h (need >= {args.jump_min_v*3.6:.1f})"
+                print(f"[점프 막음] 속도 {v_fwd*3.6:+.1f} km/h — 앞으로 {args.jump_min_v*3.6:.1f} km/h 이상에서만", flush=True)
             if phase == "drive" and (auto_go or y_edge):
                 if pad is not None:
                     reload_tune()                                  # 점프마다 파일의 TUNE 을 다시 읽는다
