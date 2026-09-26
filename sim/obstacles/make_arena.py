@@ -40,7 +40,7 @@ def write_stl(path, tris):
 
 
 ap = argparse.ArgumentParser()
-ap.add_argument("src", help="Onshape STL zip, 또는 STL 들이 든 폴더")
+ap.add_argument("src", help="Onshape STL zip, STL 한 개, 또는 STL 들이 든 폴더")
 ap.add_argument("--start", type=float, nargs=2, default=(0.0, 0.0), metavar=("X", "Y"), help="출발점 CAD 좌표 [mm]")
 ap.add_argument("--heading", default="+Y", help="출발할 때 로봇이 보는 CAD 방향: +X -X +Y -Y 또는 각도 [deg, +X 기준 반시계]")
 ap.add_argument("--unit", type=float, default=1.0, help="CAD 단위 -> mm (mm 면 1)")
@@ -49,7 +49,9 @@ a = ap.parse_args()
 
 src = os.path.expanduser(a.src)
 parts = []
-if src.endswith(".zip"):
+if src.lower().endswith(".stl"):
+    parts = [(os.path.basename(src), read_stl(open(src, "rb").read()))]
+elif src.endswith(".zip"):
     with zipfile.ZipFile(src) as z:
         parts = [(n, read_stl(z.read(n))) for n in z.namelist() if n.lower().endswith(".stl")]
 else:
