@@ -144,7 +144,7 @@ R = cad.R_WHEEL
 H_MIN, H_MAX = 0.1225, 0.2425
 H_CRUISE = 0.18
 
-cfg = parse_env_cfg(TASK, num_envs=1, use_fabric=True)
+cfg = parse_env_cfg(TASK, device=args.device, num_envs=1, use_fabric=True)
 cfg.scene.terrain = TerrainImporterCfg(
     prim_path="/World/ground", terrain_type="plane", collision_group=-1,
     physics_material=sim_utils.RigidBodyMaterialCfg(friction_combine_mode="multiply", restitution_combine_mode="multiply",
@@ -157,6 +157,17 @@ cfg.events.reset_base.params["pose_range"] = {}
 cfg.events.reset_base.params["velocity_range"] = {}
 cfg.events.base_mass = None
 cfg.events.base_com = None
+# 시험에는 학습용 계산이 필요 없다 — 매 스텝(200 Hz) 부가 계산을 덜어 창 속도를 올린다
+if hasattr(cfg.events, "push"):
+    cfg.events.push = None
+for _grp in (cfg.rewards, cfg.curriculum):
+    for _n in list(vars(_grp)):
+        if not _n.startswith("_"):
+            setattr(_grp, _n, None)
+if hasattr(cfg.observations, "critic"):
+    cfg.observations.critic = None                                     # 크리틱 관측 (지형 스캔 117 레이)
+if hasattr(cfg.scene, "critic_scanner"):
+    cfg.scene.critic_scanner = None
 cfg.terminations.time_out = None
 if args.joystick:                                                     # 패드: 부딪히거나 기울어도 리셋하지 않고 계속 균형 (START 로만 처음으로)
     for _n in list(vars(cfg.terminations)):

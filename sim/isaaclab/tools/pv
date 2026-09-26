@@ -335,6 +335,7 @@ jump)
     grep -E "^#|^저장|^영상" "$RUNLOG/jump.log" || { echo "!! 실패 — $RUNLOG/jump.log" >&2; tail -15 "$RUNLOG/jump.log"; exit 1; }
   else
     export DISPLAY="$(desktop_display)"
+    [[ " ${args[*]} " == *" --device "* ]] || args+=(--device cpu)   # 로봇 1 대는 CPU 물리가 빠르다 (창 0.25 -> 0.39 배속)
     setsid nohup "$IL" -p scripts/_isaaclab_launch.py scripts/climb_test.py "${args[@]}" > "$RUNLOG/jump.log" 2>&1 < /dev/null &
     echo "점프 시험 창 (DISPLAY $DISPLAY, 부팅 1~2분). 반복 재생, 시도마다 결과 한 줄:"
     echo "  tail -f $RUNLOG/jump.log | grep -E '^#|^\\[|튜닝'"
