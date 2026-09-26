@@ -35,9 +35,11 @@ TUNE = dict(
     lqr_qx=2.0, lqr_qv=5.0, lqr_qth=100.0, lqr_qthd=5.0,   # LQR 상태 가중 [진행거리 m, 속도 m/s, 진자각 rad, 각속도 rad/s]
     lqr_r=1.0,           # LQR 입력 가중 (두 바퀴 토크 합 N·m)
     wheel_tau_max=7.0,   # 바퀴 토크 한계 [N·m] (AK45-10 피크)
+    wz_max=5.0,          # 제자리 회전 최대 [rad/s] (286 deg/s. 예전 2.5). 4 / 6 rad/s 에서 98~99 % 추종, 흔들림 없음
+    wheel_margin=0.85,   # 달리며 돌 때 바깥 바퀴 속도 한계 = 모터 한계 x 이 비율 -> 속도가 빠를수록 회전 한계를 줄인다
     vmax_kmh=3.0,        # 최고 속도 [km/h] (사용자 2026-09-26). 스틱 끝 = 이 속도. 모터 한계는 4.1 km/h (18.85 rad/s x 0.06)
     brake_kp=1.0,        # 최고 속도 초과 브레이크 P: 한계 = 최고 - (kp x 초과 + 적분). 켜고 끄지 않고 부드럽게 조인다
-    brake_ki=4.0,        # 브레이크 I [1/s]: 내리막에서 필요한 제동량을 찾아가고, 속도가 내려가면 서서히 풀린다
+    brake_ki=7.0,        # 브레이크 I [1/s]: 내리막에서 필요한 제동량을 찾아가고, 속도가 내려가면 서서히 풀린다
     speed_lpf_hz=3.0,    # 브레이크가 보는 속도 필터 [Hz]
     accel_max=1.5,       # 목표 속도 변화율 한계 [m/s^2] (스틱·브레이크 모두)
     speed_guard=1,    # 바퀴 관절 속도가 모터 한계(18.85 rad/s)의 이 비율을 넘으면 목표 속도를 낮춰 뒤로 젖히며 감속 (푸시백).
@@ -130,6 +132,7 @@ for k, v in TUNE.items():
 ap.add_argument("--joystick", nargs="?", const="/dev/input/js0", default=None, metavar="DEV",
                 help="패드로 조종: 왼스틱 세로 전후, 오른스틱 가로 회전, Y/LT/RT 점프, A 정지, START 처음으로, 십자키/LB/RB/BACK 카메라")
 ap.add_argument("--pad", choices=("auto", "classic", "modern"), default="classic")
+ap.add_argument("--wz", type=float, default=None, help="자동 시험: 회전 명령 [rad/s] 고정 (방향 유지 대신)")
 ap.add_argument("--stop_at", type=float, default=None, help="자동 시험: 이 시각 [s] 에 속도 명령 0 (달리다 멈추기)")
 ap.add_argument("--record", default=None, metavar="DIR")
 ap.add_argument("--out", default=None)
@@ -603,12 +606,14 @@ def episode():
         tau = d.applied_torque[0, leg_ids] * hip_sign
         # --- 상태머신 --------------------------------------------------------------------------------
         vx, wz, y_edge = (0.0 if args.stop_at is not None and t >= args.stop_at else args.v), 0.0, False
-        if args.heading_kp > 0:
+        if args.wz is not None:
+            wz = args.wz
+        elif args.heading_kp > 0:
             wz = max(-1.0, min(1.0, -args.heading_kp * yaw_of(robot.data.root_quat_w[0])))
         if pad is not None:                                        # 패드: 속도·회전·높이는 사람이, 점프는 Y
             pad.poll()
             _vm = args.vmax_kmh / 3.6
-            vx, wz, dh, estop, reset_h = J.command_from_gamepad(pad, (-_vm, _vm), rng.ang_vel_z)
+            vx, wz, dh, estop, reset_h = J.command_from_gamepad(pad, (-_vm, _vm), (-args.wz_max, args.wz_max))
             trig = max(J.trigger(pad, J.AXIS_RT), J.trigger(pad, J.lt_axis(pad)))
             y, back = pad.button(BTN_Y) or trig > 0.5, pad.button(BTN_START)   # 점프: Y, RT, LT 어느 것이든
             y_edge, y_prev = y and not y_prev, y
@@ -699,6 +704,9 @@ def episode():
                     x_err = 0.0
                 x_err = max(-0.3, min(0.3, x_err + (v_now - v_ref) * dt))
                 tau_w = lqr.torque(l_p, x_err, v_now - v_ref, th - th_ref, thd)
+                # 바깥 바퀴 = (|v| + 0.094 |wz|) / R <= 한계 x wheel_margin -> 회전 한계
+                wz_lim = max(0.5, (args.wheel_margin * 18.85 * R - abs(v_now)) / 0.094)
+                wz = max(-wz_lim, min(wz_lim, wz))
                 tau_y = args.yaw_kd * (wz - wz_now)
                 wheel_term.cfg.torque_scale = args.wheel_tau_max
                 act[0, 2] = max(-1.0, min(1.0, (0.5 * tau_w - tau_y) / args.wheel_tau_max))
@@ -790,7 +798,7 @@ def episode():
         mvel = d.joint_vel[0, leg_ids] * hip_sign
         log.append(dict(t=t, phase=phase, wx=wx, wz_l=float(wheel_pos[0, 2]), wz_r=float(wheel_pos[1, 2]),
                         bz=float(d.root_com_pos_w[0, 2]), bx=float(d.root_com_pos_w[0, 0]),
-                        yaw=math.degrees(yaw_of(d.root_quat_w[0])), pitch=math.degrees(math.asin(max(-1, min(1, float(g[0]))))),
+                        yaw=math.degrees(yaw_of(d.root_quat_w[0])), wzr=float(d.root_ang_vel_w[0, 2]), pitch=math.degrees(math.asin(max(-1, min(1, float(g[0]))))),
                         roll=math.degrees(math.asin(max(-1, min(1, float(g[1]))))),
                         hl=float(h_now[0]), hr=float(h_now[1]), tau_l=float(tau[0]), tau_r=float(tau[1]),
                         w_l=float(mvel[0]), w_r=float(mvel[1]),
