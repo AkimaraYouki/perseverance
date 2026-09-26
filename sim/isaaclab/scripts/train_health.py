@@ -71,10 +71,13 @@ def main():
     terr = scalars(acc, "Curriculum/terrain_levels")
     tout = scalars(acc, "Episode_Termination/time_out")
     tv, tw = scalars(acc, "Episode_Reward/track_lin_vel"), scalars(acc, "Episode_Reward/track_ang_vel")
+    alive_w = 2.0
+    if not tv:                                  # 잔차 RL (rl1~): 보상 이름 track_v / track_wz, alive 가중치 1
+        tv, tw, alive_w = scalars(acc, "Episode_Reward/track_v"), scalars(acc, "Episode_Reward/track_wz"), 1.0
     alive = scalars(acc, "Episode_Reward/alive")
-    # Episode_Reward/* = 에피소드 합 / 20 s 라 짧은 에피소드에 끌려간다. alive(가중치 2, 매 초 2) 로 나눠
-    # **초당** 추종 보상으로 정규화한다: (track_lin + track_ang) / (alive / 2) = 가중치 x 평균 추종 (0 ~ 3.5)
-    track = [(s, (v + w) / (al / 2.0)) for (s, v), (_, w), (_, al) in zip(tv, tw, alive) if al > 1e-3]
+    # Episode_Reward/* = 에피소드 합 / 20 s 라 짧은 에피소드에 끌려간다. alive(매 초 가중치) 로 나눠
+    # **초당** 추종 보상으로 정규화한다: (track_lin + track_ang) / (alive / w) = 가중치 x 평균 추종
+    track = [(s, (v + w) / (al / alive_w)) for (s, v), (_, w), (_, al) in zip(tv, tw, alive) if al > 1e-3]
     std = scalars(acc, "Policy/mean_std")
     lr = scalars(acc, "Loss/learning_rate")
     if not tout:

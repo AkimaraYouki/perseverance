@@ -11,6 +11,7 @@ set -euo pipefail
 PROJ="$HOME/wheeled_biped_isaaclab"
 IL="$HOME/Desktop/IsaacLab/isaaclab.sh"
 LOGROOT="$PROJ/logs/rsl_rl/wheeled_biped_balance"
+RESROOT="$PROJ/logs/rsl_rl/wheeled_biped_residual"     # 잔차 RL (rl1~) — LQR+VMC 위 보정 정책
 RUNLOG="$HOME/pv_logs"; mkdir -p "$RUNLOG"
 OUT="$HOME/pv_out"; mkdir -p "$OUT"
 TB_PORT="${PV_TB_PORT:-6007}"          # odm tb 가 6006 을 쓰므로 겹치지 않게
@@ -28,6 +29,7 @@ task_of() {
     j1) echo "Isaac-WheeledBiped-CAD-JumpSkill-v0" ;;   # 점프 전용 정책 (B), 관측 26
     j2) echo "Isaac-WheeledBiped-CAD-JumpSkill-v1" ;;   # + 올라선 보상, 올라서야 단계 상승
     j[0-9]*) echo "Isaac-WheeledBiped-CAD-JumpSkill-v2" ;;   # + 연속 점프 (쿨다운 0.6 s)
+    rl[0-9]*) echo "Isaac-WheeledBiped-CAD-Residual-v0" ;;   # 잔차 RL (LQR+VMC 위 보정), 대회 지형 + 실기 조건 무작위
     r3|r4|r5) echo "Isaac-WheeledBiped-CAD-Rough-v0" ;;
     r6) echo "Isaac-WheeledBiped-CAD-Jump-v0" ;;   # 점프 + 대회 장애물, 관측 26
     r[7-9]*|r[1-9][0-9]*) echo "Isaac-WheeledBiped-CAD-Jump-v1" ;;   # + 이륙 유도 보상
@@ -41,6 +43,7 @@ latest_run() {
     cad)  echo "$LOGROOT/2026-09-25_15-51-14" ;;
     r2)   ls -dt "$LOGROOT"/*_rough_modes3 2>/dev/null | head -1 || true ;;
     r3)   ls -dt "$LOGROOT"/*_rough_v3 "$LOGROOT"/*_pv_r3 2>/dev/null | head -1 || true ;;
+    rl*)  ls -dt "$RESROOT"/*_pv_"$1" 2>/dev/null | head -1 || true ;;
     *)    ls -dt "$LOGROOT"/*_pv_"$1" 2>/dev/null | head -1 || true ;;
   esac
 }
@@ -103,7 +106,7 @@ tb_start() {   # tb_start [all]
   if [ -f "$RUNLOG/tb.pid" ]; then kill -9 "$(cat "$RUNLOG/tb.pid")" 2>/dev/null || true; rm -f "$RUNLOG/tb.pid"; sleep 1; fi
   local L=/tmp/pv_tb; rm -rf "$L"; mkdir -p "$L"
   local d b n=0
-  for d in "$LOGROOT"/*; do
+  for d in "$LOGROOT"/* "$RESROOT"/*; do
     [ -d "$d" ] || continue
     b="$(basename "$d")"
     case "$b" in *_smoke|*_init|*_init2) continue ;; esac                  # 스모크·수술용 디렉터리 제외
@@ -169,7 +172,7 @@ train)
     echo "  수렴 자동 정지 감시: 5 분마다 (최소 $mi iter 뒤부터)   로그: $RUNLOG/autostop_$ver.log"
   fi
   # 새 런 디렉터리는 앱이 뜬 뒤(약 1 분)에 생긴다 -> 생기면 텐서보드를 한 번 더 열어 새 런을 붙인다
-  ( for i in $(seq 1 120); do ls -d "$LOGROOT"/*_pv_"$ver" >/dev/null 2>&1 && break; sleep 2; done
+  ( for i in $(seq 1 120); do ls -d "$LOGROOT"/*_pv_"$ver" "$RESROOT"/*_pv_"$ver" >/dev/null 2>&1 && break; sleep 2; done
     "$0" tb >/dev/null 2>&1 ) </dev/null >/dev/null 2>&1 &
   echo "  (새 런 폴더가 생기면 텐서보드를 자동으로 다시 엽니다)"
   ;;
@@ -347,7 +350,7 @@ robust)
   # pv robust [N] [--only flat_stop,ridges,...] [TUNE 덮어쓰기 --키 값 ...]
   #   강인성 시험 세트: 시나리오마다 로봇 N 대 (대마다 다른 모델 오차·잡음·지연) -> 통과율 표. 게인은 climb_test.py TUNE
   n=8; if [[ "${1:-}" =~ ^[0-9]+$ ]]; then n="$1"; shift; fi
-  only="flat_stop,ridges,ramp,jump,hand10,hand20"; args=()
+  only="flat_stop,turn,ridges,ramp,jump,hand10,hand20"; args=()
   while [ $# -gt 0 ]; do if [ "$1" = "--only" ]; then only="$2"; shift 2; else args+=("$1"); shift; fi; done
   require_free_gpu
   cd "$PROJ"; mkdir -p "$OUT/robust"; stamp=$(date +%H%M%S)

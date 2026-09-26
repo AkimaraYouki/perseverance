@@ -137,8 +137,8 @@ class WBController:
                 self.soft = False
                 self.phase, self.t_phase = "drive", t
                 self.next_edge += 1
-            if self.next_edge >= len(self.edges) and f.wx >= self.edges[-1] + 0.4:
-                vx = 0.0                                        # 마지막 모서리 넘어 0.4 m 더 들어간 뒤 멈춘다 (모서리에 서면 굴러 내려옴)
+            if self.next_edge >= len(self.edges) and f.wx >= self.edges[-1] + 0.25:
+                vx = 0.0                                        # 마지막 모서리 넘어 0.25 m 더 들어간 뒤 멈춘다 (모서리에 서면 굴러 내려옴, 0.4 면 1 m 평대를 지나침)
 
         ffF = 0.0
         if self.phase in ("drive", "retract", "extract", "land"):
@@ -186,7 +186,8 @@ class WBController:
             act[0] = act[1] = (P.idle_h - h_ref) / 0.12
             self.roll_pi.reset(0.0); self.x_err = 0.0; self.gov.update(i=0.0, ref=0.0, vf=0.0)
         elif self.phase == "drive":
-            rl = S["roll"]
+            roll_ref = max(-math.radians(20), min(math.radians(20), math.atan(P.turn_lean * self.gov["ref"] * wz / 9.81)))
+            rl = S["roll"] - roll_ref                             # 회전 중 안쪽으로 기울이기 (Ascento lean)
             airborne = float(np.min(f.tau_hip)) < P.contact_tau_min
             dlt = self.roll_pi(rl, DT, P.roll_kp, P.roll_ki, P.level_max,
                                freeze=airborne or abs(math.degrees(rl)) > P.roll_freeze_deg, leak=P.roll_leak,

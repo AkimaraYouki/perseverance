@@ -8,6 +8,7 @@
 
 시나리오 (통과 조건):
   flat_stop  평지 0.6 m/s 로 달리다 5 s 에 멈추기          넘어지지 않고 멈춤 (|v| < 0.15)
+  turn       평지 0.6 m/s 로 달리며 2 s 마다 좌우 1 rad/s 슬랄롬   넘어지지 않음
   ridges     8 cm 엇갈린 삼각형길 (대회 CAD) 직선 0.4 m/s    넘어지지 않고 삼각형길 끝 (x >= 6.25 m)
   ramp       30 cm 경사로 오르내리기, 스틱 끝 (3 km/h)        넘어지지 않고 내리막 끝 (x >= 5.0 m)
   jump       8 cm 평대 자동 점프                              넘어지지 않고 윗면 (바퀴 바닥 >= 70 mm)
@@ -35,7 +36,7 @@ def load_tune():
 
 
 TUNE = load_tune()
-SCEN = ("flat_stop", "ridges", "ramp", "jump", "hand10", "hand20")
+SCEN = ("flat_stop", "turn", "ridges", "ramp", "jump", "hand10", "hand20")
 ap = argparse.ArgumentParser()
 ap.add_argument("--scenario", choices=SCEN, required=True)
 ap.add_argument("--n", type=int, default=8)
@@ -74,6 +75,7 @@ N, SC = args.n, args.scenario
 OBST = os.path.expanduser("~/perseverance/sim/obstacles")
 spec = dict(
     flat_stop=dict(sec=8.0, v=0.6, stop_at=5.0),
+    turn=dict(sec=10.0, v=0.6, slalom=1.0),                          # 달리며 2 s 마다 좌우 1 rad/s 슬랄롬
     ridges=dict(sec=18.0, v=0.4, cad="course.stl", stop_x=6.8),     # 뒤에 이어진 ㅗ 턱(7.75 m) 앞에서 멈춘다
     ramp=dict(sec=12.0, v=P.vmax_kmh / 3.6, cad="arena.stl"),
     jump=dict(sec=8.0, v=P.v, box=(1.0, 2.0, 0.08), edges=[1.0]),
@@ -221,7 +223,10 @@ with torch.inference_mode():
             if fell_t[i] is not None:
                 continue
             vx_i = 0.0 if ("stop_x" in spec and wx[i] >= spec["stop_x"]) else vx
-            wz = max(-1.0, min(1.0, -P.heading_kp * float(psi_[i])))
+            if "slalom" in spec:
+                wz = spec["slalom"] * (1.0 if int(t // 2.0) % 2 == 0 else -1.0)
+            else:
+                wz = max(-1.0, min(1.0, -P.heading_kp * float(psi_[i])))
             f = wbctrl.Frame(t=t, g_b=g_b[i], w_b=w_b[i], h=h_[i], tau_hip=tau_[i], w_wheel_joint=wj_[i], w_wheel_abs=wabs_[i],
                              th_kin=float(thk_[i]), l_pend=float(lp_[i]), wx=float(wx[i]), wheel_z_min=float(wzmin[i]),
                              yaw=float(psi_[i]), sf=float(sf_[i]), truth_th=float(tht_[i]), truth_v=float(vt_[i]),

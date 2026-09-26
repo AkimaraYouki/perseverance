@@ -49,13 +49,15 @@ TUNE = dict(
     accel_max=1.5,       # 목표 속도 변화율 한계 [m/s^2] (스틱·브레이크 모두)
     speed_guard=1,    # 바퀴 관절 속도가 모터 한계(18.85 rad/s)의 이 비율을 넘으면 목표 속도를 낮춰 뒤로 젖히며 감속 (푸시백).
                          #   한계에 붙으면 앞으로 기울 때 바퀴를 더 못 돌려 고꾸라진다 (내리막 0.9 m/s, 2026-09-26). 1 = 끔
-    yaw_kd=1.0,          # 회전: 좌우 바퀴 토크 차 = yaw_kd x (명령 - 실제 yaw rate) [N·m·s/rad]
+    yaw_kd=0.5,          # 회전: 좌우 바퀴 토크 차 = yaw_kd x (명령 - 실제 yaw rate) [N·m·s/rad]
     vmc_kp=60.0,         # 다리 가상 스프링 [N·m/rad, 관절] (바퀴에서 약 4.5 kN/m. 30 은 좌우 수평이 못 따라가 넘어짐). 자중은 피드포워드로 따로 받친다
     vmc_kd=1.0,          # 다리 가상 댐퍼 [N·m·s/rad]
-    roll_kp=3.0,         # roll 수평 P: 좌우 다리 길이 차 += roll_kp x 0.198 x sin(roll)
-    roll_ki=30.0,        # roll 수평 I [1/s]
+    turn_lean=1.0,       # 회전 중 안쪽 기울기 비율: roll 목표 = atan(turn_lean x v x wz / g) (Ascento lean 모드). 0 = 수평 유지
+                         #   (수평으로 붙잡으면 원심력에 바깥으로 넘어짐: 0.6 m/s + 1 rad/s 평지 33 % 넘어짐, 2026-09-26)
+    roll_kp=1.5,         # (3/30/0.6 은 센서 잡음 + 지연에서 다리가 흔들려 회전 중 바퀴가 뜸 -> 1.5/15/0.3, pv robust 52/56, 2026-09-26)         # roll 수평 P: 좌우 다리 길이 차 += roll_kp x 0.198 x sin(roll)
+    roll_ki=15.0,        # roll 수평 I [1/s]
     roll_rate_lpf_hz=8.0,  # roll D 항에 넣는 roll 각속도 저역통과 [Hz]. 필터 없이 D 0.6 + 지연 5 ms 면 다리가 발진 (3 mm/스텝 떨림 -> 넘어짐)
-    roll_kd=0.6,         # roll 각속도 D [s]: 좌우 다리 길이 차 += roll_kd x 0.198 x roll rate (흔들림 감쇠)
+    roll_kd=0.3,         # roll 각속도 D [s]: 좌우 다리 길이 차 += roll_kd x 0.198 x roll rate (흔들림 감쇠)
     land_sf_min=0.4,     # 접지 판정에 IMU 비력 > 이 값 [g] 도 요구 (0 = 안 봄). 자유낙하 중 다리 토크 오판 방지용
     roll_leak=0.5,       # roll 적분 누설 [1/s] (약 2 s 에 걸쳐 0 쪽으로 — 한계에 붙어 있지 않게)
     lift_detect_s=0.05,  # 두 다리 모두 무하중(고관절 토크 < contact_tau_min)이 이만큼 [s] -> 들림: 균형 끄고 바퀴만 멈춤, 적분 비움
@@ -80,7 +82,7 @@ TUNE = dict(
     v=0.4,               # 접근 속도 [m/s] (자동 시험용. 패드는 스틱). 바퀴 한계 18.85 rad/s x R 0.06 = 1.13 m/s, 웅크림·숙임 여유 두고 0.5~0.6
     jump_max_wz=1.0,     # 패드 점프는 회전 속도가 이보다 작을 때만 [rad/s] (돌면서 뛰면 공중에서 5.6 rad/s 로 돌며 착지 실패)
     jump_min_v=0.2,      # 패드 점프는 앞으로 이 속도 [m/s] 이상일 때만 (0.72 km/h). 제자리·후진 중 점프 막기
-    trigger=0.40,        # 바퀴 중심이 모서리 앞 이 거리에 오면 발동 [m] (자동 시험). LQR v 0.4: 이륙 -185 mm, 착지 +9 mm (2026-09-26)
+    trigger=0.34,        # 바퀴 중심이 모서리 앞 이 거리에 오면 발동 [m] (자동 시험). LQR v 0.4: 이륙 -185 mm, 착지 +9 mm (2026-09-26)
     # --- 1 retract: 웅크림 (정책이 균형) ---
     t_retract=0.30,      # [s]. 앞 75 % 동안 램프로 접고 나머지는 유지. 한 번에 접으면 바퀴가 들린다.
                          #   빨리 접으면 다리 링크 회전이 바퀴 관절 속도에 더해져 모터 한계 18.85 rad/s 에 붙는다
@@ -870,8 +872,8 @@ def episode():
                 soft_legs(False)
                 phase, t_phase = "drive", t
                 next_edge += 1
-            if pad is None and next_edge >= len(edges):
-                vx = 0.0                                           # 다 올라가면 멈춘다 (윗면 20–50 cm)
+            if pad is None and next_edge >= len(edges) and wx >= edges[-1] + 0.25:
+                vx = 0.0                                           # 마지막 모서리 0.25 m 지나 멈춘다 (모서리에 서면 굴러 내려옴)
         elif args.mode == "stance":
             vx = 0.0
             phase = "stand" if t < 1.0 else ("lean" if t < 2.0 else "lift")
@@ -938,7 +940,9 @@ def episode():
                 legs_act.stiffness[:] = args.vmc_kp; legs_act.damping[:] = args.vmc_kd
                 roll_pi.reset(0.0); x_err = 0.0; gov.update(i=0.0, ref=0.0, vf=0.0)
             elif phase == "drive":
-                rl = SENSE["roll"]
+                # 명령값으로 (측정 회전 속도는 흔들려서 기울기 목표까지 흔든다)
+                roll_ref = max(-math.radians(20), min(math.radians(20), math.atan(args.turn_lean * gov["ref"] * wz / 9.81)))
+                rl = SENSE["roll"] - roll_ref                   # 회전 중 안쪽으로 기울이기
                 airborne = float(tau.min()) < args.contact_tau_min      # 부호 있음: + = 다리를 펴며 몸을 받침 (뜨면 0 이나 반대 부호)
                 dlt = roll_pi(rl, dt, args.roll_kp, args.roll_ki, args.level_max,
                               freeze=airborne or abs(math.degrees(rl)) > args.roll_freeze_deg, leak=args.roll_leak,
