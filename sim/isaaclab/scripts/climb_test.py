@@ -36,7 +36,10 @@ TUNE = dict(
     lqr_r=1.0,           # LQR 입력 가중 (두 바퀴 토크 합 N·m)
     wheel_tau_max=7.0,   # 바퀴 토크 한계 [N·m] (AK45-10 피크)
     vmax_kmh=3.0,        # 최고 속도 [km/h] (사용자 2026-09-26). 스틱 끝 = 이 속도. 모터 한계는 4.1 km/h (18.85 rad/s x 0.06)
-    brake_gain=6.0,      # 실제 속도가 최고 속도를 넘으면(내리막 등) 목표 = 최고 - brake_gain x 초과분 -> 뒤로 젖히며 감속. 30 cm 경사 내리막: 2 면 3.4 km/h, 6 이면 3.1
+    brake_kp=1.0,        # 최고 속도 초과 브레이크 P: 한계 = 최고 - (kp x 초과 + 적분). 켜고 끄지 않고 부드럽게 조인다
+    brake_ki=4.0,        # 브레이크 I [1/s]: 내리막에서 필요한 제동량을 찾아가고, 속도가 내려가면 서서히 풀린다
+    speed_lpf_hz=3.0,    # 브레이크가 보는 속도 필터 [Hz]
+    accel_max=1.5,       # 목표 속도 변화율 한계 [m/s^2] (스틱·브레이크 모두)
     speed_guard=1,    # 바퀴 관절 속도가 모터 한계(18.85 rad/s)의 이 비율을 넘으면 목표 속도를 낮춰 뒤로 젖히며 감속 (푸시백).
                          #   한계에 붙으면 앞으로 기울 때 바퀴를 더 못 돌려 고꾸라진다 (내리막 0.9 m/s, 2026-09-26). 1 = 끔
     yaw_kd=1.0,          # 회전: 좌우 바퀴 토크 차 = yaw_kd x (명령 - 실제 yaw rate) [N·m·s/rad]
@@ -560,6 +563,7 @@ if args.record:
     rec_every = max(1, round(1.0 / (dt * 50)))
 
 
+gov = dict(vf=0.0, i=0.0, ref=0.0)
 PROF = dict(ctrl=0.0, step=0.0, hud=0.0, sleep=0.0, n=0)
 
 
@@ -574,6 +578,7 @@ def episode():
     phase, t_phase, next_edge, h0 = "drive", 0.0, 0, args.idle_h
     lvl = 0.0                                                  # 수평 유지 루프의 좌우 다리 길이 차 명령 hL - hR [m]
     x_err = 0.0                                                # LQR 진행거리 오차 (명령 속도 적분 대비)
+    gov.update(vf=0.0, i=0.0, ref=0.0)                         # 속도 제한·브레이크 상태
     roll_pi.reset()
     if args.ctrl == "lqr":
         _I = build_lqr()
@@ -676,13 +681,17 @@ def episode():
             ffF = 0.0
             if phase in ("drive", "retract", "extract", "land"):
                 th_ref = math.radians(args.retract_lean) if phase == "retract" else 0.0
-                vx = max(-args.vmax_kmh / 3.6, min(args.vmax_kmh / 3.6, vx))
-                v_ref = vx
-                over = abs(v_now) - args.vmax_kmh / 3.6
-                stats["brake"] = over > 0
-                if over > 0:                                       # 최고 속도 초과 (내리막) -> 브레이크: 한계보다 낮은 목표
-                    v_ref = math.copysign(max(0.0, args.vmax_kmh / 3.6 - args.brake_gain * over), v_now)
-                    x_err = 0.0
+                vm = args.vmax_kmh / 3.6
+                gov["vf"] += (1.0 - math.exp(-2 * math.pi * args.speed_lpf_hz * dt)) * (v_now - gov["vf"])
+                e = abs(gov["vf"]) - vm                            # 최고 속도 초과분 (필터한 속도)
+                gov["i"] = max(0.0, min(vm, gov["i"] + args.brake_ki * e * dt))
+                v_lim = max(0.0, vm - (args.brake_kp * max(e, 0.0) + gov["i"]))
+                stats["brake"] = v_lim < vm - 0.02
+                tgt = max(-v_lim, min(v_lim, vx))
+                gov["ref"] += max(-args.accel_max * dt, min(args.accel_max * dt, tgt - gov["ref"]))
+                v_ref = gov["ref"]
+                if abs(vx) > v_lim + 1e-3:
+                    x_err = 0.0                                    # 제한 중에는 뒤처진 거리를 쌓지 않는다 (풀릴 때 튀지 않게)
                 ww = float(robot.data.joint_vel[0, wheel_ids].abs().max()) / 18.85
                 if ww > args.speed_guard and args.speed_guard < 1.0:     # 푸시백: 지금 속도보다 낮은 목표 -> LQR 이 뒤로 젖혀 감속
                     cut = min(1.0, (ww - args.speed_guard) / (1.0 - args.speed_guard))
