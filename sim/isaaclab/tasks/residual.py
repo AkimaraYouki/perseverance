@@ -199,8 +199,11 @@ class ResidualCtrlAction(ActionTerm):
         # --- LQR + 회전 ---
         K = self._interp_K(l_p)
         tau_w = -(K[:, 0] * self.x_err + K[:, 1] * (v - v_ref) + K[:, 2] * th + K[:, 3] * thd)
-        wz_lim = torch.clamp((c.wheel_margin * w_max * cad.R_WHEEL - v.abs()) / HALF_TRACK, min=0.5)
-        wz = torch.maximum(torch.minimum(wz_c, wz_lim), -wz_lim)
+        if c.turn_limit:                   # 달릴 때 회전 한계 (창은 끔: 사람이 조심)
+            wz_lim = torch.clamp((c.wheel_margin * w_max * cad.R_WHEEL - v.abs()) / HALF_TRACK, min=0.5)
+            wz = torch.maximum(torch.minimum(wz_c, wz_lim), -wz_lim)
+        else:
+            wz = wz_c
         tau_y = c.yaw_kd * (wz - gyro[:, 2])
         tau = torch.stack([0.5 * tau_w - tau_y, 0.5 * tau_w + tau_y], 1)
         # --- 들림 / 착지 ---
@@ -288,6 +291,7 @@ class ResidualCtrlActionCfg(ActionTermCfg):
     wheel_tau_max: float = 7.0
     yaw_kd: float = 0.5
     wheel_margin: float = 0.7
+    turn_limit: bool = False
     speed_guard: float = 0.8
     vmax_kmh: float = 3.0
     vmax_motor_frac: float = 0.75

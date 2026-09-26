@@ -84,6 +84,14 @@ host_ip() {
   echo "$ips" | awk '{print $1}'
 }
 
+# Kit 파생 데이터 캐시 (DerivedDataCache) 에서 최근 N 분 안에 바뀐 큰 파일만 지운다 — 우리 실행이 만든 지형 메시 쿠킹 결과.
+# 2026-09-26: 촘촘한 지형 평가를 여러 번 돌리자 17 GB 까지 불어 디스크가 가득 참. 다시 만들어지는 캐시라 지워도 안전.
+ddc_clean() {
+  local d
+  d="$(ls -d "$HOME"/.cache/packman/chk/kit-kernel/*/cache/DerivedDataCache 2>/dev/null | head -1)"
+  [ -n "$d" ] && find "$d" -maxdepth 1 -type f -name 'largecachedata_*' -mmin -"${1:-60}" -delete 2>/dev/null
+  return 0
+}
 # Isaac 이 떠 있는가 — 프로세스 이름이 python3 이고 명령줄에 _isaaclab_launch 가 있는 것만 (odm 과 같다).
 # 셸(bash) 명령줄에 글자가 들어 있어도 안 걸린다.
 isaac_pids() {
@@ -346,6 +354,16 @@ jump)
   fi
   ;;
 
+harsh)
+  # pv harsh [--num_envs 4096 --harsh 1.5 --delay_ms 10 --level 9 --cmd straight --policy ...]
+  #   가혹 평가: GPU 로봇 수천 대, 실기 조건 전부 (잡음·바이어스·지연+지터·질량·무게중심·모터·마찰·밀기·무작위 명령) -> 지형별 성공률 + 95 % 신뢰구간
+  require_free_gpu
+  cd "$PROJ"; mkdir -p "$OUT/harsh"
+  "$IL" -p scripts/_isaaclab_launch.py scripts/harsh_eval.py "$@" > "$RUNLOG/harsh.log" 2>&1
+  grep -q '^\[가혹 평가 끝\]' "$RUNLOG/harsh.log" && sed -n '/^\[가혹 평가\]/,/^\[가혹 평가 끝\]/p' "$RUNLOG/harsh.log" | grep -v '평가 끝' || { echo "!! 실패 — $RUNLOG/harsh.log"; tail -15 "$RUNLOG/harsh.log"; }
+  ddc_clean 60
+  ;;
+
 robust)
   # pv robust [N] [--only flat_stop,ridges,...] [TUNE 덮어쓰기 --키 값 ...]
   #   강인성 시험 세트: 시나리오마다 로봇 N 대 (대마다 다른 모델 오차·잡음·지연) -> 통과율 표. 게인은 climb_test.py TUNE
@@ -358,6 +376,7 @@ robust)
     "$IL" -p scripts/_isaaclab_launch.py scripts/robust_suite.py --scenario "$sc" --n "$n" "${args[@]}" \
       --out "$OUT/robust/${stamp}_$sc.json" > "$RUNLOG/robust_$sc.log" 2>&1
     grep -E "^SUITE" "$RUNLOG/robust_$sc.log" || { echo "!! $sc 실패 — $RUNLOG/robust_$sc.log"; tail -5 "$RUNLOG/robust_$sc.log"; }
+    ddc_clean 30        # 이 실행이 만든 Kit 지형 캐시 정리 (지형 메시 쿠킹이 실행마다 수백 MB ~ GB 쌓임)
   done
   python3 - "$OUT/robust" "$stamp" <<'PY'
 import glob, json, os, statistics as st, sys
@@ -368,7 +387,8 @@ tot = [0, 0]
 for r in rows:
     R_ = r["rows"]; fall = sum(x["fell_t"] is not None for x in R_)
     p = [x["pitch95"] for x in R_ if x["pitch95"] is not None]; q = [x["roll95"] for x in R_ if x["roll95"] is not None]
-    print(f"{r['scenario']:12s}  {r['npass']:2d}/{r['n']:<2d}    {fall:2d}       {st.median(p):5.1f}        {st.median(q):5.1f}")
+    hh = r.get("tune", {}); tag = r["scenario"]
+    print(f"{tag:12s}  {r['npass']:2d}/{r['n']:<2d}    {fall:2d}       {st.median(p):5.1f}        {st.median(q):5.1f}")
     tot[0] += r["npass"]; tot[1] += r["n"]
 if tot[1]:
     print(f"합계          {tot[0]}/{tot[1]} ({100*tot[0]/tot[1]:.0f} %)   결과: {d}/{stamp}_*.json")
@@ -394,6 +414,7 @@ pv — PERSEVERANCE 휠-레그 원스톱 (odm 과 같은 문법)
   pv watch  [ver]                           진행 한 줄 (20 s 완주율, 지형 단계, std, ETA, 크래시)
   pv jump   [--record] [--obstacle stairs2] 점프 상태머신 시험 창 (튜닝: scripts/climb_test.py 의 TUNE, 저장하면 바로 반영)
   pv robust [N] [--only a,b] [--키 값]      강인성 시험 세트: 시나리오별 로봇 N 대 (모델 오차·잡음·지연) 통과율 표
+  pv harsh [--num_envs 4096 --harsh 1.5 --delay_ms 10 --level 9 --cmd straight]   가혹 평가: GPU 수천 대, 실기 조건 전부 -> 지형별 성공률 + 95 % 신뢰구간
   pv jump   --joystick                      패드로 몰고 Y 로 점프 (기본 2 단 턱). 점프마다 TUNE 다시 읽음
   pv play   [ver] [iter] [--joystick]       재생 — 이 PC 모니터에 네이티브 창
             ... --terrain rugged --level 7  지형 (flat gravel rugged rough wave_long wave_short slope_up slope_down bumps)

@@ -6,11 +6,12 @@
   bumps    0.2~0.5 m 크기 턱을 m^2 당 약 1.2 개, 높이 0.5h~h
   waves    2D 파도 (파장 1.2 x 1.6 m), 최고 h
   oneside  gravel 을 왼쪽 차선 (y > 가운데) 에만 -> 왼쪽 바퀴만 요철, 두 바퀴가 늘 다른 높이
+  lane_stones  stones 를 0.2 m (바퀴 간격) 차선 하나 건너 하나에만 (돌 중심만 가름, 돌 모양은 그대로 -> 자른 벽 없음)
 출발 앞 i0 칸까지 평지, 그 뒤 0.5 m 에 걸쳐 높이를 0 -> 1 배로 (갑자기 h 높이 벽이 되지 않게).
 """
 import numpy as np
 
-KINDS = ("stones", "gravel", "bumps", "waves", "oneside", "oneside_stones")
+KINDS = ("stones", "gravel", "bumps", "waves", "oneside", "oneside_stones", "lane_stones")
 
 
 def make_heights(kind: str, nx: int, ny: int, hs: float, h: float, i0: int, seed: int = 0) -> np.ndarray:
@@ -18,10 +19,12 @@ def make_heights(kind: str, nx: int, ny: int, hs: float, h: float, i0: int, seed
     x = np.arange(nx)[:, None] * hs
     y = np.arange(ny)[None, :] * hs
     z = np.zeros((nx, ny))
-    if kind in ("stones", "oneside_stones"):
+    if kind in ("stones", "oneside_stones", "lane_stones"):
         n = int(nx * ny * hs * hs * 25)
         for _ in range(n):
             cx, cy = rng.uniform(0, nx * hs), rng.uniform(0, ny * hs)
+            if kind == "lane_stones" and int(cy // 0.2) % 2:
+                continue
             hh, sg = rng.uniform(0.5 * h, h), rng.uniform(1.0, 1.5) * h
             r = int(3 * sg / hs) + 1
             ix, iy = int(cx / hs), int(cy / hs)
