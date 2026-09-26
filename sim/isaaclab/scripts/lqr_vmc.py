@@ -63,7 +63,7 @@ class RollPI:
     def reset(self, diff=0.0):
         self.i = diff
 
-    def __call__(self, roll, dt, kp, ki, lim, freeze=False, leak=0.0):
+    def __call__(self, roll, dt, kp, ki, lim, freeze=False, leak=0.0, rate=0.0, kd=0.0):
         """freeze: 적분 멈춤 (한 바퀴가 떠서 다리를 움직여도 roll 이 안 바뀔 때 — 안 멈추면 적분이 한계까지 차서
         착지 순간 반대로 넘기고, 반대 바퀴가 뜨며 번갈아 '뜀박질' 한다, 2026-09-26 패드 기록).
         leak [1/s]: 적분을 0 쪽으로 천천히 새게 해 한계에 붙어 있지 않게."""
@@ -71,4 +71,4 @@ class RollPI:
         if not freeze:
             self.i += ki * e * dt
         self.i = float(np.clip(self.i * (1.0 - leak * dt), -lim, lim))
-        return float(np.clip(self.i + kp * e, -lim, lim))
+        return float(np.clip(self.i + kp * e + kd * self.track * rate, -lim, lim))   # kd: roll 각속도 감쇠

@@ -49,6 +49,8 @@ TUNE = dict(
     vmc_kd=1.0,          # 다리 가상 댐퍼 [N·m·s/rad]
     roll_kp=3.0,         # roll 수평 P: 좌우 다리 길이 차 += roll_kp x 0.198 x sin(roll)
     roll_ki=30.0,        # roll 수평 I [1/s]
+    roll_kd=0.6,         # roll 각속도 D [s]: 좌우 다리 길이 차 += roll_kd x 0.198 x roll rate (흔들림 감쇠)
+    land_sf_min=0.4,     # 접지 판정에 IMU 비력 > 이 값 [g] 도 요구 (0 = 안 봄). 자유낙하 중 다리 토크 오판 방지용
     roll_leak=0.5,       # roll 적분 누설 [1/s] (약 2 s 에 걸쳐 0 쪽으로 — 한계에 붙어 있지 않게)
     lift_detect_s=0.05,  # 두 다리 모두 무하중(고관절 토크 < contact_tau_min)이 이만큼 [s] -> 들림: 균형 끄고 바퀴만 멈춤, 적분 비움
     land_detect_s=0.02,  # 들린 뒤 한쪽 다리라도 하중이 이만큼 [s] -> 내려놓음: 균형 즉시 재개 (Ascento 처럼 접지 즉시.
@@ -786,7 +788,9 @@ def episode():
                 act[0, 2] = max(-1.0, min(1.0, (0.5 * tau_w - tau_y) / args.wheel_tau_max))
                 act[0, 3] = max(-1.0, min(1.0, (0.5 * tau_w + tau_y) / args.wheel_tau_max))
             unl = float(tau.abs().max()) < args.contact_tau_min       # 두 다리 모두 무하중
-            ldd = float(tau.abs().max()) >= args.contact_tau_min      # 한쪽 다리라도 하중 (접지)
+            sf = float(torch.norm(d.body_lin_acc_w[0, 0] + torch.tensor([0.0, 0.0, 9.81], device=dev))) / 9.81
+            ldd = float(tau.abs().max()) >= args.contact_tau_min and sf > args.land_sf_min   # 한쪽 다리라도 하중 (+ 자유낙하 아님)
+            #   (공중에서 다리가 움직이는 토크를 접지로 오판하지 않게 — 스폰 낙하 0.14 s 에 오판했음)
             if phase == "drive" and not lift["on"]:
                 lift["t_un"] = lift["t_un"] + dt if unl else 0.0
                 if lift["t_un"] >= args.lift_detect_s:
@@ -811,7 +815,8 @@ def episode():
                 rl = math.asin(max(-1.0, min(1.0, float(d.projected_gravity_b[0, 1]))))
                 airborne = float(tau.abs().min()) < args.contact_tau_min
                 dlt = roll_pi(rl, dt, args.roll_kp, args.roll_ki, args.level_max,
-                              freeze=airborne or abs(math.degrees(rl)) > args.roll_freeze_deg, leak=args.roll_leak)
+                              freeze=airborne or abs(math.degrees(rl)) > args.roll_freeze_deg, leak=args.roll_leak,
+                              rate=-float(d.root_ang_vel_b[0, 0]), kd=args.roll_kd)
                 tl = min(H_MAX, max(H_MIN, args.idle_h + 0.5 * dlt)); tr = min(H_MAX, max(H_MIN, args.idle_h - 0.5 * dlt))
                 act[0, 0], act[0, 1] = (tl - h_ref) / 0.12, (tr - h_ref) / 0.12
                 legs_act.stiffness[:] = args.vmc_kp; legs_act.damping[:] = args.vmc_kd
