@@ -125,8 +125,9 @@ for k, v in TUNE.items():
     else:
         ap.add_argument(f"--{k}", type=float, default=v)
 ap.add_argument("--joystick", nargs="?", const="/dev/input/js0", default=None, metavar="DEV",
-                help="패드로 조종: 왼스틱 세로 전후, 오른스틱 가로 회전, Y 점프, A 정지, START 처음으로, 십자키/LB/RB/BACK 카메라")
+                help="패드로 조종: 왼스틱 세로 전후, 오른스틱 가로 회전, Y/LT/RT 점프, A 정지, START 처음으로, 십자키/LB/RB/BACK 카메라")
 ap.add_argument("--pad", choices=("auto", "classic", "modern"), default="classic")
+ap.add_argument("--stop_at", type=float, default=None, help="자동 시험: 이 시각 [s] 에 속도 명령 0 (달리다 멈추기)")
 ap.add_argument("--record", default=None, metavar="DIR")
 ap.add_argument("--out", default=None)
 AppLauncher.add_app_launcher_args(ap)
@@ -596,14 +597,15 @@ def episode():
         h_now = cad.leg_state(robot)[0][0]                         # (2,) 다리 길이
         tau = d.applied_torque[0, leg_ids] * hip_sign
         # --- 상태머신 --------------------------------------------------------------------------------
-        vx, wz, y_edge = args.v, 0.0, False
+        vx, wz, y_edge = (0.0 if args.stop_at is not None and t >= args.stop_at else args.v), 0.0, False
         if args.heading_kp > 0:
             wz = max(-1.0, min(1.0, -args.heading_kp * yaw_of(robot.data.root_quat_w[0])))
         if pad is not None:                                        # 패드: 속도·회전·높이는 사람이, 점프는 Y
             pad.poll()
             _vm = args.vmax_kmh / 3.6
             vx, wz, dh, estop, reset_h = J.command_from_gamepad(pad, (-_vm, _vm), rng.ang_vel_z)
-            y, back = pad.button(BTN_Y), pad.button(BTN_START)
+            trig = max(J.trigger(pad, J.AXIS_RT), J.trigger(pad, J.lt_axis(pad)))
+            y, back = pad.button(BTN_Y) or trig > 0.5, pad.button(BTN_START)   # 점프: Y, RT, LT 어느 것이든
             y_edge, y_prev = y and not y_prev, y
             if k % int(2.0 / dt) == 0 and k > 0 and phase == "drive":
                 reload_tune()                                      # 패드: 2 s 마다 파일 TUNE 반영 (점프 중엔 안 함)
