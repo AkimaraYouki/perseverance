@@ -23,3 +23,13 @@
       pv jump --joystick --obstacle cad --cad_file ~/perseverance/sim/obstacles/course.stl --idle_h 0.1365
 
 r3 균형 정책 0.5 m/s 직진: 삼각형길 30 cm 들어가서 넘어짐 (8 cm 는 학습 범위 밖 — 학습 지형 ridges 는 1~6 cm).
+
+직선 주행 (방향 유지 wz = -2 yaw, 0.4 m/s, IDLE 0.1365, r3) — 다리 강성별:
+
+| leg kp/kd | 결과 | 좌우 보상 비율 | roll 95% | pitch 95% | 몸 수직가속 RMS |
+|---|---|---|---|---|---|
+| 60 / 1.5 (학습값) | 삼각형길 23 cm 에서 넘어짐 | 0.26 | 17 deg | 32 deg | 10.7 m/s2 |
+| 30 / 1.0 | 5.49 m 까지 안 넘어짐 (yaw 28 deg 까지 틀어짐) | 0.48 | 15 deg | 12 deg | 4.5 m/s2 |
+| 20 / 0.8 | 80 cm 에서 넘어짐 | 0.49 | 17 deg | 26 deg | 3.2 m/s2 |
+
+결론: r3 는 8 cm 엇갈린 삼각형길을 직선으로 못 넘는다 (학습 지형 밖). 재학습 필요.

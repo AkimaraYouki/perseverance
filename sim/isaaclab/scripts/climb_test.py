@@ -31,12 +31,15 @@ from isaaclab.app import AppLauncher
 # `pv jump` 로 창을 띄워 본다. 한 번만 바꿔 보려면 명령줄 `--이름 값` (예: pv jump --trigger 0.35)
 TUNE = dict(
     # --- 다리 높이: 항상 자동 모드 (정책이 외란·지형에 맞춰 정한다). idle_h 는 자동 모드 공칭 = IDLE ---
+    leg_kp=60.0,         # 주행 중 고관절 P [N·m/rad] (학습값 60 = 바퀴에서 4.5 kN/m, 정하중 처짐 4 mm = 딱딱).
+    leg_kd=1.5,          # 주행 중 고관절 D [N·m·s/rad]. 낮추면 서스펜션처럼 먼저 받아 준다 (실기 MIT kp/kd 그대로)
     idle_h=0.20,         # [m, 다리 관절값, 바퀴 반지름 제외 — 바퀴 포함 0.26]. 사용자 지정 0.20 (압축 77.5 mm ≈ 8.9 J, 신장 42.5 mm). 행정 가운데는 0.1825 (2026-09-26 계산, leg_map + URDF 4.03 kg):
                          #   정하중 토크는 행정 전체 2.1~2.3 N·m (정격 3 아래) 라 제약이 아니다.
                          #   9 N·m 로 바닥까지 눌리며 흡수 가능한 에너지 = 약 1.15 J / 압축 10 mm.
                          #   착지 2.9 J (1.2 m/s), 8 cm 낙하 3.2 J -> 0.1365(CAD 자세) 는 1.6 J 라 바닥을 친다.
                          #   0.1825 = 6.8 J (2.2 배 여유) + 신장 60 mm (구덩이). ※ r3 정책은 자동 공칭 0.1365 로 학습됐다
     # --- 접근·발동 ---
+    heading_kp=2.0,      # 자동 시험 방향 유지: wz = -heading_kp x yaw [1/s] (정책이 yaw 로 흘러서 직선 주행이 안 된다). 0 = 끔. 패드는 사람이 조향
     v=0.5,               # 접근 속도 [m/s] (자동 시험용. 패드는 스틱). 바퀴 한계 18.85 rad/s x R 0.06 = 1.13 m/s, 웅크림·숙임 여유 두고 0.5~0.6
     trigger=0.32,        # 바퀴 중심이 모서리 앞 이 거리에 오면 발동 [m] (자동 시험). v 0.5 에서 이륙 -116 mm, 착지 +47 mm (2026-09-26)
     # --- 1 retract: 웅크림 (정책이 균형) ---
@@ -266,6 +269,7 @@ scale0 = wheel_term.cfg.torque_scale
 wsign = torch.tensor(cad.WHEEL_SIGN, device=dev, dtype=torch.float32)   # 관절축 -> +y 부호 (기록용). 행동은 이미 +y 규약
 legs_act = robot.actuators["legs"]
 kp0, kd0 = legs_act.stiffness.clone(), legs_act.damping.clone()
+kp0[:], kd0[:] = args.leg_kp, args.leg_kd
 
 
 def yaw_of(q):
@@ -400,7 +404,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
         f"LAST JUMP {stats['last']}",
         f"JUMPS {stats['jumps']}   FALLS {stats['falls']}",
         "",
-        f"TUNE  trigger {args.trigger:.2f}  v {args.v:.2f}",
+        f"TUNE  leg_kp {args.leg_kp:.0f}  leg_kd {args.leg_kd:.1f}  idle {args.idle_h*1000:.1f}  trigger {args.trigger:.2f}",
         f"      extract_pitch {args.extract_pitch:+.0f}  air_pitch {args.air_pitch:+.0f}",
         f"      air_kp {args.air_kp:.0f}  kd {args.air_kd:.1f}  land_kp {args.land_kp:.0f}  h_land {args.h_land:.3f}",
         "",
@@ -435,6 +439,7 @@ def reload_tune():
         print(f"[튜닝] {k}: {getattr(args, k)} -> {v}", flush=True)
         setattr(args, k, v)
     cmd.cfg.auto_height = cmd.cfg.default_height = args.idle_h
+    kp0[:], kd0[:] = args.leg_kp, args.leg_kd
 
 
 dt = env.step_dt
@@ -456,6 +461,7 @@ def episode():
     global wheel_y0
     wheel_y0 = [round(float(v), 3) for v in robot.data.body_pos_w[0, wheel_bodies, 1]]
     cmd.cfg.auto_height = cmd.cfg.default_height = args.idle_h
+    kp0[:], kd0[:] = args.leg_kp, args.leg_kd
     phase, t_phase, next_edge, h0 = "drive", 0.0, 0, args.idle_h
     tipped = False
     log, jumps = [], []
@@ -473,11 +479,16 @@ def episode():
         tau = d.applied_torque[0, leg_ids] * hip_sign
         # --- 상태머신 --------------------------------------------------------------------------------
         vx, wz, y_edge = args.v, 0.0, False
+        if args.heading_kp > 0:
+            wz = max(-1.0, min(1.0, -args.heading_kp * yaw_of(robot.data.root_quat_w[0])))
         if pad is not None:                                        # 패드: 속도·회전·높이는 사람이, 점프는 Y
             pad.poll()
             vx, wz, dh, estop, reset_h = J.command_from_gamepad(pad, rng.lin_vel_x, rng.ang_vel_z)
             y, back = pad.button(BTN_Y), pad.button(BTN_START)
             y_edge, y_prev = y and not y_prev, y
+            if k % int(2.0 / dt) == 0 and k > 0 and phase == "drive":
+                reload_tune()                                      # 패드: 2 s 마다 파일 TUNE 반영 (점프 중엔 안 함)
+                soft_legs(False)
             if back and not back_prev:
                 print("[처음으로]", flush=True)
                 return "restart"
