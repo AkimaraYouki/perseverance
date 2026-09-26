@@ -42,6 +42,7 @@ ap.add_argument("--scenario", choices=SCEN, required=True)
 ap.add_argument("--n", type=int, default=8)
 ap.add_argument("--seed", type=int, default=100, help="로봇 i 의 무작위 시드 = seed + i")
 ap.add_argument("--out", default=None)
+ap.add_argument("--policy", default=None, help="잔차 RL 정책 (model_N.pt). 주면 학습 환경의 제어기(residual.py) + 정책으로 돈다 (점프 제외)")
 for k, v in TUNE.items():
     if isinstance(v, bool):
         ap.add_argument(f"--{k}", type=lambda x: x.lower() in ("1", "true", "on", "yes"), default=v)
@@ -84,7 +85,9 @@ spec = dict(
 )[SC]
 
 # --- 장면 -------------------------------------------------------------------------------------------
-TASK = "Isaac-WheeledBiped-CAD-Rough-Play-v0"
+TASK = "Isaac-WheeledBiped-CAD-Residual-Play-v0" if args.policy else "Isaac-WheeledBiped-CAD-Rough-Play-v0"
+if args.policy and SC == "jump":
+    raise SystemExit("정책 모드는 점프 제외 (점프는 상태머신)")
 cfg = parse_env_cfg(TASK, device="cpu", num_envs=N, use_fabric=True)
 cfg.scene.env_spacing = 16.0
 cfg.scene.terrain = TerrainImporterCfg(
@@ -103,10 +106,15 @@ for grp in (cfg.rewards, cfg.curriculum, cfg.terminations):
     for n_ in list(vars(grp)):
         if not n_.startswith("_"):
             setattr(grp, n_, None)
-if hasattr(cfg.observations, "critic"):
+if hasattr(cfg.observations, "critic") and not args.policy:
     cfg.observations.critic = None
-if hasattr(cfg.scene, "critic_scanner"):
+if hasattr(cfg.scene, "critic_scanner") and not args.policy:
     cfg.scene.critic_scanner = None
+if args.policy:                                                        # 학습 환경 제어기에 이 시험의 조건을 맞춘다
+    for k_ in ("imu_tilt_noise_deg", "imu_tilt_bias_deg", "imu_gyro_noise", "enc_vel_noise", "delay_ms", "dr_motor"):
+        setattr(cfg.actions.ctrl, k_, getattr(P, k_))
+    cfg.actions.ctrl.delay_extra_prob = P.jitter_ms / 5.0
+    cfg.actions.ctrl.dr_motor = 0.0                                   # 모터 오차는 이 시험이 로봇별로 준다 (아래)
 cfg.decimation = max(1, round(P.physics_hz / 200.0))
 cfg.sim.dt = 1.0 / (200.0 * cfg.decimation)
 if "cad" in spec:
@@ -131,8 +139,21 @@ robot = env.scene["robot"]
 cmd = env.command_manager.get_term("base_velocity")
 cmd.pin(True)
 cmd.cfg.auto_height = cmd.cfg.default_height = P.idle_h
-wheel_term = env.action_manager.get_term("wheels")
-wheel_term.cfg.torque_scale = P.wheel_tau_max                        # 모든 바퀴 행동 = 토크 / wheel_tau_max
+if not args.policy:
+    wheel_term = env.action_manager.get_term("wheels")
+    wheel_term.cfg.torque_scale = P.wheel_tau_max                    # 모든 바퀴 행동 = 토크 / wheel_tau_max
+pol = None
+if args.policy:
+    sd_ = torch.load(args.policy, map_location=dev, weights_only=False)["model_state_dict"]
+    ks_ = sorted({k.split(".")[1] for k in sd_ if k.startswith("actor.")}, key=int)
+    layers_ = []
+    for j_, k_ in enumerate(ks_):
+        w_, b_ = sd_[f"actor.{k_}.weight"], sd_[f"actor.{k_}.bias"]
+        lin_ = torch.nn.Linear(w_.shape[1], w_.shape[0]).to(dev); lin_.weight.data[:] = w_; lin_.bias.data[:] = b_
+        layers_ += [lin_] + ([torch.nn.ELU()] if j_ < len(ks_) - 1 else [])
+    mlp_ = torch.nn.Sequential(*layers_).eval()
+    mu_, sg_ = sd_.get("actor_obs_normalizer._mean"), sd_.get("actor_obs_normalizer._std")
+    pol = (lambda o: mlp_((o - mu_) / (sg_ + 1e-2))) if mu_ is not None else mlp_
 leg_ids = robot.find_joints(cad.LEG_JOINTS, preserve_order=True)[0]
 wheel_ids = robot.find_joints(cad.WHEEL_JOINTS, preserve_order=True)[0]
 wheel_bodies = robot.find_bodies(["l_wheel", "r_wheel"], preserve_order=True)[0]
@@ -175,6 +196,10 @@ if hasattr(wheels_act, "_vel_at_effort_lim"):
     wheels_act._vel_at_effort_lim = wheels_act.velocity_limit * (1 + wheels_act.effort_limit / wheels_act._saturation_effort)
 mass_true = masses.to(dev)
 motor_est = [dr[i]["wheel_motor"] * (1.0 + rngs[i].normal(0, 0.02)) for i in range(N)]   # 전압으로 추정한 모터 한계 (오차 2 %)
+if args.policy:                                                        # 학습 환경 제어기에도 같은 모터 오차·추정
+    term_ = env.action_manager.get_term("ctrl")
+    term_.motor_true[:] = torch.tensor([x["wheel_motor"] for x in dr], device=dev)
+    term_.motor_est[:] = torch.tensor(motor_est, device=dev, dtype=torch.float32)
 ctrls = [wbctrl.WBController(P, lqr, m_pend, seed=args.seed + 1000 + i, edges=spec.get("edges", ())) for i in range(N)]
 
 
@@ -218,8 +243,21 @@ with torch.inference_mode():
         h_, tau_, wj_, wabs_, thk_, lp_, tht_, vt_, sf_, psi_ = map(to, (h, tau, wj, wabs, th_kin, l_p, th_true, v_true, sf, psi))
 
         vx = 0.0 if ("stop_at" in spec and t >= spec["stop_at"]) else spec["v"]
+        if pol is not None:                                           # 정책 모드: 명령만 주고 제어는 학습 환경 액션 항이
+            vxs = torch.tensor([0.0 if ("stop_x" in spec and wx[i] >= spec["stop_x"]) else vx for i in range(N)], device=dev)
+            if "slalom" in spec:
+                wzs = torch.full((N,), spec["slalom"] * (1.0 if int(t // 2.0) % 2 == 0 else -1.0), device=dev)
+            else:
+                wzs = torch.clamp(-P.heading_kp * psi, -1.0, 1.0)
+            cmd.set(vxs, wzs, torch.full((N,), P.idle_h, device=dev), mode=torch.ones(N, device=dev))
+            for i in range(N):
+                if fell_t[i] is None:
+                    rec[i]["pitch"].append(math.degrees(math.asin(max(-1.0, min(1.0, float(g_b[i][0]))))))
+                    rec[i]["roll"].append(math.degrees(math.asin(max(-1.0, min(1.0, float(g_b[i][1]))))))
+                    rec[i]["v"].append(float(vt_[i])); xmax[i] = max(xmax[i], wx[i])
+            act_t = pol(obs["policy"])
         acts = np.zeros((N, 4)); kps = np.zeros((N, 2)); kds = np.zeros((N, 2)); ff = np.zeros(N)
-        for i in range(N):
+        for i in (range(N) if pol is None else ()):
             if fell_t[i] is not None:
                 continue
             vx_i = 0.0 if ("stop_x" in spec and wx[i] >= spec["stop_x"]) else vx
@@ -236,13 +274,14 @@ with torch.inference_mode():
             rec[i]["pitch"].append(math.degrees(info["pitch"])); rec[i]["roll"].append(math.degrees(info["roll"]))
             rec[i]["v"].append(float(vt_[i]))
             xmax[i] = max(xmax[i], wx[i])
-        cmd.set(torch.full((N,), float(vx), device=dev), torch.zeros(N, device=dev), torch.full((N,), P.idle_h, device=dev),
-                mode=torch.ones(N, device=dev))
-        legs_act.stiffness[:] = torch.tensor(kps, device=dev, dtype=torch.float32)
-        legs_act.damping[:] = torch.tensor(kds, device=dev, dtype=torch.float32)
-        M = d.joint_pos[:, leg_ids]
-        robot.set_joint_effort_target(hip_sign * torch.tensor(ff, device=dev, dtype=torch.float32)[:, None]
-                                      * cad.dh_from_M(M).to(torch.float32), joint_ids=leg_ids)
+        if pol is None:
+            cmd.set(torch.full((N,), float(vx), device=dev), torch.zeros(N, device=dev), torch.full((N,), P.idle_h, device=dev),
+                    mode=torch.ones(N, device=dev))
+            legs_act.stiffness[:] = torch.tensor(kps, device=dev, dtype=torch.float32)
+            legs_act.damping[:] = torch.tensor(kds, device=dev, dtype=torch.float32)
+            M = d.joint_pos[:, leg_ids]
+            robot.set_joint_effort_target(hip_sign * torch.tensor(ff, device=dev, dtype=torch.float32)[:, None]
+                                          * cad.dh_from_M(M).to(torch.float32), joint_ids=leg_ids)
         if "hand" in spec:                                          # 가상 손 (전 로봇 동시)
             tg, tr, roll_deg = spec["hand"]
             if tg <= t < tr:
@@ -260,7 +299,7 @@ with torch.inference_mode():
             elif t >= tr and grab is not None:
                 robot.set_external_force_and_torque(torch.zeros(N, 1, 3, device=dev), torch.zeros(N, 1, 3, device=dev), body_ids=[0])
                 grab = None
-        obs, _, _, _, _ = env.step(torch.tensor(acts, device=dev, dtype=torch.float32))
+        obs, _, _, _, _ = env.step(act_t if pol is not None else torch.tensor(acts, device=dev, dtype=torch.float32))
         gz = robot.data.projected_gravity_b[:, 2].cpu().numpy()
         for i in range(N):                                          # 넘어짐 = 50 deg 넘게 기욺
             if fell_t[i] is None and math.degrees(math.acos(max(-1.0, min(1.0, -float(gz[i]))))) > 50:
@@ -286,7 +325,7 @@ for i in range(N):
     rows.append(dict(i=i, ok=bool(ok), fell_t=fell_t[i], xmax=round(float(xmax[i]), 2), dr=dr[i],
                      pitch95=round(float(np.percentile(pr, 95)), 1) if len(pr) else None,
                      roll95=round(float(np.percentile(rr, 95)), 1) if len(rr) else None,
-                     jumps=ctrls[i].jumps))
+                     jumps=ctrls[i].jumps if pol is None else []))
 npass = sum(r["ok"] for r in rows)
 wall = time.time() - t0
 print(f"\n[{SC}] 통과 {npass}/{N}   (시뮬 {spec['sec']:.0f} s, 실제 {wall:.0f} s)", flush=True)
