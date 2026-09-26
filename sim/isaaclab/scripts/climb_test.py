@@ -771,7 +771,8 @@ if args.record:
         """화면에 시뮬 시계·속도·지형 (영상이 실제 시간과 같은 속도로 재생됨을 확인하는 용도)."""
         im = Image.fromarray(np.ascontiguousarray(fr)); dr = ImageDraw.Draw(im)
         lines = [f"{t:6.2f} s   실제 시간 1배속", f"{abs(v)*3.6:4.1f} km/h   {_label}"]
-        dr.rectangle([8, 8, 470, 84], fill=(0, 0, 0))
+        w_ = max(dr.textlength(s_, font=_font) for s_ in lines)            # 글자 길이에 맞춘 검은 상자
+        dr.rectangle([8, 8, int(28 + w_), 84], fill=(0, 0, 0))
         for i_, s_ in enumerate(lines):
             dr.text((18, 14 + 34 * i_), s_, font=_font, fill=(255, 255, 255))
         return np.asarray(im)
