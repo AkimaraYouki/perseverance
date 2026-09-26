@@ -343,6 +343,35 @@ jump)
   fi
   ;;
 
+robust)
+  # pv robust [N] [--only flat_stop,ridges,...] [TUNE 덮어쓰기 --키 값 ...]
+  #   강인성 시험 세트: 시나리오마다 로봇 N 대 (대마다 다른 모델 오차·잡음·지연) -> 통과율 표. 게인은 climb_test.py TUNE
+  n=8; if [[ "${1:-}" =~ ^[0-9]+$ ]]; then n="$1"; shift; fi
+  only="flat_stop,ridges,ramp,jump,hand10,hand20"; args=()
+  while [ $# -gt 0 ]; do if [ "$1" = "--only" ]; then only="$2"; shift 2; else args+=("$1"); shift; fi; done
+  require_free_gpu
+  cd "$PROJ"; mkdir -p "$OUT/robust"; stamp=$(date +%H%M%S)
+  for sc in ${only//,/ }; do
+    "$IL" -p scripts/_isaaclab_launch.py scripts/robust_suite.py --scenario "$sc" --n "$n" "${args[@]}" \
+      --out "$OUT/robust/${stamp}_$sc.json" > "$RUNLOG/robust_$sc.log" 2>&1
+    grep -E "^SUITE" "$RUNLOG/robust_$sc.log" || { echo "!! $sc 실패 — $RUNLOG/robust_$sc.log"; tail -5 "$RUNLOG/robust_$sc.log"; }
+  done
+  python3 - "$OUT/robust" "$stamp" <<'PY'
+import glob, json, os, statistics as st, sys
+d, stamp = sys.argv[1], sys.argv[2]
+rows = [json.load(open(f)) for f in sorted(glob.glob(os.path.join(d, f"{stamp}_*.json")))]
+print("\n시나리오      통과     넘어짐   pitch95 중앙  roll95 중앙")
+tot = [0, 0]
+for r in rows:
+    R_ = r["rows"]; fall = sum(x["fell_t"] is not None for x in R_)
+    p = [x["pitch95"] for x in R_ if x["pitch95"] is not None]; q = [x["roll95"] for x in R_ if x["roll95"] is not None]
+    print(f"{r['scenario']:12s}  {r['npass']:2d}/{r['n']:<2d}    {fall:2d}       {st.median(p):5.1f}        {st.median(q):5.1f}")
+    tot[0] += r["npass"]; tot[1] += r["n"]
+if tot[1]:
+    print(f"합계          {tot[0]}/{tot[1]} ({100*tot[0]/tot[1]:.0f} %)   결과: {d}/{stamp}_*.json")
+PY
+  ;;
+
 test)
   cd "$PROJ"; fail=0
   for t in tests/test_*.py; do
@@ -361,6 +390,7 @@ pv — PERSEVERANCE 휠-레그 원스톱 (odm 과 같은 문법)
             ... --from <ver> [iter]         다른 버전 체크포인트에서 새 버전으로 (예: pv train r4 1500 4096 --from r3)
   pv watch  [ver]                           진행 한 줄 (20 s 완주율, 지형 단계, std, ETA, 크래시)
   pv jump   [--record] [--obstacle stairs2] 점프 상태머신 시험 창 (튜닝: scripts/climb_test.py 의 TUNE, 저장하면 바로 반영)
+  pv robust [N] [--only a,b] [--키 값]      강인성 시험 세트: 시나리오별 로봇 N 대 (모델 오차·잡음·지연) 통과율 표
   pv jump   --joystick                      패드로 몰고 Y 로 점프 (기본 2 단 턱). 점프마다 TUNE 다시 읽음
   pv play   [ver] [iter] [--joystick]       재생 — 이 PC 모니터에 네이티브 창
             ... --terrain rugged --level 7  지형 (flat gravel rugged rough wave_long wave_short slope_up slope_down bumps)
