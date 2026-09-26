@@ -25,7 +25,9 @@ task_of() {
     flat) echo "Isaac-WheeledBiped-Balance-v0" ;;
     cad)  echo "Isaac-WheeledBiped-CAD-v0" ;;
     r2)   echo "LEGACY" ;;
-    j[0-9]*) echo "Isaac-WheeledBiped-CAD-JumpSkill-v0" ;;   # 점프 전용 정책 (B), 관측 26
+    j1) echo "Isaac-WheeledBiped-CAD-JumpSkill-v0" ;;   # 점프 전용 정책 (B), 관측 26
+    j2) echo "Isaac-WheeledBiped-CAD-JumpSkill-v1" ;;   # + 올라선 보상, 올라서야 단계 상승
+    j[0-9]*) echo "Isaac-WheeledBiped-CAD-JumpSkill-v2" ;;   # + 연속 점프 (쿨다운 0.6 s)
     r3|r4|r5) echo "Isaac-WheeledBiped-CAD-Rough-v0" ;;
     r6) echo "Isaac-WheeledBiped-CAD-Jump-v0" ;;   # 점프 + 대회 장애물, 관측 26
     r[7-9]*|r[1-9][0-9]*) echo "Isaac-WheeledBiped-CAD-Jump-v1" ;;   # + 이륙 유도 보상
@@ -194,6 +196,7 @@ play)
   case "$ver" in
     flat) base=() ;;
     cad)  base=(--cad) ;;
+    j*|r[6-9]*) base=(--jump --terrain stairs2_up --level 8 --x0 2.8 --mode manual --vx 0.5) ;;   # Y = 점프
     *)    base=(--rough --terrain gravel --level 5 --mode auto) ;;   # 뒤에 준 인자가 덮어쓴다
   esac
   require_free_gpu
@@ -315,6 +318,27 @@ list)
   done
   ;;
 
+jump)
+  # pv jump [--record] [climb_test.py 인자...]   Ascento 식 점프 상태머신 시험 (강화학습 아님)
+  #   튜닝 값은 scripts/climb_test.py 맨 위 TUNE 블록. 창 모드는 계속 반복하고, 파일을 저장하면 다음 시도부터 적용된다
+  require_free_gpu
+  cd "$PROJ"
+  args=(); rec=0
+  for a in "$@"; do [ "$a" = "--record" ] && rec=1 || args+=("$a"); done
+  if [ "$rec" = 1 ]; then
+    dir="$OUT/video/climb"; mkdir -p "$dir"
+    echo "녹화 (헤드리스): $dir"
+    "$IL" -p scripts/_isaaclab_launch.py scripts/climb_test.py "${args[@]}" --record "$dir" --headless > "$RUNLOG/jump.log" 2>&1
+    grep -E "^#|^저장|^영상" "$RUNLOG/jump.log" || { echo "!! 실패 — $RUNLOG/jump.log" >&2; tail -15 "$RUNLOG/jump.log"; exit 1; }
+  else
+    export DISPLAY="$(desktop_display)"
+    setsid nohup "$IL" -p scripts/_isaaclab_launch.py scripts/climb_test.py "${args[@]}" > "$RUNLOG/jump.log" 2>&1 < /dev/null &
+    echo "점프 시험 창 (DISPLAY $DISPLAY, 부팅 1~2분). 반복 재생, 시도마다 결과 한 줄:"
+    echo "  tail -f $RUNLOG/jump.log | grep -E '^#|튜닝'"
+    echo "  튜닝: $PROJ/scripts/climb_test.py 의 TUNE 을 고치고 저장 -> 다음 시도부터 적용 (장애물·고관절 값만 재시작 필요)"
+  fi
+  ;;
+
 test)
   cd "$PROJ"; fail=0
   for t in tests/test_*.py; do
@@ -332,6 +356,7 @@ pv — PERSEVERANCE 휠-레그 원스톱 (odm 과 같은 문법)
             ... --resume                    그 버전 최신 체크포인트에서 이어서
             ... --from <ver> [iter]         다른 버전 체크포인트에서 새 버전으로 (예: pv train r4 1500 4096 --from r3)
   pv watch  [ver]                           진행 한 줄 (20 s 완주율, 지형 단계, std, ETA, 크래시)
+  pv jump   [--record] [--obstacle stairs2] 점프 상태머신 시험 창 (튜닝: scripts/climb_test.py 의 TUNE, 저장하면 바로 반영)
   pv play   [ver] [iter] [--joystick]       재생 — 이 PC 모니터에 네이티브 창
             ... --terrain rugged --level 7  지형 (flat gravel rugged rough wave_long wave_short slope_up slope_down bumps)
             ... --mode manual               시작 높이 모드 (패드 X 로 전환)
