@@ -43,3 +43,13 @@ r3 균형 정책 0.5 m/s 직진: 삼각형길 30 cm 들어가서 넘어짐 (8 cm
 | 0.20 | 1 / 10 | 30 | x 2.27 에서 넘어짐 (다리가 최대 길이에 닿음) | 0.63 | 26 deg | 1~11 | 41 |
 | 0.1825 | 2 / 20 | 30 | x 2.63 에서 넘어짐 | 0.67 | 29 deg | 0~5 | 7 |
 | **0.1825** | **3 / 30** | **60** | **5.25 m 통과** | **0.94** | **3.2 deg** | 0~6 | 6 |
+
+## 경기장 전체 (make_arena.py)
+
+Part Studio 에 경기장을 실제 배치대로 그리고 **STL zip** 으로 내보내면, 배치를 그대로 살려 한 덩어리로 만든다.
+
+- Z 위, 장애물 밑면 Z = 0 (바닥판을 그렸다면 윗면 Z = 0, 안 그려도 됨), 단위 mm
+- 출발점(두 바퀴 축 가운데 바로 아래)과 출발 방향만 알려 주면 된다: `--start X Y` (mm), `--heading +Y` (기본)
+
+      python3 make_arena.py "~/Downloads/경기장.zip" --start 0 -3000 --heading +Y
+      pv jump --joystick --obstacle cad --cad_file ~/perseverance/sim/obstacles/arena.stl
