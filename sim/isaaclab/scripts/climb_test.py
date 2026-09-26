@@ -39,8 +39,8 @@ TUNE = dict(
     wheel_margin=0.85,   # 달리며 돌 때 바깥 바퀴 속도 한계 = 모터 한계 x 이 비율 -> 속도가 빠를수록 회전 한계를 줄인다
     vmax_kmh=3.0,        # 최고 속도 [km/h] (사용자 2026-09-26). 스틱 끝 = 이 속도. 모터 한계는 4.1 km/h (18.85 rad/s x 0.06)
     brake_kp=1.0,        # 최고 속도 초과 브레이크 P: 한계 = 최고 - (kp x 초과 + 적분). 켜고 끄지 않고 부드럽게 조인다
-    brake_ki=7.0,        # 브레이크 I [1/s]: 내리막에서 필요한 제동량을 찾아가고, 속도가 내려가면 서서히 풀린다
-    speed_lpf_hz=3.0,    # 브레이크가 보는 속도 필터 [Hz]
+    brake_ki=5.5,        # 브레이크 I [1/s]: 내리막에서 필요한 제동량을 찾아가고, 속도가 내려가면 서서히 풀린다
+    speed_lpf_hz=4.0,    # 브레이크가 보는 속도 필터 [Hz]
     accel_max=1.5,       # 목표 속도 변화율 한계 [m/s^2] (스틱·브레이크 모두)
     speed_guard=1,    # 바퀴 관절 속도가 모터 한계(18.85 rad/s)의 이 비율을 넘으면 목표 속도를 낮춰 뒤로 젖히며 감속 (푸시백).
                          #   한계에 붙으면 앞으로 기울 때 바퀴를 더 못 돌려 고꾸라진다 (내리막 0.9 m/s, 2026-09-26). 1 = 끔
@@ -568,6 +568,39 @@ if args.record:
 
 
 gov = dict(vf=0.0, i=0.0, ref=0.0)
+import collections  # noqa: E402
+RING = collections.deque(maxlen=2000)                                 # 패드 모드: 최근 10 s 기록 (다리 진동 원인 찾기)
+OSC = dict(last=-99.0, x_prev=False)
+
+
+def dump_ring(reason):
+    import datetime
+    path = os.path.expanduser(f"~/pv_out/climb/pad_{reason}_{datetime.datetime.now():%H%M%S}.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    json.dump(dict(reason=reason, tune={k: getattr(args, k) for k in TUNE}, log=list(RING)), open(path, "w"), ensure_ascii=False)
+    print(f"[기록 저장] {reason}: {path}", flush=True)
+
+
+def check_leg_osc(t):
+    """최근 1 s 에 좌우 다리 차가 8 mm 넘게 3 번 이상 번갈아 뒤집히면 저장 (5 s 에 한 번)."""
+    if t - OSC["last"] < 5.0 or len(RING) < 200:
+        return
+    d = [r["hl"] - r["hr"] for r in list(RING)[-200:]]
+    m = sum(d) / len(d)
+    flips, sgn = 0, 0
+    for v in d:
+        z = v - m
+        if abs(z) > 0.008:
+            s_ = 1 if z > 0 else -1
+            if sgn and s_ != sgn:
+                flips += 1
+            sgn = s_
+    if flips >= 3:
+        OSC["last"] = t
+        print(f"[다리 진동 감지] 최근 1 s 에 좌우 {flips} 번 뒤집힘", flush=True)
+        dump_ring("leg_osc")
+
+
 PROF = dict(ctrl=0.0, step=0.0, hud=0.0, sleep=0.0, n=0)
 
 
@@ -793,6 +826,19 @@ def episode():
                 print(f"[넘어짐] 단계 {phase} (리셋 안 함, START = 처음으로)", flush=True)
             elif tilt < 20:
                 tipped = False
+        if pad is not None:                                        # 최근 기록 + 진동 감지 + X = 수동 저장
+            RING.append(dict(t=round(t, 3), phase=phase, wx=round(wx, 3), vx=round(vx, 3), wz=round(wz, 3),
+                             v=round(float(d.root_com_lin_vel_b[0, 0]), 3), wzr=round(float(d.root_ang_vel_w[0, 2]), 3),
+                             roll=round(math.degrees(math.asin(max(-1.0, min(1.0, float(d.projected_gravity_b[0, 1]))))), 2),
+                             pitch=round(math.degrees(math.asin(max(-1.0, min(1.0, float(d.projected_gravity_b[0, 0]))))), 2),
+                             hl=round(float(h_now[0]), 4), hr=round(float(h_now[1]), 4),
+                             zl=round(float(wheel_pos[0, 2]) - R, 4), zr=round(float(wheel_pos[1, 2]) - R, 4),
+                             lvl=round(roll_pi.i, 4), tl=round(float(tau[0]), 2), tr=round(float(tau[1]), 2)))
+            check_leg_osc(t)
+            xb = pad.button(2)
+            if xb and not OSC["x_prev"]:
+                dump_ring("manual")
+            OSC["x_prev"] = xb
         if hud is not None and k % 5 == 0:
             _th = time.perf_counter()
             hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge)
