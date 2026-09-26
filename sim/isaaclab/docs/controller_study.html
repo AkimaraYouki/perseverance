@@ -1,0 +1,315 @@
+<title>PERSEVERANCE 제어기 해설</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@500;600&family=JetBrains+Mono:wght@400;500&family=Noto+Serif+KR:wght@400;600&family=Noto+Serif:ital,wght@0,400;1,400&display=swap">
+<style>
+:root {
+  --bg: #EEF1F4; --paper: #FFFFFF; --ink: #16191D; --muted: #56606B; --rule: #D3D9E0;
+  --accent: #1D5A86; --accent-soft: #E7EFF6; --code-bg: #F1F3F6;
+  --same: #2F6B45; --part: #8A5A00; --diff: #8E3030; --ours: #4B3F8F;
+  --serif: "Noto Serif KR", "Noto Serif", "Nanum Myeongjo", serif;
+  --sans: "IBM Plex Sans KR", "Noto Sans KR", "Apple SD Gothic Neo", sans-serif;
+  --mono: "JetBrains Mono", "D2Coding", ui-monospace, monospace;
+  --math: "Noto Serif", "Times New Roman", serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0F1216; --paper: #161A1F; --ink: #E4E8EC; --muted: #9AA4AF; --rule: #2B323B;
+    --accent: #83B6DC; --accent-soft: #1B2833; --code-bg: #1E242B;
+    --same: #7CC29A; --part: #E2B45E; --diff: #E68D8D; --ours: #B1A6F2;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0F1216; --paper: #161A1F; --ink: #E4E8EC; --muted: #9AA4AF; --rule: #2B323B;
+  --accent: #83B6DC; --accent-soft: #1B2833; --code-bg: #1E242B;
+  --same: #7CC29A; --part: #E2B45E; --diff: #E68D8D; --ours: #B1A6F2;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font-family: var(--serif); font-size: 15.5px; line-height: 1.75;
+  padding-inline: 16px; padding-block: 28px 64px; }
+.sheet { max-width: 800px; margin: 0 auto; background: var(--paper); border: 1px solid var(--rule);
+  padding-block: 44px 56px; padding-inline: clamp(18px, 6vw, 64px); }
+h1, h2, h3, h4 { font-family: var(--sans); text-wrap: balance; line-height: 1.35; }
+h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: -0.01em; }
+h2 { font-size: 21px; margin: 44px 0 10px; padding-top: 14px; border-top: 2px solid var(--ink); }
+h3 { font-size: 16.5px; margin: 28px 0 6px; color: var(--accent); }
+h4 { font-size: 14.5px; margin: 18px 0 4px; }
+p { margin: 8px 0; }
+.meta { font-family: var(--sans); font-size: 13px; color: var(--muted); margin: 0 0 22px; }
+.lede { font-size: 16px; }
+.num { font-family: var(--mono); font-weight: 500; color: var(--muted); margin-right: 8px; }
+code, .code { font-family: var(--mono); font-size: 12.5px; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; white-space: nowrap; }
+.m { font-family: var(--math); font-style: italic; white-space: nowrap; }
+.m .up { font-style: normal; }
+sub, sup { font-size: 0.72em; line-height: 0; }
+.eq { display: grid; grid-template-columns: 1fr auto; gap: 6px 16px; align-items: center; margin: 12px 0;
+  padding: 10px 14px; background: var(--accent-soft); border-radius: 4px; break-inside: avoid; }
+.eq .body { font-family: var(--math); font-style: italic; font-size: 16px; overflow-x: auto; line-height: 2.1; }
+.eq .body .up { font-style: normal; }
+.eq .tag { font-family: var(--mono); font-size: 11.5px; color: var(--muted); text-align: right; line-height: 1.5; }
+.frac { display: inline-flex; flex-direction: column; vertical-align: middle; text-align: center; margin: 0 2px; line-height: 1.25; }
+.frac > span:first-child { border-bottom: 1px solid currentColor; padding: 0 3px; }
+.frac > span:last-child { padding: 0 3px; }
+.mat { display: inline-table; border-collapse: separate; border-left: 1.5px solid currentColor; border-right: 1.5px solid currentColor;
+  border-radius: 5px; vertical-align: middle; margin: 0 3px; font-size: 14px; line-height: 1.4; }
+.mat td { padding: 1px 7px; text-align: center; }
+.tbl { overflow-x: auto; margin: 12px 0; break-inside: avoid; }
+table.t { border-collapse: collapse; width: 100%; font-size: 13.5px; line-height: 1.5; }
+table.t th { font-family: var(--sans); font-weight: 600; font-size: 12.5px; text-align: left; border-bottom: 1.5px solid var(--ink); padding: 6px 8px; }
+table.t td { border-bottom: 1px solid var(--rule); padding: 6px 8px; vertical-align: top; }
+table.t td.n, table.t th.n { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+table.t tr.total td { border-top: 1.5px solid var(--ink); font-weight: 600; }
+.low { color: var(--diff); font-weight: 600; }
+.pill { display: inline-block; font-family: var(--sans); font-size: 11.5px; font-weight: 600; padding: 0 7px; border-radius: 10px;
+  border: 1px solid currentColor; white-space: nowrap; }
+.pill.same { color: var(--same); } .pill.part { color: var(--part); } .pill.diff { color: var(--diff); } .pill.ours { color: var(--ours); }
+.note { font-family: var(--sans); font-size: 13.5px; line-height: 1.65; border: 1px solid var(--rule); padding: 10px 14px; margin: 14px 0; break-inside: avoid; }
+.note b { color: var(--accent); }
+ol.q, ul.l { padding-left: 22px; margin: 8px 0; }
+ol.q li, ul.l li { margin: 5px 0; }
+.toc { font-family: var(--sans); font-size: 13.5px; columns: 2; column-gap: 32px; margin: 8px 0 4px; padding-left: 20px; }
+.toc li { margin: 2px 0; break-inside: avoid; }
+pre.mermaid { background: transparent; text-align: center; margin: 12px 0; break-inside: avoid; }
+.foot { font-family: var(--sans); font-size: 12px; color: var(--muted); margin-top: 36px; border-top: 1px solid var(--rule); padding-top: 10px; }
+a { color: var(--accent); }
+@media (max-width: 560px) { .toc { columns: 1; } .eq { grid-template-columns: 1fr; } .eq .tag { text-align: left; } }
+@page { size: A4; margin: 15mm 14mm 16mm; }
+@media print {
+  :root, :root[data-theme="dark"] { --bg: #fff; --paper: #fff; --ink: #000; --muted: #444; --rule: #bbb;
+    --accent: #1D5A86; --accent-soft: #F1F4F7; --code-bg: #F1F3F6; --same: #2F6B45; --part: #8A5A00; --diff: #8E3030; --ours: #4B3F8F; color-scheme: light; }
+  body { padding: 0; font-size: 10.5pt; line-height: 1.6; }
+  .sheet { border: 0; padding: 0; max-width: none; }
+  h2 { break-after: avoid; } h3, h4 { break-after: avoid; }
+  .part-break { break-before: page; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+</style>
+
+<main class="sheet">
+<h1>PERSEVERANCE 제어기 해설</h1>
+<p class="meta">Liu &amp; Wang (2024) “Locomotion Control of a Bipedal Wheeled Robot Using VMC and LQR”과 우리 LQR+VMC 구현 대조 · 코드 기준 perseverance 커밋 8bff919 · 2026-09-27</p>
+
+<p class="lede">이 문서는 논문을 한 식씩 따라가며 우리 코드의 어느 줄이 그 식을 구현하는지 짚고, 논문에 없는데 우리가 실기·대회 때문에 붙인 부분을 설명합니다. 끝에 선배의 시뮬링크 모델과 맞출 때 확인할 목록과 스스로 점검할 질문을 붙였습니다.</p>
+
+<div class="note"><b>코드는 세 벌이고 로직은 같습니다.</b> <code>scripts/climb_test.py</code>(창·패드 조종, 실기에 옮길 기준), <code>scripts/wbctrl.py</code>(시험 세트, 로봇 한 대씩), <code>tasks/residual.py</code>(GPU 수천 대 평가·학습). 줄 번호는 가장 짧게 모여 있는 <code>residual.py</code>와 수학 핵심 <code>scripts/lqr_vmc.py</code> 기준입니다. 표기: 논문 식은 <b>[L-22]</b>, 코드는 <code>residual.py:221</code>.</div>
+
+<ol class="toc">
+  <li>전체 구조 한눈에</li>
+  <li>가상 진자: θ와 l</li>
+  <li>바퀴 역진자 모델</li>
+  <li>LQR과 게인 스케줄링</li>
+  <li>좌우 분리와 조향</li>
+  <li>다리: VMC</li>
+  <li>논문에 없는 부분</li>
+  <li>검증: 가혹 평가 결과</li>
+  <li>시뮬링크와 맞추기</li>
+  <li>스스로 점검 질문</li>
+</ol>
+
+<h2><span class="num">1</span>전체 구조 한눈에</h2>
+<p>두 설계 모두 로봇을 “바퀴 위의 길이가 변하는 역진자”로 보고, 앞뒤 균형·속도는 LQR, 회전은 좌우 토크 차, 다리 높이는 VMC로 나눠 푸는 구조입니다. 중국 RoboMaster 평형보병 계열에서 쓰는 표준 구성이라 골격이 거의 같습니다.</p>
+
+<pre class="mermaid">
+flowchart LR
+  CMD["명령: 속도 v, 회전 ωz"] --> GOV["속도 관리 (추가)<br/>최고속도 · 브레이크 · 푸시백"]
+  SEN["센서: IMU, 엔코더, 고관절 토크"] --> EST["상태 추정 (추가)<br/>θ, θ̇, v, l, 접지"]
+  GOV --> LQR["바퀴 LQR K(l) (논문)"]
+  EST --> LQR
+  LQR -- "τw" --> SPL["좌우 분리 (논문)"]
+  YAW["조향 P (논문은 PID)"] -- "τy" --> SPL
+  SPL --> WM["바퀴 모터 τL, τR"]
+  EST --> ROLL["roll PI (추가)"]
+  ROLL --> VMC["다리 VMC (논문)<br/>관절 PD + 자중 보상"]
+  VMC --> HM["고관절 모터"]
+  EST --> LIFT["들림 · 착지 판정 (추가)"]
+  LIFT -.-> LQR
+</pre>
+
+<div class="tbl"><table class="t">
+<thead><tr><th>항목</th><th>논문</th><th>우리</th><th>판정</th></tr></thead>
+<tbody>
+<tr><td>가상 진자각·길이</td><td>링크 기구학 [L-1~21]</td><td>몸체 기준 무게중심 벡터 <code>:166-169</code></td><td><span class="pill same">같음</span></td></tr>
+<tr><td>역진자 동역학</td><td>비선형 → 야코비안 [L-22~28]</td><td>선형 모델 직접 <code>lqr_vmc.py:30</code></td><td><span class="pill same">같음</span></td></tr>
+<tr><td>좌우 분리</td><td>T<sub>L,R</sub> = ½Tθ ± ½Tδ [L-34]</td><td>τ<sub>L,R</sub> = ½τw ∓ τy <code>:221</code></td><td><span class="pill same">같음</span></td></tr>
+<tr><td>LQR 풀이</td><td>MATLAB <code>lqr</code> [L-36~39]</td><td>해밀토니안 고유분해 <code>lqr_vmc.py:19</code></td><td><span class="pill same">같음</span></td></tr>
+<tr><td>게인 스케줄링</td><td>다리 길이 10 mm마다, 2차식 [L-40]</td><td>진자 길이 15점 표 + 선형 보간</td><td><span class="pill part">같은 생각</span></td></tr>
+<tr><td>조향</td><td>yaw 각도 PID [L-49]</td><td>yaw 각속도 P <code>:220</code></td><td><span class="pill diff">다름</span></td></tr>
+<tr><td>다리 높이</td><td>힘 공간 PID + 자중 [L-48, 50]</td><td>관절 공간 PD + 자중(Jᵀ F) <code>:245, 276</code></td><td><span class="pill part">반만 같음</span></td></tr>
+<tr><td>roll · 상태 추정 · 접지 · 속도 관리 · 점프 · 지연 모델</td><td>없음</td><td>7장</td><td><span class="pill ours">우리만</span></td></tr>
+</tbody></table></div>
+
+<h2><span class="num">2</span>가상 진자: θ와 l</h2>
+<p>몸통과 다리를 한 덩어리 진자로 봅니다. 그 무게중심이 바퀴축 가운데에서 어느 방향·거리에 있는지가 LQR이 보는 진자각 θ와 진자 길이 l입니다. 다리를 접거나 펴면 l이 바뀌고, 몸통을 숙이지 않아도 θ가 바뀝니다.</p>
+
+<h4>논문 [L-18~21]</h4>
+<p>4절 링크 각 부재의 무게중심 좌표 (x<sub>i</sub>, y<sub>i</sub>)를 기구학 식 [L-1~17]으로 구한 뒤 질량 가중 평균합니다.</p>
+<div class="eq"><div class="body">x<sub>c</sub> = <span class="frac"><span>Σ m<sub>i</sub> x<sub>i</sub></span><span>Σ m<sub>i</sub></span></span>, &nbsp; θ = <span class="up">arctan</span> <span class="frac"><span>x<sub>c</sub></span><span>y<sub>c</sub></span></span>, &nbsp; L = <span class="up">√</span>(x<sub>c</sub><sup>2</sup> + y<sub>c</sub><sup>2</sup>)</div><div class="tag">논문 (18)–(21)</div></div>
+
+<h4>우리 <code>residual.py:166-169</code></h4>
+<div class="eq"><div class="body"><b>r</b> = <span class="up">R</span><sub>WB</sub><sup>T</sup> (<b>c</b><sub>nom</sub> − <b>a</b>), &nbsp; θ = θ<sub>IMU</sub> + <span class="up">atan2</span>(r<sub>x</sub>, r<sub>z</sub>), &nbsp; l = |<b>r</b>|</div><div class="tag">residual.py:166-169</div></div>
+<ul class="l">
+  <li><b>c</b><sub>nom</sub>: 바퀴를 뺀 모든 링크의 무게중심(CAD 명목 질량), <b>a</b>: 두 바퀴 중심의 가운데, <span class="up">R</span><sub>WB</sub>: 몸체 자세. 몸체 좌표로 돌려 놓으면 “몸체에서 본 무게중심 방향”이 되고, 여기에 IMU로 잰 몸체 pitch를 더하면 수직 기준 진자각이 됩니다.</li>
+  <li>논문은 몸체 pitch θ<sub>0</sub>를 기구학 안에 넣었고(식 7), 우리는 IMU pitch를 따로 더합니다. 결과는 같은 양입니다.</li>
+  <li>시뮬에서는 링크 위치를 바로 읽지만, <b>실기에서는 논문처럼 기구학이 필요</b>합니다. 모터각 M → 다리 높이 h와 링크 자세는 <code>cad.py</code>·<code>leg_map.py</code>(<code>hj_from_M</code>, <code>dh_from_M</code>)가 표로 들고 있습니다.</li>
+  <li>명목 질량을 쓰므로 실제 무게중심이 2 cm 어긋나면 θ가 약 4.6° 틀립니다. 이것을 7.2의 균형점 자동 보정이 서 있을 때 천천히 배웁니다.</li>
+</ul>
+
+<h2><span class="num">3</span>바퀴 역진자 모델</h2>
+<h4>논문 [L-22~23] (비선형)</h4>
+<div class="eq"><div class="body">R(M + 2m + <span class="frac"><span>2I<sub>w</sub></span><span>R<sup>2</sup></span></span>) ẍ = (T<sub>L</sub>+T<sub>R</sub>) − MRL θ̈ <span class="up">cos</span>θ + MRL θ̇<sup>2</sup> <span class="up">sin</span>θ<br>(I<sub>θ</sub> + ML<sup>2</sup>) θ̈ = MgL <span class="up">sin</span>θ − MẍL <span class="up">cos</span>θ − (T<sub>L</sub>+T<sub>R</sub>)</div><div class="tag">논문 (22)(23)</div></div>
+
+<h4>우리 <code>lqr_vmc.py:30</code> (θ≈0에서 선형화한 형태)</h4>
+<div class="eq"><div class="body">(m<sub>w</sub> + <span class="frac"><span>I<sub>w</sub></span><span>R<sup>2</sup></span></span> + m) ẍ + m l θ̈ = <span class="frac"><span>τ</span><span>R</span></span><br>m l ẍ + (I + m l<sup>2</sup>) θ̈ − m g l θ = −τ</div><div class="tag">lqr_vmc.py:30 wip_model</div></div>
+<p>cos θ ≈ 1, sin θ ≈ θ, θ̇² ≈ 0으로 두면 논문 식과 같아집니다. 대응: 논문 M = 우리 m(진자 질량), 논문 2m + 2I<sub>w</sub>/R² = 우리 m<sub>w</sub> + I<sub>w</sub>/R²(우리 m<sub>w</sub>, I<sub>w</sub>는 두 바퀴 합), 논문 T<sub>L</sub>+T<sub>R</sub> = 우리 τ(두 바퀴 토크 합, + = 앞으로 굴림, 몸체에는 −τ).</p>
+<p>상태 <span class="m"><b>x</b> = [x, ẋ, θ, θ̇]<sup>T</sup></span>, 입력 τ 하나. 질량 행렬 <span class="m">M<sub>q</sub></span>를 뒤집어 ẍ, θ̈를 풀면</p>
+<div class="eq"><div class="body"><b>ẋ</b> = A<b>x</b> + Bτ, &nbsp; A = <table class="mat"><tr><td>0</td><td>1</td><td>0</td><td>0</td></tr><tr><td>0</td><td>0</td><td>a<sub>23</sub></td><td>0</td></tr><tr><td>0</td><td>0</td><td>0</td><td>1</td></tr><tr><td>0</td><td>0</td><td>a<sub>43</sub></td><td>0</td></tr></table>, &nbsp; B = <table class="mat"><tr><td>0</td></tr><tr><td>b<sub>2</sub></td></tr><tr><td>0</td></tr><tr><td>b<sub>4</sub></td></tr></table><br>[a<sub>23</sub>, a<sub>43</sub>]<sup>T</sup> = M<sub>q</sub><sup>−1</sup>[0, mgl]<sup>T</sup>, &nbsp; [b<sub>2</sub>, b<sub>4</sub>]<sup>T</sup> = M<sub>q</sub><sup>−1</sup>[1/R, −1]<sup>T</sup></div><div class="tag">논문 (27)(28)의<br>직진 부분과 같음</div></div>
+
+<p>우리 로봇 값(시뮬 CAD, 창 모드 로그): m = 3.90 kg, I = 0.030 kg·m², m<sub>w</sub> = 0.134 kg, I<sub>w</sub> = 0.0035 kg·m², R = 0.06 m. l = 0.25 m에서 a<sub>43</sub> = 113.8 s⁻², a<sub>23</sub> = −22.2 m/s², b<sub>2</sub> = 13.2, b<sub>4</sub> = −50.5.</p>
+<div class="note"><b>숫자가 말해 주는 것.</b> 열린 루프 불안정 극점은 √a<sub>43</sub> ≈ 10.7 rad/s, 즉 넘어지는 시간 상수가 약 0.09 s입니다. 제어 지연 10 ms는 이 시간의 1/9이라 무시할 수 없습니다. 그래서 7장에 지연·지터 모델이 들어가 있습니다.</div>
+
+<h2><span class="num">4</span>LQR과 게인 스케줄링</h2>
+<div class="eq"><div class="body">J = ∫<sub>0</sub><sup>∞</sup> (<b>x</b><sup>T</sup>Q<b>x</b> + τ<sup>T</sup>Rτ) dt, &nbsp; A<sup>T</sup>P + PA − PBR<sup>−1</sup>B<sup>T</sup>P + Q = 0, &nbsp; K = R<sup>−1</sup>B<sup>T</sup>P</div><div class="tag">논문 (36)–(39)<br>lqr_vmc.py:19</div></div>
+<p><b>풀이 방법.</b> 논문은 MATLAB <code>lqr</code>, 우리는 Isaac 파이썬에 scipy가 없어 리카티를 직접 풉니다. 해밀토니안 행렬 <span class="m">H = [[A, −BR<sup>−1</sup>B<sup>T</sup>], [−Q, −A<sup>T</sup>]]</span>의 고유값 중 실수부가 음수인 4개의 고유벡터를 모아 위아래로 <span class="m">[V<sub>1</sub>; V<sub>2</sub>]</span>로 나누면 <span class="m">P = V<sub>2</sub>V<sub>1</sub><sup>−1</sup></span>입니다. 결과는 <code>lqr</code>과 같습니다(시뮬링크 쪽과 K를 숫자로 비교해 보면 확인됩니다).</p>
+
+<p><b>제어 법칙.</b> <span class="m">τ<sub>w</sub> = −K(l) [x<sub>err</sub>, v − v<sub>ref</sub>, θ, θ̇]<sup>T</sup></span> (<code>residual.py:213-214</code>). 우리 x<sub>err</sub>는 절대 위치가 아니라 목표 속도 궤적보다 얼마나 뒤처졌는지를 적분한 값입니다(<code>:211</code>, ±0.3 m로 자름). 목표 속도로 달릴 때 위치 오차가 쌓여 튀지 않게 한 것입니다.</p>
+
+<h4>가중치 비교</h4>
+<div class="tbl"><table class="t">
+<thead><tr><th></th><th>상태 순서</th><th>Q</th><th>R</th></tr></thead>
+<tbody>
+<tr><td>논문 (51)</td><td>[θ, θ̇, x, ẋ, δ, δ̇]</td><td class="n">diag(6000, 1, 1000, 100, 1000, 1)</td><td class="n">diag(100, 25)</td></tr>
+<tr><td>우리 TUNE</td><td>[x, ẋ, θ, θ̇]</td><td class="n">diag(2, 5, 100, 5)</td><td class="n">1</td></tr>
+</tbody></table></div>
+<p>R로 나눠 비율로 보면 논문은 θ 60 : x 10 : ẋ 1, 우리는 θ 100 : x 2 : ẋ 5입니다. 논문이 위치를 훨씬 세게 잡습니다. 로봇 질량·크기가 달라 숫자를 그대로 옮기면 안 되고, 비율과 닫힌 루프 극점으로 비교해야 합니다.</p>
+
+<h4>게인 스케줄링 [L-40]</h4>
+<p>진자 길이가 바뀌면 A, B가 바뀌므로 길이마다 K를 따로 구합니다. 논문은 다리 길이 L<sub>0</sub>를 10 mm 간격으로 풀어 K<sub>ij</sub>(L<sub>0</sub>) = p<sub>0</sub> + p<sub>1</sub>L<sub>0</sub> + p<sub>2</sub>L<sub>0</sub><sup>2</sup>로 맞췄고, 우리는 진자 길이 l을 0.12~0.40 m에서 15점 풀어 표로 두고 선형 보간합니다(<code>lqr_vmc.py:45-50</code>). 같은 생각이고 방법만 다릅니다.</p>
+<div class="tbl"><table class="t">
+<thead><tr><th class="n">l [m]</th><th class="n">K<sub>x</sub></th><th class="n">K<sub>v</sub></th><th class="n">K<sub>θ</sub></th><th class="n">K<sub>θ̇</sub></th><th>닫힌 루프 극점 [1/s]</th></tr></thead>
+<tbody>
+<tr><td class="n">0.15</td><td class="n">−1.41</td><td class="n">−3.40</td><td class="n">−17.03</td><td class="n">−2.98</td><td class="n">−135.7, −4.5, −1.2, −0.7</td></tr>
+<tr><td class="n">0.20</td><td class="n">−1.41</td><td class="n">−3.35</td><td class="n">−17.75</td><td class="n">−3.14</td><td class="n">−128.1, −4.5, −1.4, −0.7</td></tr>
+<tr><td class="n">0.25</td><td class="n">−1.41</td><td class="n">−3.33</td><td class="n">−18.34</td><td class="n">−3.33</td><td class="n">−117.6, −4.5, −1.4, −0.7</td></tr>
+<tr><td class="n">0.30</td><td class="n">−1.41</td><td class="n">−3.31</td><td class="n">−18.87</td><td class="n">−3.52</td><td class="n">−107.1, −4.5, −1.5, −0.7</td></tr>
+<tr><td class="n">0.35</td><td class="n">−1.41</td><td class="n">−3.31</td><td class="n">−19.36</td><td class="n">−3.73</td><td class="n">−97.8, −4.6, −1.5, −0.7</td></tr>
+</tbody></table></div>
+<p>우리 로봇은 다리 높이가 바뀌어도 K가 10 % 안쪽으로만 변합니다. 대부분의 무게가 몸통에 있어서입니다. 극점 하나가 −100 s⁻¹ 근처로 매우 빠른데, 실제로는 지연·모터 대역폭 때문에 이만큼 빠르게 반응하지 못합니다. 지연에 약한 이유 중 하나입니다.</p>
+
+<h2><span class="num">5</span>좌우 분리와 조향</h2>
+<div class="eq"><div class="body">논문: &nbsp; T<sub>L</sub> = ½T<sub>θ</sub> + ½T<sub>δ</sub>, &nbsp; T<sub>R</sub> = ½T<sub>θ</sub> − ½T<sub>δ</sub><br>우리: &nbsp; τ<sub>L</sub> = ½τ<sub>w</sub> − τ<sub>y</sub>, &nbsp; τ<sub>R</sub> = ½τ<sub>w</sub> + τ<sub>y</sub></div><div class="tag">논문 (34)<br>residual.py:221</div></div>
+<p>같은 분리입니다. 부호는 바퀴 축 방향 규약 차이(우리는 τ<sub>y</sub> &gt; 0이 왼쪽 회전), 크기는 τ<sub>y</sub>를 반으로 나누지 않고 그대로 쓰는 차이뿐입니다. 논문은 분리했을 때 yaw 수렴이 빨라진다고 보였습니다(그림 12).</p>
+<p><b>조향 제어기는 다릅니다.</b> 논문은 yaw <i>각도</i> 오차 PID [L-49], 우리는 yaw <i>각속도</i> P입니다.</p>
+<div class="eq"><div class="body">τ<sub>y</sub> = k<sub>ψ</sub> (ω<sub>z,cmd</sub> − ω<sub>z,gyro</sub>), &nbsp; k<sub>ψ</sub> = 0.5 N·m·s/rad</div><div class="tag">residual.py:220<br>TUNE yaw_kd</div></div>
+<p>조이스틱이 회전 <i>속도</i>를 주기 때문입니다. 자동 시험에서 방향을 유지할 때는 바깥에서 ω<sub>z,cmd</sub> = −k<sub>h</sub>ψ(k<sub>h</sub> = 2)로 각도 루프를 한 겹 더 씌웁니다. 이 둘을 합치면 논문의 각도 PD와 같은 꼴입니다.</p>
+
+<h2><span class="num">6</span>다리: VMC</h2>
+<h4>논문 [L-42~50]</h4>
+<p>엉덩이–바퀴 방향으로 가상 힘 F를 준다고 보고, 가상 일의 원리로 고관절 토크로 바꿉니다.</p>
+<div class="eq"><div class="body">T = J<sup>T</sup>F, &nbsp; J = <span class="frac"><span>∂L<sub>0</sub></span><span>∂θ<sub>1</sub></span></span>, &nbsp; F = F<sub>d</sub> + PID(L<sub>d</sub> − L<sub>0</sub>), &nbsp; F<sub>d</sub> = <span class="frac"><span>m<sub>total</sub> g</span><span><span class="up">cos</span> θ<sub>0</sub></span></span></div><div class="tag">논문 (48)(50)</div></div>
+
+<h4>우리 <code>residual.py:245, 269-276</code></h4>
+<div class="eq"><div class="body">τ<sub>hip</sub> = k<sub>p</sub>(M<sub>ref</sub> − M) − k<sub>d</sub>Ṁ + s · F<sub>ff</sub> · <span class="frac"><span>dh</span><span>dM</span></span>, &nbsp; F<sub>ff</sub> = ½ m g, &nbsp; M<sub>ref</sub> = M(h<sub>ref</sub>)</div><div class="tag">k<sub>p</sub> 60 N·m/rad<br>k<sub>d</sub> 1.0 N·m·s/rad</div></div>
+<ul class="l">
+  <li><b>자중 보상은 같습니다.</b> 다리 하나가 무게 절반 ½mg를 받치고, 이를 J<sup>T</sup> = dh/dM으로 고관절 토크로 바꿉니다. s는 좌우 모터 방향 부호입니다. dh/dM은 4절 링크 표(<code>cad.dh_from_M</code>)에서 읽습니다.</li>
+  <li><b>높이 서보가 다릅니다.</b> 논문은 다리 길이 오차를 힘으로 바꾸는 PID(작업 공간), 우리는 모터 각도 PD(관절 공간)입니다. 작은 오차에서는 등가입니다. 길이 공간 스프링 k<sub>L</sub>은 관절 공간 k<sub>M</sub> = J<sup>2</sup>k<sub>L</sub>에 해당하고, 우리 k<sub>p</sub> 60 N·m/rad는 바퀴에서 약 4.5 kN/m입니다(J ≈ 0.115 m/rad).</li>
+  <li>우리는 적분항이 없습니다. 자중을 피드포워드로 거의 다 받쳐 정상 오차가 작고, 좌우 차이는 7.1의 roll PI가 적분으로 잡습니다.</li>
+  <li>논문의 1/cos θ<sub>0</sub>(다리가 기울면 필요한 힘이 커짐)는 우리에게 없습니다. 평소 기울기가 수 도라 1 % 안쪽 차이입니다.</li>
+</ul>
+
+<h2 class="part-break"><span class="num">7</span>논문에 없는 부분</h2>
+<p>논문은 MATLAB에서 참값으로, 좌우 대칭, 평지, 지연 없이 20 s 시험한 결과입니다. 결론에서 외란 대응은 향후 과제로 남겼습니다. 실기와 대회를 위해 우리가 붙인 것들입니다.</p>
+
+<h3>7.1 roll 제어 (좌우 다리 길이 차)</h3>
+<div class="eq"><div class="body">e = b <span class="up">sin</span>(φ − φ<sub>ref</sub>), &nbsp; Δ = k<sub>i</sub>∫e dt + k<sub>p</sub>e + k<sub>d</sub> b φ̇<sub>f</sub>, &nbsp; h<sub>L</sub> = h<sub>0</sub> + ½Δ, &nbsp; h<sub>R</sub> = h<sub>0</sub> − ½Δ</div><div class="tag">residual.py:236-244<br>lqr_vmc.py:57 RollPI</div></div>
+<ul class="l">
+  <li>b = 0.198 m(바퀴 간격), e는 roll을 없애는 데 필요한 좌우 길이 차. k<sub>p</sub> 1.5, k<sub>i</sub> 15, k<sub>d</sub> 0.3, |Δ| ≤ 0.10 m, h<sub>0</sub> = 0.1825 m(IDLE).</li>
+  <li>roll 각속도는 8 Hz 저역통과. 필터 없이 D를 쓰면 지연과 겹쳐 다리가 떨렸습니다.</li>
+  <li>한쪽 다리가 무하중이거나 |φ| &gt; 20°면 적분을 멈춥니다. 안 멈추면 적분이 한계까지 차서 착지 순간 반대로 넘기고, 좌우 바퀴가 번갈아 뜨는 “뜀박질”이 생겼습니다. 적분은 시정수 2 s(leak 0.5/s)로 0을 향해 새게 해 한계에 붙어 있지 않게 합니다.</li>
+  <li><b>회전 중 안쪽 기울이기:</b> φ<sub>ref</sub> = atan(v<sub>ref</sub>ω<sub>z</sub>/g) (<code>:238</code>). 원심력과 중력의 합력 방향으로 기울여 바깥으로 넘어가지 않게 합니다. Ascento 2의 ZMP 기울이기와 같은 효과입니다.</li>
+</ul>
+
+<h3>7.2 상태 추정 (센서만으로)</h3>
+<ul class="l">
+  <li><b>자세:</b> IMU pitch·roll(시험에서는 바이어스 ±0.5°, 잡음 0.3°를 넣음), 자이로(잡음 0.01 rad/s). <code>:154</code></li>
+  <li><b>속도:</b> v = R · (땅을 짚은 바퀴들의 절대 회전 평균) → 10 Hz 저역통과(<code>:171-175</code>). 절대 회전 = 엔코더 + 정강이 링크의 회전(4절 링크 기구학). 뜬 바퀴는 헛돌아 속도가 엉터리라 뺍니다. 둘 다 뜨면 직전 값을 유지합니다.</li>
+  <li><b>IMU 가속도 적분은 쓰지 않습니다.</b> Ascento 2 논문도 IMU 적분은 잡음 때문에 결과가 나빴다고 적었습니다.</li>
+  <li><b>균형점 자동 보정:</b> 멈춰 서 있고 흔들림이 작을 때만 추정 θ의 평균을 초당 0.3씩 배워 뺍니다(최대 8°, <code>:181</code>). 무게중심 오차와 IMU 바이어스를 같이 잡습니다. 경사를 오를 때는 앞으로 숙이는 게 정상이라 달리는 중에는 배우지 않습니다.</li>
+</ul>
+
+<h3>7.3 접지·들림 판정</h3>
+<ul class="l">
+  <li><b>접지:</b> 부호 있는 고관절 토크 ≥ 0.8 N·m(+ = 다리를 펴며 몸을 받침, <code>:171</code>). 바퀴가 뜨면 토크가 0이나 반대 부호가 됩니다. 절댓값으로 보면 뜬 다리의 반대 토크를 접지로 오판합니다.</li>
+  <li><b>들림:</b> 두 다리 모두 무하중이 0.3 s 이어지면 균형을 끄고 바퀴만 감쇠, 다리는 IDLE, 적분을 비웁니다(<code>:226, 248</code>). 0.05 s로 하면 돌 위에서 잠깐 뜨는 것도 들림으로 봐 균형이 꺼졌습니다.</li>
+  <li><b>착지:</b> 한쪽이라도 받치는 상태가 0.02 s, IMU 비력 &gt; 0.4 g이면 균형을 재개합니다(자유낙하 중 다리 움직임을 접지로 오판하지 않게).</li>
+</ul>
+
+<h3>7.4 속도 관리</h3>
+<div class="eq"><div class="body">v<sub>max</sub> = <span class="up">min</span>(3 km/h, 0.75 ω<sub>max</sub>R), &nbsp; e = |v<sub>f</sub>| − v<sub>max</sub>, &nbsp; v<sub>lim</sub> = v<sub>max</sub> − (k<sub>p</sub>e<sup>+</sup> + k<sub>i</sub>∫e)</div><div class="tag">residual.py:185-202<br>k<sub>p</sub> 1, k<sub>i</sub> 5.5</div></div>
+<ul class="l">
+  <li>AK45-10 바퀴 모터는 DC 모터처럼 속도가 오를수록 낼 수 있는 토크가 줄고, 18.85 rad/s(1.13 m/s)에서 0이 됩니다. 3 km/h에서 바퀴는 이미 한계의 71 %라 최대 토크 7 N·m 중 약 2 N·m만 남습니다.</li>
+  <li>내리막에서 최고 속도를 넘으면 PI 브레이크가 목표를 부드럽게 낮춥니다(켜고 끄는 방식은 “끼익끼익” 떨림이 났음). 목표 속도 변화는 1.5 m/s²로 제한합니다.</li>
+  <li><b>푸시백:</b> 바퀴가 한계의 80 %를 넘으면 목표를 지금 속도보다 낮춰, LQR이 몸을 뒤로 젖히며 감속하게 합니다(<code>:207</code>). 한계에 붙은 채 앞으로 기울면 바퀴를 더 못 돌려 고꾸라지기 때문입니다.</li>
+</ul>
+
+<h3>7.5 점프 상태기계와 기타</h3>
+<ul class="l">
+  <li>Ascento식 점프: 웅크림 → 폄 → 비행(다리 접음, 바퀴 반작용으로 pitch 제어) → 하강(다리 부드럽게) → 착지. 강화학습이 아니라 순서가 정해진 기계입니다. 제자리·후진·1 rad/s 넘는 회전 중에는 막습니다.</li>
+  <li><b>지연 모델:</b> 제어 명령이 5 ms 늦게, 매 스텝 40 % 확률로 한 주기 더 늦게 적용됩니다(<code>:263</code>). 실기 CAN 루프를 흉내 낸 것입니다.</li>
+  <li><b>턱 감지 감속(옵션, 기본 끔):</b> pitch 각속도·전후 감속으로 턱을 감지하면 2 s 동안 0.45 m/s로 낮춥니다. 삼각형길 0.8 m/s에서 88 → 94 %였지만, 삼각형길은 조종으로 넘기로 해서 꺼 두었습니다.</li>
+</ul>
+
+<h2><span class="num">8</span>검증: 가혹 평가 결과</h2>
+<p>GPU에서 로봇 4096대를 20 s씩, 칸 가운데에서 무작위 방향으로 0.8 m/s(약 3 km/h) 직진시킨 결과입니다. 모든 조건에 센서 잡음·바이어스, 지연+지터, 몸통 질량 ±15 %, 무게중심 ±2 cm, 바퀴 모터 −0~15 %, 4~8 s마다 ±0.3 m/s 밀기가 들어갑니다. ×1.5, ×2는 이 오차들을 그만큼 키운 것입니다. 지형 한 칸에 약 370대라 칸별 95 % 신뢰구간은 대략 ±1~3 %p입니다.</p>
+<div class="tbl"><table class="t">
+<thead><tr><th>지형</th><th class="n">×1</th><th class="n">×1.5</th><th class="n">×2</th><th class="n">마찰 0.3~1</th><th class="n">지연 10 ms</th><th class="n">무작위 조종</th></tr></thead>
+<tbody>
+<tr><td>평지</td><td class="n">99.2</td><td class="n">94.9</td><td class="n">92.0</td><td class="n">99.2</td><td class="n">98.9</td><td class="n">98.9</td></tr>
+<tr><td>돌밭 3~12 cm</td><td class="n">98.1</td><td class="n">95.2</td><td class="n low">88.4</td><td class="n">90.6</td><td class="n">91.7</td><td class="n">98.9</td></tr>
+<tr><td>한쪽 바퀴만 돌</td><td class="n">99.7</td><td class="n">94.1</td><td class="n low">88.2</td><td class="n">93.3</td><td class="n">96.5</td><td class="n">98.7</td></tr>
+<tr><td>자갈 (10 cm 칸)</td><td class="n">98.1</td><td class="n">93.8</td><td class="n low">87.6</td><td class="n">92.5</td><td class="n">94.9</td><td class="n">98.1</td></tr>
+<tr><td>잔요철</td><td class="n">99.7</td><td class="n">93.5</td><td class="n">91.1</td><td class="n">98.4</td><td class="n">99.2</td><td class="n">99.5</td></tr>
+<tr><td>험지 (기복+요철)</td><td class="n">98.9</td><td class="n">94.9</td><td class="n">91.4</td><td class="n">98.9</td><td class="n">98.7</td><td class="n">98.7</td></tr>
+<tr><td>긴 파도 진폭 0~10 cm</td><td class="n">98.1</td><td class="n">95.7</td><td class="n low">89.0</td><td class="n">98.7</td><td class="n">99.2</td><td class="n">97.6</td></tr>
+<tr><td>짧은 파도 진폭 0~6 cm</td><td class="n">98.9</td><td class="n">96.8</td><td class="n low">88.4</td><td class="n">98.1</td><td class="n">99.7</td><td class="n">98.4</td></tr>
+<tr><td>요철 턱 1~4 cm</td><td class="n">96.2</td><td class="n">90.3</td><td class="n low">86.9</td><td class="n low">88.5</td><td class="n">92.0</td><td class="n">96.0</td></tr>
+<tr><td>경사 오르기 0~17°</td><td class="n">99.2</td><td class="n">96.0</td><td class="n">93.8</td><td class="n">98.4</td><td class="n">98.9</td><td class="n">98.7</td></tr>
+<tr><td>경사 내리기 0~17°</td><td class="n">99.7</td><td class="n">94.1</td><td class="n">93.5</td><td class="n">99.2</td><td class="n">98.9</td><td class="n">98.1</td></tr>
+<tr class="total"><td>합계 (4096대)</td><td class="n">98.7</td><td class="n">94.5</td><td class="n">90.0</td><td class="n">96.0</td><td class="n">97.1</td><td class="n">98.3</td></tr>
+</tbody></table></div>
+<ul class="l">
+  <li>넘어진 로봇의 98~100 %는 넘어지기 0.3~1 s 전에 바퀴가 모터 한계의 90 %를 넘었습니다. 즉 약점은 <b>모터 토크 여유</b>입니다(7.4). 속도를 0.4 m/s로 낮추면 대회형 지형 세트에서 합계 99.5 %였습니다(0.8 m/s는 96.9 %).</li>
+  <li>마찰이 낮을 때 약한 곳은 돌·자갈·요철 턱입니다(바퀴가 턱에서 헛돎).</li>
+  <li>재현: <code>pv harsh --suite rough --vx 0.8 [--harsh 1.5 | --mu 0.3 1.0 | --delay_ms 10 | --cmd random --ctrl turn_limit=1]</code>, 결과 JSON은 <code>~/pv_out/harsh/</code>.</li>
+</ul>
+
+<h2><span class="num">9</span>선배 시뮬링크와 맞추기</h2>
+<p>게인이나 결과를 비교하기 전에 아래를 먼저 통일해야 합니다. 하나라도 다르면 K 숫자가 달라 보여도 같은 제어기일 수 있고, 반대로 같아 보여도 다를 수 있습니다.</p>
+<ol class="q">
+  <li><b>θ의 정의:</b> 몸체 pitch인가, 바퀴축→무게중심 방향인가(우리는 후자). 부호(+ = 앞으로 기욺)도 확인.</li>
+  <li><b>상태 순서와 단위:</b> 우리는 [x, ẋ, θ, θ̇], rad. 논문은 [θ, θ̇, x, ẋ, δ, δ̇]이고 그래프는 도(deg)로 그렸습니다.</li>
+  <li><b>토크:</b> 두 바퀴 합(우리)인가 바퀴 하나인가, 몸체에 걸리는 반작용 부호.</li>
+  <li><b>바퀴 관성:</b> 두 바퀴 합(우리 m<sub>w</sub>, I<sub>w</sub>)인가 하나인가(논문 2m, 2I<sub>w</sub>). 회전자 반사관성 포함 여부.</li>
+  <li><b>연속/이산:</b> 우리는 연속시간 K를 200 Hz로 씁니다. 시뮬링크에서 <code>dlqr</code>을 쓰면 K가 조금 다릅니다.</li>
+  <li><b>지연:</b> Transport Delay 5~10 ms를 넣어야 실기에 가깝습니다(3장 노트).</li>
+  <li><b>모터 모델:</b> 토크 한계 τ<sub>max</sub>(ω) = τ<sub>s</sub>(1 − ω/ω<sub>max</sub>)를 넣지 않으면 고속·험지 결과가 실제보다 좋게 나옵니다(8장).</li>
+  <li><b>Q, R 정규화:</b> R로 나눈 비율과 닫힌 루프 극점으로 비교합니다.</li>
+</ol>
+
+<h2><span class="num">10</span>스스로 점검 질문</h2>
+<ol class="q">
+  <li>진자각 θ를 몸체 pitch가 아니라 무게중심 방향으로 잡는 이유는? 다리만 접었을 때 θ는 어떻게 바뀌나?</li>
+  <li>식 (22)(23)을 θ≈0에서 선형화해 우리 <code>wip_model</code> 두 줄을 직접 유도해 보라.</li>
+  <li>a<sub>43</sub> ≈ 114 s⁻²에서 열린 루프 불안정 극점과 넘어지는 시간 상수를 구하라. 10 ms 지연이 왜 문제인가?</li>
+  <li>해밀토니안 방법으로 리카티 해 P를 얻는 과정을 설명하라. 왜 실수부가 음수인 고유값만 고르나?</li>
+  <li>Q의 θ 가중을 100 → 400으로 올리면 K<sub>θ</sub>와 극점은 어떻게 변할까? 코드로 확인하라(<code>lqr_vmc.py</code>).</li>
+  <li>가상 일의 원리로 T = J<sup>T</sup>F를 유도하라. 우리 다리에서 J는 무엇이고 어디서 오는가?</li>
+  <li>관절 공간 PD k<sub>M</sub>과 길이 공간 스프링 k<sub>L</sub>의 관계 k<sub>M</sub> = J<sup>2</sup>k<sub>L</sub>을 보여라.</li>
+  <li>roll PI의 적분을 한쪽 바퀴가 떴을 때 멈추지 않으면 무슨 일이 생기나?</li>
+  <li>속도 추정에서 뜬 바퀴를 빼야 하는 이유와, 접지를 고관절 토크의 <i>부호</i>로 판정하는 이유는?</li>
+  <li>3 km/h에서 바퀴 모터 토크 여유가 약 2 N·m뿐인 이유를 DC 모터 토크-속도 곡선으로 설명하라.</li>
+</ol>
+
+<p class="foot">참고: Liu &amp; Wang, “Locomotion Control of a Bipedal Wheeled Robot Using Virtual Model Control and Linear Quadratic Regulator Techniques,” Emerging Science Innovation 4 (2024) 17–32, doi:10.46604/emsi.2024.13923 · Klemm et al., “LQR-Assisted Whole-Body Control of a Wheeled Bipedal Robot with Kinematic Loops,” RA-L 2020 (arXiv 2005.11431) · 코드: github perseverance 저장소 <code>sim/isaaclab/scripts/lqr_vmc.py</code>, <code>sim/isaaclab/tasks/residual.py</code>, <code>sim/isaaclab/scripts/climb_test.py</code></p>
+</main>

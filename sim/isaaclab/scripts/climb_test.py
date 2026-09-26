@@ -174,7 +174,7 @@ POLICY = "logs/rsl_rl/wheeled_biped_balance/2026-09-25_18-24-20_rough_v3/model_7
 # ==========================================================================================
 
 CHOICES = dict(est=("truth", "sensors"), ctrl=("policy", "lqr"), obstacle=("flat", "plateau", "stairs2", "ridges", "cad", "gen", "env"),
-               gen_type=("stones", "gravel", "bumps", "waves", "oneside", "oneside_stones"), extract_wheels=("pd", "policy", "free"), pd_from=("extract", "fly"), hip=("dc", "ideal"))
+               gen_type=("stones", "gravel", "bumps", "waves", "oneside", "oneside_stones", "lane_stones"), extract_wheels=("pd", "policy", "free"), pd_from=("extract", "fly"), hip=("dc", "ideal"))
 ap = argparse.ArgumentParser()
 ap.add_argument("--policy", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", POLICY))
 ap.add_argument("--mode", choices=("jump", "stance", "none"), default="jump")
@@ -195,6 +195,7 @@ ap.add_argument("--hand_lift", type=float, default=0.15, help="손으로 드는 
 ap.add_argument("--hand_roll", type=float, default=10.0, help="들고 있는 동안 옆으로 기울이는 각 [deg] (한쪽 바퀴부터 닿게)")
 ap.add_argument("--stop_at", type=float, default=None, help="자동 시험: 이 시각 [s] 에 속도 명령 0 (달리다 멈추기)")
 ap.add_argument("--record", default=None, metavar="DIR")
+ap.add_argument("--rec_label", default=None, help="녹화 화면 왼쪽 위 지형 이름 (없으면 장애물 설정으로)")
 ap.add_argument("--out", default=None)
 AppLauncher.add_app_launcher_args(ap)
 args = ap.parse_args()
@@ -761,7 +762,19 @@ if args.record:
     os.makedirs(args.record, exist_ok=True)
     rec_path = os.path.join(args.record, f"ascento_{args.mode}_{args.obstacle}_{int(args.step_h*1000)}mm_{datetime.datetime.now():%H%M%S}.mp4")
     rec = imageio.get_writer(rec_path, fps=50, codec="libx264", quality=8, macro_block_size=8)
-    rec_every = max(1, round(1.0 / (dt * 50)))
+    rec_every = max(1, round(1.0 / (dt * 50)))                   # 50 fps = 시뮬 1 s 가 영상 1 s (실제 시간 그대로)
+    from PIL import Image, ImageDraw, ImageFont
+    _font = ImageFont.truetype("/usr/share/fonts/truetype/nanum/NanumBarunGothicBold.ttf", 26)
+    _label = args.rec_label or (f"{args.gen_type} {args.gen_h*100:.0f} cm" if args.obstacle == "gen" else args.obstacle)
+
+    def rec_stamp(fr, t, v):
+        """화면에 시뮬 시계·속도·지형 (영상이 실제 시간과 같은 속도로 재생됨을 확인하는 용도)."""
+        im = Image.fromarray(np.ascontiguousarray(fr)); dr = ImageDraw.Draw(im)
+        lines = [f"{t:6.2f} s   실제 시간 1배속", f"{abs(v)*3.6:4.1f} km/h   {_label}"]
+        dr.rectangle([8, 8, 470, 84], fill=(0, 0, 0))
+        for i_, s_ in enumerate(lines):
+            dr.text((18, 14 + 34 * i_), s_, font=_font, fill=(255, 255, 255))
+        return np.asarray(im)
 
 
 gov = dict(vf=0.0, i=0.0, ref=0.0)
@@ -1189,7 +1202,7 @@ def episode():
                         tw_l=float(d.applied_torque[0, wheel_ids[0]] * wsign[0]), vw_l=float(d.joint_vel[0, wheel_ids[0]] * wsign[0]),
                         th_est=EST["th"], thd_est=EST["thd"], v_est=EST["v"], v_true=true_v(), th_true=true_th()))
         if rec is not None and k % rec_every == 0:
-            rec.append_data(np.asarray(env.render())[..., :3])
+            rec.append_data(rec_stamp(np.asarray(env.render())[..., :3], t, true_v()))
     return judge(log, jumps, fell, fell_t)
 
 

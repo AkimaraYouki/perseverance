@@ -308,7 +308,7 @@ class ResidualCtrlActionCfg(ActionTermCfg):
     speed_guard: float = 0.8
     vmax_kmh: float = 3.0
     vmax_motor_frac: float = 0.75
-    brake_kp: float = 1.0; brake_ki: float = 4.0; speed_lpf_hz: float = 3.0; accel_max: float = 1.5  # noqa: E702
+    brake_kp: float = 1.0; brake_ki: float = 5.5; speed_lpf_hz: float = 4.0; accel_max: float = 1.5  # noqa: E702  (창 TUNE 과 같게, 2026-09-27)
     bal_adapt: float = 0.3; bal_adapt_max_deg: float = 8.0  # noqa: E702
     idle_h: float = 0.1825
     roll_kp: float = 1.5; roll_ki: float = 15.0; roll_kd: float = 0.3; roll_rate_lpf_hz: float = 8.0  # noqa: E702
