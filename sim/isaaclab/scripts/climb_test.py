@@ -30,10 +30,23 @@ from isaaclab.app import AppLauncher
 # ================================ 튜닝 — 여기 값만 바꾸고 실행 ================================
 # `pv jump` 로 창을 띄워 본다. 한 번만 바꿔 보려면 명령줄 `--이름 값` (예: pv jump --trigger 0.35)
 TUNE = dict(
+    # --- 제어기: policy (강화학습 균형 정책) | lqr (바퀴 LQR + 다리 VMC, lqr_vmc.py — Ascento 식, 학습 없음) ---
+    ctrl="lqr",
+    lqr_qx=2.0, lqr_qv=5.0, lqr_qth=100.0, lqr_qthd=5.0,   # LQR 상태 가중 [진행거리 m, 속도 m/s, 진자각 rad, 각속도 rad/s]
+    lqr_r=1.0,           # LQR 입력 가중 (두 바퀴 토크 합 N·m)
+    wheel_tau_max=7.0,   # 바퀴 토크 한계 [N·m] (AK45-10 피크)
+    yaw_kd=1.0,          # 회전: 좌우 바퀴 토크 차 = yaw_kd x (명령 - 실제 yaw rate) [N·m·s/rad]
+    vmc_kp=60.0,         # 다리 가상 스프링 [N·m/rad, 관절] (바퀴에서 약 4.5 kN/m. 30 은 좌우 수평이 못 따라가 넘어짐). 자중은 피드포워드로 따로 받친다
+    vmc_kd=1.0,          # 다리 가상 댐퍼 [N·m·s/rad]
+    roll_kp=3.0,         # roll 수평 P: 좌우 다리 길이 차 += roll_kp x 0.198 x sin(roll)
+    roll_ki=30.0,        # roll 수평 I [1/s]
     # --- 다리 높이: 항상 자동 모드 (정책이 외란·지형에 맞춰 정한다). idle_h 는 자동 모드 공칭 = IDLE ---
+    level_rate=10.0,     # 좌우 수평 유지 [1/s]: 좌우 다리 길이 차를 roll 이 0 이 되게 적분 (d(hL-hR)/dt = rate x 0.198 x sin(roll)).
+                         #   정책은 평균 높이·앞뒤 균형만, 좌우 차는 이 루프가 맡는다 (IMU + 다리 각도만 쓰니 실기 그대로). 0 = 끔 (정책이 좌우도)
+    level_max=0.10,      # 좌우 다리 길이 차 한계 [m]
     leg_kp=60.0,         # 주행 중 고관절 P [N·m/rad] (학습값 60 = 바퀴에서 4.5 kN/m, 정하중 처짐 4 mm = 딱딱).
     leg_kd=1.5,          # 주행 중 고관절 D [N·m·s/rad]. 낮추면 서스펜션처럼 먼저 받아 준다 (실기 MIT kp/kd 그대로)
-    idle_h=0.20,         # [m, 다리 관절값, 바퀴 반지름 제외 — 바퀴 포함 0.26]. 사용자 지정 0.20 (압축 77.5 mm ≈ 8.9 J, 신장 42.5 mm). 행정 가운데는 0.1825 (2026-09-26 계산, leg_map + URDF 4.03 kg):
+    idle_h=0.1825,       # [m, 다리 관절값]. 행정 가운데 = 좌우 ±60 mm. 0.20 은 신장 여유 42.5 mm 라 8 cm 엇갈린 삼각형길에서 다리가 끝에 닿음 (2026-09-26 LQR 시험). 충격 흡수 계산 (2026-09-26 계산, leg_map + URDF 4.03 kg):
                          #   정하중 토크는 행정 전체 2.1~2.3 N·m (정격 3 아래) 라 제약이 아니다.
                          #   9 N·m 로 바닥까지 눌리며 흡수 가능한 에너지 = 약 1.15 J / 압축 10 mm.
                          #   착지 2.9 J (1.2 m/s), 8 cm 낙하 3.2 J -> 0.1365(CAD 자세) 는 1.6 J 라 바닥을 친다.
@@ -60,7 +73,7 @@ TUNE = dict(
     air_kd=3.0,          # [N·m·s/rad, 바퀴 하나]
     air_tau=7.0,         # PD 구간 바퀴 토크 한계 [N·m] (AK45-10 피크. 평소 정책은 1.5)
     # --- 5 land: 착지 ---
-    h_land=0.20,         # 착지 다리 길이 [m] (행정 0.1225 ~ 0.2425). idle_h 와 같게 = 압축 행정 최대
+    h_land=0.1825,       # 착지 다리 길이 [m] (행정 0.1225 ~ 0.2425). idle_h 와 같게 = 압축 행정 최대
     land_kp=20.0,        # 착지 스프링 [N·m/rad] (평소 60)
     land_kd=1.0,         # 착지 댐퍼 [N·m·s/rad] (평소 1.5)
     land_s=0.30,         # 부드러운 게인 유지 시간 [s]
@@ -89,7 +102,7 @@ TUNE = dict(
 POLICY = "logs/rsl_rl/wheeled_biped_balance/2026-09-25_18-24-20_rough_v3/model_7099.pt"   # 관측 25 균형 정책 (r3)
 # ==========================================================================================
 
-CHOICES = dict(obstacle=("plateau", "stairs2", "ridges", "cad"), extract_wheels=("pd", "policy", "free"), pd_from=("extract", "fly"), hip=("dc", "ideal"))
+CHOICES = dict(ctrl=("policy", "lqr"), obstacle=("flat", "plateau", "stairs2", "ridges", "cad"), extract_wheels=("pd", "policy", "free"), pd_from=("extract", "fly"), hip=("dc", "ideal"))
 ap = argparse.ArgumentParser()
 ap.add_argument("--policy", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", POLICY))
 ap.add_argument("--mode", choices=("jump", "stance", "none"), default="jump")
@@ -268,6 +281,42 @@ wheel_term = env.action_manager.get_term("wheels")
 scale0 = wheel_term.cfg.torque_scale
 wsign = torch.tensor(cad.WHEEL_SIGN, device=dev, dtype=torch.float32)   # 관절축 -> +y 부호 (기록용). 행동은 이미 +y 규약
 legs_act = robot.actuators["legs"]
+# --- LQR/VMC 모델 값: 시뮬 물체에서 직접 (실기는 URDF 같은 값) -----------------------------------------------
+import numpy as _np  # noqa: E402
+import lqr_vmc  # noqa: E402
+_nonwheel = [i for i in range(robot.num_bodies) if i not in wheel_bodies]
+_mass = robot.root_physx_view.get_masses()[0].to(dev)
+_m_pend = float(_mass[_nonwheel].sum()); _m_w = float(_mass[wheel_bodies].sum())
+_I_w = 2 * 1.755e-3                                                   # URDF l_wheel izz (회전자 반사관성 포함) x 2
+lqr = None
+
+
+def build_lqr():
+    global lqr
+    d = robot.data
+    c = (d.body_com_pos_w[0, _nonwheel] * _mass[_nonwheel, None]).sum(0) / _m_pend
+    iyy = robot.root_physx_view.get_inertias()[0][:, 4].to(dev)
+    rel = d.body_com_pos_w[0, _nonwheel] - c
+    I = float((iyy[_nonwheel] + _mass[_nonwheel] * (rel[:, 0] ** 2 + rel[:, 2] ** 2)).sum())
+    lqr = lqr_vmc.WheelLQR(_m_pend, I, _m_w, _I_w, R, q=(args.lqr_qx, args.lqr_qv, args.lqr_qth, args.lqr_qthd), r=args.lqr_r)
+    return I
+
+
+def lqr_state():
+    """(진자각 θ, 각속도, 진자 길이 l, 바퀴 진행 속도 v, yaw rate). 실기: IMU + 다리 기구학 + 바퀴 엔코더."""
+    d = robot.data
+    c = (d.body_com_pos_w[0, _nonwheel] * _mass[_nonwheel, None]).sum(0) / _m_pend
+    ax = d.body_pos_w[0, wheel_bodies].mean(0)
+    psi = yaw_of(d.root_quat_w[0]); f = (math.cos(psi), math.sin(psi))
+    r = (c - ax).tolist()
+    th = math.atan2(r[0] * f[0] + r[1] * f[1], r[2])
+    w = d.root_ang_vel_w[0].tolist()
+    thd = -w[0] * f[1] + w[1] * f[0]
+    vw = d.body_lin_vel_w[0, wheel_bodies].mean(0).tolist()
+    return th, thd, math.sqrt(sum(x * x for x in r)), vw[0] * f[0] + vw[1] * f[1], w[2]
+
+
+roll_pi = lqr_vmc.RollPI()
 kp0, kd0 = legs_act.stiffness.clone(), legs_act.damping.clone()
 kp0[:], kd0[:] = args.leg_kp, args.leg_kd
 
@@ -404,6 +453,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
         f"LAST JUMP {stats['last']}",
         f"JUMPS {stats['jumps']}   FALLS {stats['falls']}",
         "",
+        f"CTRL  {args.ctrl.upper()}" + (f"  vmc_kp {args.vmc_kp:.0f} kd {args.vmc_kd:.1f}  roll kp {args.roll_kp:.1f} ki {args.roll_ki:.0f}  qth {args.lqr_qth:.0f}" if args.ctrl == "lqr" else ""),
         f"TUNE  leg_kp {args.leg_kp:.0f}  leg_kd {args.leg_kd:.1f}  idle {args.idle_h*1000:.1f}  trigger {args.trigger:.2f}",
         f"      extract_pitch {args.extract_pitch:+.0f}  air_pitch {args.air_pitch:+.0f}",
         f"      air_kp {args.air_kp:.0f}  kd {args.air_kd:.1f}  land_kp {args.land_kp:.0f}  h_land {args.h_land:.3f}",
@@ -438,6 +488,8 @@ def reload_tune():
             continue
         print(f"[튜닝] {k}: {getattr(args, k)} -> {v}", flush=True)
         setattr(args, k, v)
+        if k.startswith("lqr_") and args.ctrl == "lqr":
+            build_lqr()
     cmd.cfg.auto_height = cmd.cfg.default_height = args.idle_h
     kp0[:], kd0[:] = args.leg_kp, args.leg_kd
 
@@ -463,6 +515,15 @@ def episode():
     cmd.cfg.auto_height = cmd.cfg.default_height = args.idle_h
     kp0[:], kd0[:] = args.leg_kp, args.leg_kd
     phase, t_phase, next_edge, h0 = "drive", 0.0, 0, args.idle_h
+    lvl = 0.0                                                  # 수평 유지 루프의 좌우 다리 길이 차 명령 hL - hR [m]
+    x_err = 0.0                                                # LQR 진행거리 오차 (명령 속도 적분 대비)
+    roll_pi.reset()
+    if args.ctrl == "lqr":
+        _I = build_lqr()
+        if not getattr(build_lqr, "_shown", False):
+            build_lqr._shown = True
+            print(f"[LQR] m {_m_pend:.2f} kg, I {_I:.4f} kg·m², 바퀴 {_m_w:.3f} kg / {_I_w:.4f} kg·m², "
+                  f"K(l=0.25) {_np.round(lqr.gain(0.25), 2).tolist()}", flush=True)
     tipped = False
     log, jumps = [], []
     fell, fell_t = False, None
@@ -547,6 +608,31 @@ def episode():
                 mode=torch.tensor([1.0], device=dev))                  # 항상 자동 (h 는 무시되고 idle_h)
         act = policy(obs["policy"]).clone()
         h_ref = float(cmd.command[0, 2])
+        if args.ctrl == "lqr":                                     # 정책 대신 LQR (바퀴) + VMC (다리)
+            act = torch.zeros_like(act)
+            th, thd, l_p, v_now, wz_now = lqr_state()
+            ffF = 0.0
+            if phase in ("drive", "retract", "extract", "land"):
+                th_ref = math.radians(args.retract_lean) if phase == "retract" else 0.0
+                x_err = max(-0.3, min(0.3, x_err + (v_now - vx) * dt))
+                tau_w = lqr.torque(l_p, x_err, v_now - vx, th - th_ref, thd)
+                tau_y = args.yaw_kd * (wz - wz_now)
+                wheel_term.cfg.torque_scale = args.wheel_tau_max
+                act[0, 2] = max(-1.0, min(1.0, (0.5 * tau_w - tau_y) / args.wheel_tau_max))
+                act[0, 3] = max(-1.0, min(1.0, (0.5 * tau_w + tau_y) / args.wheel_tau_max))
+            if phase == "drive":
+                rl = math.asin(max(-1.0, min(1.0, float(d.projected_gravity_b[0, 1]))))
+                dlt = roll_pi(rl, dt, args.roll_kp, args.roll_ki, args.level_max)
+                tl = min(H_MAX, max(H_MIN, args.idle_h + 0.5 * dlt)); tr = min(H_MAX, max(H_MIN, args.idle_h - 0.5 * dlt))
+                act[0, 0], act[0, 1] = (tl - h_ref) / 0.12, (tr - h_ref) / 0.12
+                legs_act.stiffness[:] = args.vmc_kp; legs_act.damping[:] = args.vmc_kd
+                ffF = 0.5 * _m_pend * 9.81
+            elif phase == "land":
+                ffF = 0.5 * _m_pend * 9.81
+            else:
+                roll_pi.reset(float(h_now[0] - h_now[1]))
+            M = robot.data.joint_pos[:, leg_ids]
+            robot.set_joint_effort_target(hip_sign * ffF * cad.dh_from_M(M).to(torch.float32), joint_ids=leg_ids)
         if args.mode == "jump" and phase in LEG_TARGET:
             tgt = LEG_TARGET[phase]
             if phase == "retract":
@@ -555,7 +641,7 @@ def episode():
             pd_phases = ("fly", "descend") if args.pd_from == "fly" or args.extract_wheels != "pd" else ("extract", "fly", "descend")
             if phase == "extract" and args.extract_wheels == "free":
                 act[0, 2:] = 0.0
-            if phase == "retract" and args.retract_lean > 0:
+            if phase == "retract" and args.retract_lean > 0 and args.ctrl == "policy":
                 wheel_term.cfg.torque_scale = args.air_tau
                 pitch = math.asin(max(-1.0, min(1.0, float(d.projected_gravity_b[0, 0]))))
                 u = args.air_kp * (pitch - math.radians(args.retract_lean)) + args.air_kd * float(d.root_ang_vel_b[0, 1])
@@ -568,7 +654,16 @@ def episode():
                     ref = args.extract_pitch if phase == "extract" else args.air_pitch
                     u = args.air_kp * (pitch - math.radians(ref)) + args.air_kd * float(d.root_ang_vel_b[0, 1])
                     act[0, 2:] = max(-1.0, min(1.0, u / args.air_tau))   # 두 바퀴 같은 값 (+y 규약, 좌우 부호는 액션 항이 처리)
-        elif args.mode == "stance" and phase != "stand":
+        if args.level_rate > 0 and phase == "drive" and args.mode != "stance" and args.ctrl == "policy":
+            # 로그의 roll = asin(g_y) > 0 이면 왼쪽(+y)이 낮다 -> 왼다리를 늘린다
+            rl = math.asin(max(-1.0, min(1.0, float(d.projected_gravity_b[0, 1]))))
+            lvl = max(-args.level_max, min(args.level_max, lvl + dt * args.level_rate * 0.198 * math.sin(rl)))
+            mean = h_ref + 0.12 * 0.5 * (float(act[0, 0].clamp(-1, 1)) + float(act[0, 1].clamp(-1, 1)))
+            tl = min(H_MAX, max(H_MIN, mean + 0.5 * lvl)); tr = min(H_MAX, max(H_MIN, mean - 0.5 * lvl))
+            act[0, 0], act[0, 1] = (tl - h_ref) / 0.12, (tr - h_ref) / 0.12
+        elif phase != "drive":
+            lvl = float(h_now[0] - h_now[1])                       # 점프 중에는 실제 차를 따라가 두었다가 이어받는다
+        if args.mode == "stance" and phase != "stand":
             s = min(1.0, (t - 1.0) / 1.0)
             hl, hr = H_CRUISE + 0.045 * s, H_CRUISE - 0.045 * s     # 좌우 길이차 9 cm -> 약 24 deg 기울기
             if phase == "lift":
