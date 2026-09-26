@@ -96,6 +96,12 @@ TUNE = dict(
     ridge_period=0.60,   # ridges 반복 주기 [m]
     ridge_lane=0.20,     # ridges 차선 폭 [m]. 차선마다 반 주기 엇갈림 -> 좌우 바퀴(간격 198 mm)가 번갈아 탄다
     ridge_len=5.0,       # ridges 길이 [m]
+    # --- 화면 ---
+    render_hz=50.0,      # 창 렌더 주기 [Hz]. 낮출수록 창이 빨라진다 (재시작)
+    physics_hz=400.0,    # 물리 주기 [Hz] (제어 200 Hz 의 배수, 재시작). 400 에서도 점프 착지 +17 mm, 삼각형길 통과 (800 과 같음)
+    color_body="#1F3A5F",    # 몸통 색 (재시작)
+    color_legs="#F2A541",    # 다리 링크 색
+    color_wheels="#202020",  # 바퀴 색
     # --- 기타 ---
     spawn_z=0.10,        # 출발할 때 바퀴 바닥 높이 [m] — 공중에서 떨어뜨려 시작 (사용자 2026-09-26). 0 = 바닥에 닿게
     hip="dc",            # dc (토크-속도 모델) | ideal
@@ -256,11 +262,41 @@ if args.obstacle == "cad" and args.mode in ("jump", "none"):
     cfg.scene.robot.init_state.pos = (_p[0], _p[1] + 0.08, _p[2])
 _p = cfg.scene.robot.init_state.pos                                   # 공중 스폰: 바퀴 바닥이 spawn_z 에 오게
 cfg.scene.robot.init_state.pos = (_p[0], _p[1], _p[2] + args.spawn_z)
+cfg.decimation = max(1, round(args.physics_hz / 200.0))              # 제어는 200 Hz 그대로
+cfg.sim.dt = 1.0 / (200.0 * cfg.decimation)
 if not args.headless and not args.record:
-    cfg.sim.render_interval = cfg.decimation * 4                      # 창: 렌더 50 Hz (200 Hz 마다 그리면 실시간의 0.17 배)
+    cfg.sim.render_interval = cfg.decimation * max(1, round(200.0 / args.render_hz))   # 200 Hz 마다 그리면 실시간의 0.17 배
 if True:                                                              # 옆에서 로봇을 따라가는 카메라 (창·녹화 공통)
     cfg.viewer.origin_type = "asset_root"; cfg.viewer.asset_name = "robot"; cfg.viewer.env_index = 0
     cfg.viewer.eye = (0.2, -1.4, 0.35); cfg.viewer.lookat = (0.0, 0.0, 0.1); cfg.viewer.resolution = (1280, 720)
+def paint_robot(env, env_ids):
+    """몸통·다리·바퀴에 색. 시뮬 시작 전(prestartup)에 링크 프림에 PreviewSurface 를 묶는다
+    (시작 뒤에 묶으면 물리 뷰가 무효화돼 죽는다)."""
+    import omni.usd
+    rgb = lambda h: tuple(int(h.lstrip("#")[i:i + 2], 16) / 255.0 for i in (0, 2, 4))  # noqa: E731
+    stage = omni.usd.get_context().get_stage()
+    root = stage.GetPrimAtPath("/World/envs/env_0/Robot")
+    groups = {"body": [], "legs": [], "wheels": []}
+    for c in root.GetChildren():
+        n = c.GetName()
+        if "wheel" in n:
+            groups["wheels"].append(n)
+        elif n == "base_link":
+            groups["body"].append(n)
+        elif any(k in n for k in ("crank", "shank", "rocker", "thigh", "leg")):
+            groups["legs"].append(n)
+    for grp, col in (("body", args.color_body), ("legs", args.color_legs), ("wheels", args.color_wheels)):
+        mat = f"/World/Looks/pv_{grp}"
+        cm = sim_utils.PreviewSurfaceCfg(diffuse_color=rgb(col), roughness=0.45, metallic=0.1)
+        cm.func(mat, cm)
+        for n in groups[grp]:
+            sim_utils.bind_visual_material(f"/World/envs/env_0/Robot/{n}", mat, stronger_than_descendants=True)
+    print(f"[색] 몸통 {args.color_body} {groups['body']}, 다리 {args.color_legs} {groups['legs']}, 바퀴 {args.color_wheels} {groups['wheels']}", flush=True)
+
+
+from isaaclab.managers import EventTermCfg as _EventTerm  # noqa: E402
+cfg.events.paint = _EventTerm(func=paint_robot, mode="prestartup")
+cfg.scene.replicate_physics = False                                   # prestartup 이벤트 조건 (로봇 1 대라 비용 없음)
 env = gym.make(TASK, cfg=cfg, render_mode="rgb_array" if args.record else None).unwrapped
 dev = env.device
 robot = env.scene["robot"]
@@ -297,6 +333,9 @@ wheel_term = env.action_manager.get_term("wheels")
 scale0 = wheel_term.cfg.torque_scale
 wsign = torch.tensor(cad.WHEEL_SIGN, device=dev, dtype=torch.float32)   # 관절축 -> +y 부호 (기록용). 행동은 이미 +y 규약
 legs_act = robot.actuators["legs"]
+
+
+
 # --- LQR/VMC 모델 값: 시뮬 물체에서 직접 (실기는 URDF 같은 값) -----------------------------------------------
 import numpy as _np  # noqa: E402
 import lqr_vmc  # noqa: E402
@@ -377,7 +416,7 @@ def apply_cam():
 
 
 HIST = 200
-hist = {k: [0.0] * HIST for k in ("pitch", "vx", "hip", "wheel_z")}
+hist = {k: [0.0] * HIST for k in ("pitch", "roll", "vx")}
 hud, plots = None, {}
 stats = dict(falls=0, jumps=0, last="-", rtf=float("nan"), mark=(0.0, None))
 if not args.headless:
@@ -389,7 +428,7 @@ if not args.headless:
         with vp_utils.get_active_viewport_window().get_frame("wb_jump_hud"):
             with ui.HStack():
                 ui.Spacer()
-                with ui.VStack(width=ui.Pixel(430)):
+                with ui.VStack(width=ui.Pixel(380)):
                     ui.Spacer(height=8)
                     with ui.ZStack():
                         ui.Rectangle(style={"background_color": 0xB0000000, "border_radius": 6})
@@ -397,12 +436,11 @@ if not args.headless:
                             ui.Spacer(height=8)
                             hud = ui.Label("", style=_fst, alignment=ui.Alignment.LEFT_TOP)
                             ui.Spacer(height=6)
-                            for key, lab, col in (("pitch", "pitch", 0xFF44FFFF), ("vx", "vx", 0xFF44AAFF),
-                                                  ("hip", "hip Nm", 0xFF4444FF), ("wheel_z", "wheel z", 0xFF44FF88)):
+                            for key, lab, col in (("pitch", "pitch", 0xFF44FFFF), ("roll", "roll", 0xFFFF8844), ("vx", "speed", 0xFF44AAFF)):
                                 with ui.HStack(height=ui.Pixel(26)):
                                     ui.Spacer(width=8)
                                     ui.Label(lab, width=ui.Pixel(80), style=_fst)
-                                    plots[key] = ui.Plot(ui.Type.LINE, -1.0, 1.0, *([0.0] * HIST), width=ui.Pixel(310),
+                                    plots[key] = ui.Plot(ui.Type.LINE, -1.0, 1.0, *([0.0] * HIST), width=ui.Pixel(220),
                                                          height=ui.Pixel(24), style={"color": col, "background_color": 0x30FFFFFF})
                             ui.Spacer(height=8)
                     ui.Spacer()
@@ -435,53 +473,50 @@ def pad_camera():
 
 
 def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
+    """꼭 필요한 것만: 단계, 속도, 기울기, 다리, 바퀴 속도 여유, 직전 점프, 넘어짐, 창 속도."""
     d = robot.data
     g = d.projected_gravity_b[0]
     pitch = math.degrees(math.asin(max(-1.0, min(1.0, float(g[0])))))
     roll = math.degrees(math.asin(max(-1.0, min(1.0, float(g[1])))))
     v_now = float(d.root_com_lin_vel_b[0, 0])
-    wb = [(float(z) - R) * 1000 for z in wheel_pos[:, 2]]
-    wt = [float(x) for x in d.applied_torque[0, wheel_ids] * wsign]
-    ws = [float(x) for x in d.joint_vel[0, wheel_ids] * wsign]
-    ahead = [e for e in edges if e > wx - 0.03]
-    dist = f"{(ahead[0]-wx)*1000:5.0f} mm  (edge {edges.index(ahead[0])+1}/{len(edges)}, auto trigger {args.trigger*1000:.0f})" if ahead else "past last edge"
-    push("pitch", pitch / 30.0); push("vx", v_now / 1.0); push("hip", float(tau.abs().max()) / 9.0)
-    push("wheel_z", min(wb) / 200.0 * 2 - 1)
+    hl, hr = (float(x) * 1000 for x in cad.leg_state(robot)[0][0])
+    ws = 100 * float(d.joint_vel[0, wheel_ids].abs().max()) / 18.85
+    push("pitch", pitch / 30.0); push("roll", roll / 30.0); push("vx", v_now / 1.0)
     m_sim, m_wall = stats["mark"]
     now = time.time()
     if m_wall is None or now - m_wall > 1.0:
-        if m_wall is not None and now > m_wall:
-            stats["rtf"] = (t - m_sim) / (now - m_wall) if t > m_sim else stats["rtf"]
+        if m_wall is not None and now > m_wall and t > m_sim:
+            stats["rtf"] = (t - m_sim) / (now - m_wall)
         stats["mark"] = (t, now)
-    rtf = stats["rtf"]
-    hud.text = "\n".join([
-        f"PHASE     {phase.upper()}" + ("   [Y] = JUMP" if phase == "drive" and pad is not None else ""),
-        f"EDGE      {dist}",
-        f"CMD       vx {vx:+.2f}  wz {wz:+.2f}   HEIGHT AUTO (idle {args.idle_h*1000:.1f})",
-        f"LEGS      L {float(cad.leg_state(robot)[0][0][0])*1000:5.1f}  R {float(cad.leg_state(robot)[0][0][1])*1000:5.1f} mm  (stroke 122.5~242.5)",
-        f"ACTUAL    vx {v_now:+.2f} m/s",
-        f"TILT      pitch {pitch:+6.1f}  roll {roll:+6.1f} deg",
-        f"WHEEL z   L {wb[0]:5.0f}  R {wb[1]:5.0f} mm (bottom)",
-        f"HIP   Nm  L {float(tau[0]):+5.2f}  R {float(tau[1]):+5.2f}  (peak 9)",
-        f"WHEEL Nm  L {wt[0]:+5.2f}  R {wt[1]:+5.2f}  (peak 7)",
-        f"WHEEL r/s L {ws[0]:+5.1f}  R {ws[1]:+5.1f}  (limit 18.85{'  SATURATED' if max(abs(x) for x in ws) > 17.0 else ''})",
+    ahead = [e for e in edges if e > wx - 0.03]
+    wb = [(float(z) - R) * 1000 for z in wheel_pos[:, 2]]
+    wt = [float(x) for x in d.applied_torque[0, wheel_ids] * wsign]
+    wv = [float(x) for x in d.joint_vel[0, wheel_ids] * wsign]
+    yr = float(d.root_ang_vel_w[0, 2])
+    rtf = f"{stats['rtf']:.2f}x" if stats["rtf"] == stats["rtf"] else "-"
+    lines = [
+        f"PHASE  {phase.upper():8s}  CTRL {args.ctrl.upper()}",
+        f"SPEED  {v_now:+.2f} / cmd {vx:+.2f} m/s",
+        f"YAW    {yr:+.2f} / cmd {wz:+.2f} rad/s",
+        f"TILT   P {pitch:+5.1f}  R {roll:+5.1f} deg",
+        f"LEGS   L {hl:3.0f}  R {hr:3.0f}  idle {args.idle_h*1000:3.0f} mm",
+        f"WHL z  L {wb[0]:3.0f}  R {wb[1]:3.0f} mm",
+        f"HIP    L {float(tau[0]):+5.2f}  R {float(tau[1]):+5.2f} Nm",
+        f"WHL    L {wt[0]:+5.2f}  R {wt[1]:+5.2f} Nm",
+        f"WHL w  L {wv[0]:+5.1f}  R {wv[1]:+5.1f} rad/s {ws:3.0f}%" + (" SLOW" if ws > 100 * args.speed_guard else ""),
+        f"EDGE   {(ahead[0] - wx) * 1000:4.0f} mm" if ahead else "EDGE   -",
+        f"JUMP   {stats['last']}",
+        f"COUNT  jumps {stats['jumps']}  falls {stats['falls']}  sim {rtf}",
         "",
-        f"LAST JUMP {stats['last']}",
-        f"JUMPS {stats['jumps']}   FALLS {stats['falls']}",
-        "",
-        f"CTRL  {args.ctrl.upper()}" + (f"  vmc_kp {args.vmc_kp:.0f} kd {args.vmc_kd:.1f}  roll kp {args.roll_kp:.1f} ki {args.roll_ki:.0f}  qth {args.lqr_qth:.0f}" if args.ctrl == "lqr" else ""),
-        f"TUNE  leg_kp {args.leg_kp:.0f}  leg_kd {args.leg_kd:.1f}  idle {args.idle_h*1000:.1f}  trigger {args.trigger:.2f}",
-        f"      extract_pitch {args.extract_pitch:+.0f}  air_pitch {args.air_pitch:+.0f}",
-        f"      air_kp {args.air_kp:.0f}  kd {args.air_kd:.1f}  land_kp {args.land_kp:.0f}  h_land {args.h_land:.3f}",
-        "",
-        (f"SIM SPEED {rtf:4.2f}x real-time" if rtf == rtf else "SIM SPEED measuring..."),
-        ("PAD  LStick fwd/back  RStick turn  Y jump  A stop  START restart  DPad/LB/RB/BACK cam"
-         if pad is not None else "file save -> next try uses new TUNE"),
-    ])
+        (f"LQR    qth {args.lqr_qth:.0f} qv {args.lqr_qv:.0f}  VMC {args.vmc_kp:.0f}/{args.vmc_kd:.1f}  roll {args.roll_kp:.0f}/{args.roll_ki:.0f}"
+         if args.ctrl == "lqr" else f"LEG    kp {args.leg_kp:.0f} kd {args.leg_kd:.1f}"),
+        f"JMP    trig {args.trigger:.2f} lean {args.retract_lean:.0f} air {args.air_pitch:+.0f} land {args.land_kp:.0f}/{args.h_land*1000:.0f}",
+    ]
+    hud.text = "\n".join(lines)
     for kk, pl in plots.items():
         pl.set_data(*hist[kk])
 
-RESTART = ("spawn_z", "obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
+RESTART = ("render_hz", "physics_hz", "color_body", "color_legs", "color_wheels", "spawn_z", "obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
            "ridge_lane", "ridge_len", "cad_file", "cad_unit")   # 장면을 다시 만들어야 해서 재시작 필요
 CLI_KEYS = {k for k in TUNE if f"--{k}" in sys.argv}                        # 명령줄로 준 값은 파일보다 우선
 
@@ -522,6 +557,9 @@ if args.record:
     rec_every = max(1, round(1.0 / (dt * 50)))
 
 
+PROF = dict(ctrl=0.0, step=0.0, hud=0.0, sleep=0.0, n=0)
+
+
 def episode():
     soft_legs(False)
     wheel_term.cfg.torque_scale = scale0
@@ -549,6 +587,7 @@ def episode():
             return None
         LEG_TARGET = {"retract": H_MIN, "extract": H_MAX, "fly": H_MIN, "descend": args.h_land, "land": args.h_land}
         t = k * dt
+        _t0 = time.perf_counter()
         d = robot.data
         wheel_pos = d.body_pos_w[0, wheel_bodies]                 # (2, 3)
         wx = float(wheel_pos[:, 0].mean())
@@ -573,7 +612,9 @@ def episode():
             pad_camera()
             if wall0 is None:
                 wall0 = time.time() - t
-            time.sleep(max(0.0, wall0 + t - time.time()))           # 실제 시간에 맞춘다
+            _sl = max(0.0, wall0 + t - time.time())
+            time.sleep(_sl)                                        # 실제 시간에 맞춘다
+            PROF["sleep"] += _sl
         if args.mode == "jump":
             tp = t - t_phase
             auto_go = pad is None and next_edge < len(edges) and wx >= edges[next_edge] - args.trigger
@@ -606,7 +647,7 @@ def episode():
                 stats["jumps"] += 1
                 j, e = jumps[-1], (edges[next_edge] if next_edge < len(edges) else None)
                 rel = (lambda x: f"{1000*(x-e):+.0f} mm") if e is not None else (lambda x: f"x {x:.3f} m")
-                stats["last"] = f"edge {next_edge+1 if e is not None else '-'}: takeoff {rel(j['x_takeoff'])} land {rel(j['x_land'])}"
+                stats["last"] = f"#{len(jumps)} takeoff {rel(j['x_takeoff'])}  land {rel(j['x_land'])}" if e is not None else f"#{len(jumps)} land bottom {j['wheel_bottom_mm']:.0f} mm"
                 if pad is not None:
                     print(f"[창 속도] 실시간 대비 {stats['rtf']:.2f} 배", flush=True)
                     print(f"[점프 {len(jumps)}] 모서리 {next_edge+1 if e is not None else '-'}  이륙 {rel(j['x_takeoff'])}  "
@@ -691,7 +732,10 @@ def episode():
             if phase == "lift":
                 hl = H_MIN                                         # 왼쪽 다리를 최대로 접어 바퀴를 든다
             act[0, 0], act[0, 1] = (hl - h_ref) / 0.12, (hr - h_ref) / 0.12
+        _t1 = time.perf_counter()
         obs, _, term, _, _ = env.step(act)
+        _t2 = time.perf_counter()
+        PROF["ctrl"] += _t1 - _t0; PROF["step"] += _t2 - _t1; PROF["n"] += 1
         if bool(term[0]) and not fell:
             fell, fell_t = True, t
             stats["falls"] += 1
@@ -701,7 +745,12 @@ def episode():
             if LOOP:
                 break                                              # 창 모드: 넘어지면 바로 다음 시도
         if k % int(10.0 / dt) == 0 and k > 0 and not args.headless:
-            print(f"[창 속도] 실시간 대비 {stats['rtf']:.2f} 배 (시뮬 {t:.0f} s)", flush=True)
+            n_ = max(PROF["n"], 1)
+            print(f"[창 속도] 실시간 대비 {stats['rtf']:.2f} 배 (시뮬 {t:.0f} s) | 스텝당 ms: env.step {1e3*PROF['step']/n_:.2f}"
+                  f" (물리 {cfg.decimation} x + 렌더), 제어·상태머신 {1e3*PROF['ctrl']/n_:.2f}, HUD {1e3*PROF['hud']/n_:.2f},"
+                  f" 대기 {1e3*PROF['sleep']/n_:.2f}  (실시간 = {1e3*dt:.1f} ms)", flush=True)
+            for _k in PROF:
+                PROF[_k] = 0
         if pad is not None:                                        # 리셋 없이 넘어짐만 센다 (60 deg 넘게 기울면 1 회)
             gg = robot.data.projected_gravity_b[0]
             tilt = math.degrees(math.acos(max(-1.0, min(1.0, -float(gg[2])))))
@@ -711,7 +760,9 @@ def episode():
             elif tilt < 20:
                 tipped = False
         if hud is not None and k % 5 == 0:
+            _th = time.perf_counter()
             hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge)
+            PROF["hud"] += time.perf_counter() - _th
         # --- 기록 ------------------------------------------------------------------------------------
         if pad is not None:
             continue
