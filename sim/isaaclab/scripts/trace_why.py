@@ -25,7 +25,7 @@ for x in X:
     first_sat = np.argmax(w > 0.8) if (w > 0.8).any() else None
     pitch, roll = np.degrees(g("pitch")), np.degrees(g("roll"))
     tilt_start = np.argmax(np.hypot(pitch, roll) > 15) if (np.hypot(pitch, roll) > 15).any() else T - 1
-    win = slice(max(0, tilt_start - 100), tilt_start)          # 15 deg 넘기 전 0.5 s
+    win = slice(max(0, tilt_start - 100), max(tilt_start, 1))  # 15 deg 넘기 전 0.5 s
     slip = np.maximum(np.abs(g("wabsL") * 0.06 - g("v_true")), np.abs(g("wabsR") * 0.06 - g("v_true")))
     s_on = np.argmax(slip > 0.3) if (slip[:tilt_start] > 0.3).any() else None
     rows.append(dict(

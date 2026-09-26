@@ -54,6 +54,11 @@ TUNE = dict(
                          #   자갈길 3 km/h 급회전에서 기울며 가속 -> 모터 한계 -> 고꾸라짐 3/3 -> 0/3 (2026-09-26).
                          #   최고 속도 3 km/h (13.9 rad/s) 가 기준 (15.1) 아래라 평지 직진에서는 걸리지 않음
                          #   한계에 붙으면 앞으로 기울 때 바퀴를 더 못 돌려 고꾸라진다 (내리막 0.9 m/s, 2026-09-26). 1 = 끔
+    bump_slow=False,     # (사용자: 턱 감지보다 험지 주행 안정성이 우선 -> 기본 끔, 2026-09-27) 턱 감지 -> 감속: pitch 각속도 > bump_rate 또는 전후 감속 > bump_acc 이면 bump_hold_s 동안 최고 속도 bump_vmax [m/s].
+                         #   0.8 m/s 에선 바퀴가 이미 모터 무부하 속도의 71~83 % 라 턱에서 LQR 이 달라는 토크를 모터가 못 낸다.
+                         #   연달아 나오는 턱(삼각형길)은 첫 턱이 예고. 가혹 평가 4096 대 0.8 m/s: 삼각형길 88 -> 94 %, 합계 96.9 -> 97.6 % (2026-09-27).
+                         #   밀림에도 걸린다. 점프 착지 뒤 1 s 는 안 봄. HUD SPEED 줄에 BUMP
+    bump_rate=1.5, bump_acc=4.0, bump_hold_s=2.0, bump_vmax=0.45,
     yaw_kd=0.5,          # 회전: 좌우 바퀴 토크 차 = yaw_kd x (명령 - 실제 yaw rate) [N·m·s/rad]
     vmc_kp=60.0,         # 다리 가상 스프링 [N·m/rad, 관절] (바퀴에서 약 4.5 kN/m. 30 은 좌우 수평이 못 따라가 넘어짐). 자중은 피드포워드로 따로 받친다
     vmc_kd=1.0,          # 다리 가상 댐퍼 [N·m·s/rad]
@@ -698,7 +703,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
     rtf = f"{stats['rtf']:.2f}x" if stats["rtf"] == stats["rtf"] else "-"
     lines = [
         f"PHASE  {('LIFTED' if stats.get('lift') else phase.upper()):8s}  CTRL {args.ctrl.upper()}" + (f" + RL {'ON' if args.rl_on else 'OFF'} (B)" if RL['pol'] is not None else ""),
-        f"SPEED  {abs(v_now)*3.6:3.1f} km/h ({v_now:+.2f} m/s) / cmd {vx*3.6:+.1f} / max {args.vmax_kmh:.1f}" + ("  BRAKE" if stats.get("brake") else ""),
+        f"SPEED  {abs(v_now)*3.6:3.1f} km/h ({v_now:+.2f} m/s) / cmd {vx*3.6:+.1f} / max {args.vmax_kmh:.1f}" + ("  BRAKE" if stats.get("brake") else "") + ("  BUMP" if stats.get("bump") else ""),
         f"YAW    {yr:+.2f} / cmd {wz:+.2f} rad/s",
         f"TILT   P {pitch:+5.1f}  R {roll:+5.1f} deg",
         f"LEGS   L {hl:3.0f}  R {hr:3.0f}  idle {args.idle_h*1000:3.0f} mm",
@@ -760,6 +765,7 @@ if args.record:
 
 
 gov = dict(vf=0.0, i=0.0, ref=0.0)
+bump = dict(t=0.0, quiet=0.0)                                   # 턱 감속 남은 시간, 이 시각 전엔 턱 안 봄 (착지 직후)
 lift = dict(on=False, t_un=0.0, t_ld=0.0)                              # 들림 (손으로 들기, 공중 스폰) 상태
 _m_tot = float(robot.root_physx_view.get_masses()[0].sum())
 from isaaclab.utils.math import quat_apply  # noqa: E402
@@ -856,6 +862,7 @@ def episode():
     x_err = 0.0                                                # LQR 진행거리 오차 (명령 속도 적분 대비)
     lift.update(on=False, t_un=0.0, t_ld=0.0)
     gov.update(vf=0.0, i=0.0, ref=0.0)                         # 속도 제한·브레이크 상태
+    bump.update(t=0.0, quiet=0.0)
     roll_pi.reset()
     if args.ctrl == "lqr":
         _I = build_lqr()
@@ -925,6 +932,7 @@ def episode():
                     reload_tune()                                  # 점프마다 파일의 TUNE 을 다시 읽는다
                     next_edge = next((i for i, e in enumerate(edges) if e > wx - 0.03), len(edges))
                 phase, t_phase, h0 = "retract", t, float(h_now.mean())
+                bump["t"] = 0.0
                 jumps.append(dict(edge=next_edge, t_trigger=round(t, 3), x_trigger=round(wx, 3)))
             elif phase == "retract" and tp >= args.t_retract:
                 phase, t_phase = "extract", t
@@ -957,6 +965,7 @@ def episode():
             elif phase == "land" and tp >= args.land_s:
                 soft_legs(False)
                 phase, t_phase = "drive", t
+                bump["quiet"] = t + 1.0                            # 착지 충격을 턱으로 보지 않게
                 next_edge += 1
             if pad is None and next_edge >= len(edges) and wx >= edges[-1] + 0.25:
                 vx = 0.0                                           # 마지막 모서리 0.25 m 지나 멈춘다 (모서리에 서면 굴러 내려옴)
@@ -982,6 +991,17 @@ def episode():
                 gov["i"] = max(0.0, min(vm, gov["i"] + args.brake_ki * e * dt))
                 v_lim = max(0.0, vm - (args.brake_kp * max(e, 0.0) + gov["i"]))
                 stats["brake"] = v_lim < vm - 0.02
+                # 턱 감지 -> 감속 (TUNE bump_slow). 브레이크 vm 은 그대로 두고 목표만 낮춘다 (vm 을 낮추면 PI 브레이크가 급제동)
+                if args.bump_slow and phase == "drive":
+                    psi_b = yaw_of(d.root_quat_w[0]); acc_b = d.body_lin_acc_w[0, 0].tolist()
+                    a_f = acc_b[0] * math.cos(psi_b) + acc_b[1] * math.sin(psi_b) + _rng.normal(0, args.imu_acc_noise)
+                    hit = t >= bump["quiet"] and (abs(thd) > args.bump_rate or a_f < -args.bump_acc)
+                    bump["t"] = args.bump_hold_s if hit else max(0.0, bump["t"] - dt)
+                else:
+                    bump["t"] = 0.0
+                if bump["t"] > 0.0:
+                    v_lim = min(v_lim, args.bump_vmax)
+                stats["bump"] = bump["t"] > 0.0
                 tgt = max(-v_lim, min(v_lim, vx))
                 gov["ref"] += max(-args.accel_max * dt, min(args.accel_max * dt, tgt - gov["ref"]))
                 v_ref = gov["ref"]

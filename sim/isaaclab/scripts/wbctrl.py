@@ -43,6 +43,7 @@ class Frame:
     truth_th: float            # 참 진자각 (est='truth')
     truth_v: float             # 참 바퀴축 속도 (est='truth')
     motor_scale: float = 1.0   # 바퀴 모터 한계 추정 / 명목 (실기: 배터리 전압 / 만충 전압)
+    a_fwd: float = 0.0         # IMU 전후 가속 [m/s^2] (진행 방향, 턱 감지)
 
 
 class WBController:
@@ -61,6 +62,7 @@ class WBController:
         self.x_err = 0.0
         self.lift = dict(on=False, t_un=0.0, t_ld=0.0)
         self.gov = dict(vf=0.0, i=0.0, ref=0.0)
+        self.bump_t, self.bump_quiet = 0.0, 0.0                 # 턱 감속 남은 시간, 이 시각 전엔 턱 안 봄 (착지 직후)
         self.vf, self.rf = 0.0, 0.0
         self.roll_pi.reset()
         self.q.clear()
@@ -121,6 +123,7 @@ class WBController:
                     and f.wx >= self.edges[self.next_edge] - P.trigger:
                 self.phase, self.t_phase, self.h0 = "retract", t, float(np.mean(f.h))
                 self.jumps.append(dict(edge=self.next_edge, t_trigger=t, x_trigger=f.wx))
+                self.bump_t = 0.0
             elif self.phase == "retract" and tp >= P.t_retract:
                 self.phase, self.t_phase = "extract", t
             elif self.phase == "extract" and (float(np.min(f.h)) >= H_MAX - 0.008 or tp >= 0.25):
@@ -137,6 +140,7 @@ class WBController:
                 self.soft = False
                 self.phase, self.t_phase = "drive", t
                 self.next_edge += 1
+                self.bump_quiet = t + 1.0                       # 착지 충격을 턱으로 보지 않게
             if self.next_edge >= len(self.edges) and f.wx >= self.edges[-1] + 0.25:
                 vx = 0.0                                        # 마지막 모서리 넘어 0.25 m 더 들어간 뒤 멈춘다 (모서리에 서면 굴러 내려옴, 0.4 면 1 m 평대를 지나침)
 
@@ -149,6 +153,15 @@ class WBController:
             e = abs(g["vf"]) - vm
             g["i"] = max(0.0, min(vm, g["i"] + P.brake_ki * e * DT))
             v_lim = max(0.0, vm - (P.brake_kp * max(e, 0.0) + g["i"]))
+            # 턱 감지 -> 감속 (climb_test TUNE bump_slow 설명). 브레이크 vm 은 그대로, 목표만 낮춘다
+            if getattr(P, "bump_slow", False) and self.phase == "drive":
+                a_f = f.a_fwd + self.rng.normal(0.0, P.imu_acc_noise)
+                hit = t >= self.bump_quiet and (abs(thd) > P.bump_rate or a_f < -P.bump_acc)
+                self.bump_t = P.bump_hold_s if hit else max(0.0, self.bump_t - DT)
+            else:
+                self.bump_t = 0.0
+            if self.bump_t > 0.0:
+                v_lim = min(v_lim, P.bump_vmax)
             tgt = max(-v_lim, min(v_lim, vx))
             g["ref"] += max(-P.accel_max * DT, min(P.accel_max * DT, tgt - g["ref"]))
             v_ref = g["ref"]

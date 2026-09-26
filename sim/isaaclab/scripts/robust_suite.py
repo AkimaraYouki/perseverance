@@ -42,6 +42,7 @@ ap.add_argument("--scenario", choices=SCEN, required=True)
 ap.add_argument("--n", type=int, default=8)
 ap.add_argument("--seed", type=int, default=100, help="로봇 i 의 무작위 시드 = seed + i")
 ap.add_argument("--out", default=None)
+ap.add_argument("--h", type=float, default=None, help="요철 시나리오(stones8, oneside8, stones_turn) 높이 덮어쓰기 [m]")
 ap.add_argument("--policy", default=None, help="잔차 RL 정책 (model_N.pt). 주면 학습 환경의 제어기(residual.py) + 정책으로 돈다 (점프 제외)")
 for k, v in TUNE.items():
     if isinstance(v, bool):
@@ -86,6 +87,8 @@ spec = dict(
     oneside8=dict(sec=14.0, v=0.4, gen=("oneside_stones", 0.08)),     # 왼쪽 바퀴 차선만 둥근 돌 8 cm (두 바퀴 높이 다름)
     stones_turn=dict(sec=12.0, v=P.vmax_kmh / 3.6, gen=("stones", 0.08), wz_const=2.5),   # 자갈길 최고 속도 급회전 (패드에서 넘어진 상황)
 )[SC]
+if args.h is not None and "gen" in spec:
+    spec["gen"] = (spec["gen"][0], args.h)
 
 # --- 장면 -------------------------------------------------------------------------------------------
 TASK = "Isaac-WheeledBiped-CAD-Residual-Play-v0" if args.policy else "Isaac-WheeledBiped-CAD-Rough-Play-v0"
@@ -259,10 +262,11 @@ with torch.inference_mode():
         th_true = torch.atan2((r_t * fwd).sum(1), r_t[:, 2])
         v_true = (d.body_lin_vel_w[:, wheel_bodies].mean(1) * fwd).sum(1)
         sf = (d.body_lin_acc_w[:, 0] + torch.tensor([0.0, 0.0, 9.81], device=dev)).norm(dim=1) / 9.81
+        a_fwd = (d.body_lin_acc_w[:, 0] * fwd).sum(1)                    # IMU 전후 가속 (턱 감지)
         wx = (ax[:, 0] - origins[:, 0]).cpu().numpy()
         wzmin = (d.body_pos_w[:, wheel_bodies, 2].min(1).values - R).cpu().numpy()
         to = lambda x: x.cpu().numpy()  # noqa: E731
-        h_, tau_, wj_, wabs_, thk_, lp_, tht_, vt_, sf_, psi_ = map(to, (h, tau, wj, wabs, th_kin, l_p, th_true, v_true, sf, psi))
+        h_, tau_, wj_, wabs_, thk_, lp_, tht_, vt_, sf_, psi_, af_ = map(to, (h, tau, wj, wabs, th_kin, l_p, th_true, v_true, sf, psi, a_fwd))
 
         vx = 0.0 if ("stop_at" in spec and t >= spec["stop_at"]) else spec["v"]
         if pol is not None:                                           # 정책 모드: 명령만 주고 제어는 학습 환경 액션 항이
@@ -294,7 +298,7 @@ with torch.inference_mode():
             f = wbctrl.Frame(t=t, g_b=g_b[i], w_b=w_b[i], h=h_[i], tau_hip=tau_[i], w_wheel_joint=wj_[i], w_wheel_abs=wabs_[i],
                              th_kin=float(thk_[i]), l_pend=float(lp_[i]), wx=float(wx[i]), wheel_z_min=float(wzmin[i]),
                              yaw=float(psi_[i]), sf=float(sf_[i]), truth_th=float(tht_[i]), truth_v=float(vt_[i]),
-                             motor_scale=motor_est[i])
+                             motor_scale=motor_est[i], a_fwd=float(af_[i]))
             a, kp, kd, ffF, info = ctrls[i].step(f, vx_i, wz, P.idle_h)
             acts[i], kps[i], kds[i], ff[i] = a, kp, kd, ffF
             rec[i]["pitch"].append(math.degrees(info["pitch"])); rec[i]["roll"].append(math.degrees(info["roll"]))

@@ -72,6 +72,7 @@ class ResidualCtrlAction(ActionTerm):
         self.x_err, self.vf, self.rf, self.v_prev, self.th_bias = z(), z(), z(), z(), z()
         self.gov_vf, self.gov_i, self.gov_ref, self.roll_i = z(), z(), z(), z()
         self.t_un, self.t_ld = z(), z()
+        self.t_bump = torch.zeros(N, device=dev)                   # 턱 감속 남은 시간 [s]
         self.lift = torch.zeros(N, dtype=torch.bool, device=dev)
         self.bias = torch.zeros(N, 2, device=dev)
         self.motor_true = torch.ones(N, device=dev)
@@ -111,6 +112,7 @@ class ResidualCtrlAction(ActionTerm):
                    self.roll_i, self.t_un, self.t_ld):
             t_[env_ids] = 0.0
         self.lift[env_ids] = False
+        self.t_bump[env_ids] = 0.0
         self.tau_f[env_ids] = 0.0
         self.queue[env_ids] = 0.0
         self._raw[env_ids] = 0.0
@@ -181,10 +183,21 @@ class ResidualCtrlAction(ActionTerm):
         # --- 속도 제한 + 브레이크 ---
         w_max = W_MAX0 * self.motor_est
         vm = torch.clamp(w_max * cad.R_WHEEL * c.vmax_motor_frac, max=c.vmax_kmh / 3.6)
+        # 턱 감지 -> 감속 (bump_slow): 바퀴가 턱에 걸리면 pitch 가 튀고 몸이 급감속한다. 0.8 m/s 에선 바퀴가 이미 모터
+        #   무부하 속도의 71~83 % 라 턱에서 LQR 이 달라는 토크를 모터가 못 낸다 (DC 모터: 속도가 오를수록 토크 한계가 준다).
+        #   연달아 나오는 턱 (삼각형길) 은 첫 턱이 예고 -> bump_hold_s 동안 최고 속도를 bump_vmax 로.
+        if c.bump_slow:
+            a_f = (d.body_lin_acc_w[:, 0, :2] * torch.stack([torch.cos(psi), torch.sin(psi)], 1)).sum(1) \
+                + c.imu_acc_noise * torch.randn_like(psi)
+            hit = (thd.abs() > c.bump_rate) | (a_f < -c.bump_acc)
+            self.t_bump = torch.where(hit, torch.full_like(self.t_bump, c.bump_hold_s), (self.t_bump - dt).clamp(min=0.0))
+        #   (과속 브레이크 vm 은 그대로 두고 명령 목표만 낮춘다 — vm 을 낮추면 PI 브레이크가 '과속' 으로 보고 목표를 0.1 m/s 까지 급히 끌어내림)
+        vb = torch.where(self.t_bump > 0, torch.full_like(vm, c.bump_vmax), torch.full_like(vm, 1e3))
         self.gov_vf += (1.0 - math.exp(-2 * math.pi * c.speed_lpf_hz * dt)) * (v - self.gov_vf)
         e = self.gov_vf.abs() - vm
         self.gov_i = torch.minimum(torch.clamp(self.gov_i + c.brake_ki * e * dt, min=0.0), vm)
         v_lim = torch.clamp(vm - (c.brake_kp * e.clamp(min=0.0) + self.gov_i), min=0.0)
+        v_lim = torch.minimum(v_lim, vb)
         tgt = torch.maximum(torch.minimum(vx_c, v_lim), -v_lim)
         self.gov_ref += (tgt - self.gov_ref).clamp(-c.accel_max * dt, c.accel_max * dt)
         v_ref = self.gov_ref
@@ -301,6 +314,12 @@ class ResidualCtrlActionCfg(ActionTermCfg):
     roll_kp: float = 1.5; roll_ki: float = 15.0; roll_kd: float = 0.3; roll_rate_lpf_hz: float = 8.0  # noqa: E702
     roll_leak: float = 0.5; roll_freeze_deg: float = 20.0; level_max: float = 0.10  # noqa: E702
     contact_tau_min: float = 0.8
+    bump_slow: bool = False            # 턱 감지 -> 감속 (위 설명). 가혹 평가 0.8 m/s 삼각형길 88 -> 94 %. 기본 끔 (사용자: 험지 안정성 우선)
+    bump_rate: float = 1.5             # pitch 각속도 [rad/s] 가 넘거나
+    bump_acc: float = 4.0              # 전후 감속 [m/s^2] 이 넘으면 턱
+    bump_hold_s: float = 2.0
+    bump_vmax: float = 0.45            # 감속 중 최고 속도 [m/s]
+    imu_acc_noise: float = 0.2
     turn_lean: float = 1.0             # 회전 중 안쪽 기울기 비율 (1 = 원심력과 중력 합력 방향)
     lift_detect_s: float = 0.3; land_detect_s: float = 0.02; land_sf_min: float = 0.4; lift_wheel_kd: float = 0.05  # noqa: E702
     v_lpf_hz: float = 10.0

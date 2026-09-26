@@ -26,6 +26,7 @@ ap.add_argument("--num_envs", type=int, default=4096)
 ap.add_argument("--seconds", type=float, default=20.0)
 ap.add_argument("--harsh", type=float, default=1.0, help="센서 잡음·바이어스·모델 오차·모터·밀기·마찰 배율")
 ap.add_argument("--delay_ms", type=float, default=5.0)
+ap.add_argument("--mu", type=float, nargs=2, default=None, metavar=("MIN", "MAX"), help="바퀴 마찰 범위 (없으면 --harsh 로: 하한 1 - 0.5 x 배율)")
 ap.add_argument("--jitter_prob", type=float, default=0.4, help="매 스텝 한 주기 더 늦을 확률")
 ap.add_argument("--level", type=int, default=None, help="난이도 행 고정 (없으면 0~9 고르게)")
 ap.add_argument("--cmd", choices=("random", "course"), default="course",
@@ -37,6 +38,7 @@ ap.add_argument("--policy", default=None)
 ap.add_argument("--tag", default="")
 ap.add_argument("--seed", type=int, default=1, help="로봇 무작위 (전후 비교는 같은 시드로)")
 ap.add_argument("--terrains", default=None, help="이 지형만 (쉼표), 예: oneside")
+ap.add_argument("--suite", choices=("all", "rough"), default="all", help="rough = 자동 주행 험지 11 종 (돌·자갈·파도·요철·경사)")
 ap.add_argument("--trace", type=int, default=0, help="넘어진 로봇 N 대의 넘어지기 전 2 s 기록을 npz 로")
 ap.add_argument("--trace_min_t", type=float, default=2.5, help="이 시각 뒤 넘어짐만 추적 (앞은 출발 착지)")
 ap.add_argument("--ctrl", nargs="*", default=[], metavar="KEY=VAL", help="기본 제어기 설정 덮어쓰기")
@@ -101,6 +103,20 @@ EVAL_TERRAINS = T.ROUGH_TERRAINS_CFG.replace(
     },
 )
 
+if args.suite == "rough":                # 자동 주행 험지 (사용자: 삼각형길은 조종으로, 자갈·파도길은 자동으로 -> 험지 주행 안정성 우선)
+    EVAL_TERRAINS = EVAL_TERRAINS.replace(num_cols=11, sub_terrains={
+        "flat": MeshPlaneTerrainCfg(proportion=1.0),
+        "stones": StonesCfg(proportion=1.0, kind="stones", h_range=(0.03, 0.12), **T._HF),
+        "oneside": StonesCfg(proportion=1.0, kind="oneside", h_range=(0.03, 0.12), **T._HF),
+        "gravel": R["gravel"].replace(proportion=1.0),                  # 10 cm 칸 무작위 ±1~3 cm
+        "rough": R["rough"].replace(proportion=1.0),                    # 25 cm 칸 0.5~3.5 cm
+        "rugged": R["rugged"].replace(proportion=1.0),                  # 2 m 기복 + 40 cm 요철 + 자갈
+        "wave_long": R["wave_long"].replace(proportion=1.0),            # 파도 0~10 cm, 4 개
+        "wave_short": R["wave_short"].replace(proportion=1.0),          # 파도 0~6 cm, 8 개
+        "bumps": R["bumps"].replace(proportion=1.0),                    # 1~4 cm 턱 0.3~1 m
+        "slope_up": R["slope_up"].replace(proportion=1.0, slope_range=(0.0, 0.30)),
+        "slope_down": R["slope_down"].replace(proportion=1.0, slope_range=(0.0, 0.30)),
+    })
 if args.terrains:
     keep = args.terrains.split(",")
     EVAL_TERRAINS.sub_terrains = {k_: v_.replace(proportion=1.0 / len(keep)) for k_, v_ in EVAL_TERRAINS.sub_terrains.items() if k_ in keep}
@@ -121,9 +137,9 @@ for kv in args.ctrl:
 e = cfg.events
 e.base_mass.params["mass_distribution_params"] = (1.0 - 0.15 * H, 1.0 + 0.15 * H)
 e.base_com.params["com_range"] = {"x": (-0.02 * H, 0.02 * H), "y": (-0.01 * H, 0.01 * H), "z": (-0.02 * H, 0.02 * H)}
-fl = max(0.2, 1.0 - 0.5 * H)
-e.wheel_friction.params["static_friction_range"] = (fl, 1.0)
-e.wheel_friction.params["dynamic_friction_range"] = (fl, 1.0)
+mu_r = tuple(args.mu) if args.mu else (max(0.2, 1.0 - 0.5 * H), 1.0)
+e.wheel_friction.params["static_friction_range"] = mu_r
+e.wheel_friction.params["dynamic_friction_range"] = mu_r
 if args.no_push:
     e.push = None
 else:
@@ -146,6 +162,16 @@ if args.level is not None:
     t_.env_origins[:] = t_.terrain_origins[t_.terrain_levels, t_.terrain_types]
 obs, _ = env.reset()
 types, levels = t_.terrain_types.clone(), t_.terrain_levels.clone()
+robot0 = env.scene["robot"]
+# 바퀴 정지 마찰 (로봇별). 재질은 몸체가 아니라 충돌 모양(shape) 마다 -> 바퀴 몸체의 모양 번호를 찾는다 (randomize_rigid_body_material 과 같은 방법)
+try:
+    _nsh = [robot0._physics_sim_view.create_rigid_body_view(lp).max_shapes for lp in robot0.root_physx_view.link_paths[0]]
+    _off = np.cumsum([0] + _nsh)
+    _wsh = [j for b_ in robot0.find_bodies(["l_wheel", "r_wheel"])[0] for j in range(_off[b_], _off[b_ + 1])]
+    mu = robot0.root_physx_view.get_material_properties()[:, _wsh, 0].float().mean(1).cpu()
+except Exception as ex_:                # 마찰 기록은 부가 정보 — 실패해도 평가는 계속
+    print(f"  (바퀴 마찰 읽기 실패: {ex_})")
+    mu = None
 fell = torch.zeros(env.num_envs, dtype=torch.bool, device=dev)
 fall_t = torch.full((env.num_envs,), float("nan"), device=dev)
 done = torch.zeros(env.num_envs, dtype=torch.bool, device=dev)             # 첫 에피소드가 끝났나
@@ -153,6 +179,7 @@ nr, nc = t_.terrain_origins.shape[:2]
 org = t_.terrain_origins.reshape(-1, 3)[:, :2]
 robot = env.scene["robot"]
 expo = torch.zeros(nc, device=dev)                                          # 종류별 머문 로봇-초
+slow_t = torch.zeros(nc, device=dev)                                        # 종류별 턱 감속 중이던 로봇-초 (bump_slow)
 fall_at = torch.zeros(nc, device=dev)                                       # 종류별 넘어진 횟수 (넘어진 곳 기준)
 term_ = env.action_manager.get_term("ctrl")
 snap = torch.zeros(env.num_envs, 5, device=dev)                             # 넘어지기 직전 [vx 명령, wz 명령, 바퀴 속도/한계, 들림, 기울기 deg]
@@ -194,6 +221,9 @@ with torch.inference_mode():
         obs, _, term, trunc, _ = env.step(a)
         live = ~done
         expo += torch.bincount(here[live], minlength=nc).float() * env.step_dt
+        if hasattr(term_, "t_bump"):
+            sl = live & (term_.t_bump > 0)
+            slow_t += torch.bincount(here[sl], minlength=nc).float() * env.step_dt
         f_ = term & ~trunc & live
         fall_at += torch.bincount(here[f_], minlength=nc).float()
         fall_t[f_] = (k + 1) * env.step_dt
@@ -234,7 +264,7 @@ for i in range(env.num_envs):
     n_ = col_name[int(types[i])]
     rows.setdefault(n_, [0, 0]); rows[n_][0] += int(not fell[i]); rows[n_][1] += 1
 title = (f"[가혹 평가] {'정책 ' + os.path.basename(args.policy) if args.policy else '기본 LQR+VMC'} | {env.num_envs} 대 x {args.seconds:.0f} s | "
-         f"강도 x{H} 지연 {args.delay_ms:.0f} ms + 지터 {args.jitter_prob:.0%} | 난이도 {args.level if args.level is not None else '0~9'} | "
+         f"강도 x{H} 마찰 {mu_r[0]:.2f}~{mu_r[1]:.2f} 지연 {args.delay_ms:.0f} ms + 지터 {args.jitter_prob:.0%} | 난이도 {args.level if args.level is not None else '0~9'} | "
          f"명령 {args.cmd}{f' {args.vx} m/s' if args.cmd == 'course' else ''}{' 정면' if args.yaw0 else ''}{' | 밀기 없음' if args.no_push else ''} {args.tag}")
 print("\n" + title)
 print(f"  {'지형':14s} {'성공':>11s}   {'성공률':>7s}  95% 신뢰구간")
@@ -251,6 +281,11 @@ p, lo, hi = wilson(S, N)
 print(f"  {'합계':14s} {S:5d}/{N:<5d}   {100*p:6.1f} %  [{100*lo:5.1f}, {100*hi:5.1f}]", flush=True)
 print("  난이도별: " + "  ".join(
     f"{lv}:{100*float((~fell[levels == lv]).float().mean()):.0f}%" for lv in range(nr) if int((levels == lv).sum()) > 0))
+bins = [0.0, 0.35, 0.5, 0.65, 0.8, 1.01]
+if mu is not None:
+    print("  바퀴 마찰별: " + "  ".join(
+    f"{lo_:.2f}~{min(hi_, 1.0):.2f}: {100*float((~fell[(mu >= lo_) & (mu < hi_)]).float().mean()):.1f}% ({int(((mu >= lo_) & (mu < hi_)).sum())})"
+    for lo_, hi_ in zip(bins[:-1], bins[1:]) if int(((mu >= lo_) & (mu < hi_)).sum()) > 0))
 ft = fall_t.cpu().numpy(); ft = ft[~np.isnan(ft)]
 if len(ft):
     print(f"  넘어진 시각: 2 s 안 {int((ft < 2).sum())}, 2~5 s {int(((ft >= 2) & (ft < 5)).sum())}, 5 s 뒤 {int((ft >= 5).sum())}")
@@ -265,8 +300,9 @@ for j in range(nc):
     if m_ <= 0:
         continue
     lam = float(fall_at[j]) / (m_ * 60.0)
-    out.setdefault(col_name[j], {})["at"] = dict(falls=int(fall_at[j]), robot_min=m_, p20=math.exp(-lam * 20))
-    print(f"    {col_name[j]:14s} {int(fall_at[j]):4d} / {m_:6.0f} 분  -> {100*math.exp(-lam*20):5.1f} %")
+    sfr = float(slow_t[j]) / max(1e-9, float(expo[j]))
+    out.setdefault(col_name[j], {})["at"] = dict(falls=int(fall_at[j]), robot_min=m_, p20=math.exp(-lam * 20), slow_frac=sfr)
+    print(f"    {col_name[j]:14s} {int(fall_at[j]):4d} / {m_:6.0f} 분  -> {100*math.exp(-lam*20):5.1f} %" + (f"   턱 감속 {100*sfr:4.0f} % 시간" if sfr > 0 else ""))
 res_dir = os.path.expanduser("~/pv_out/harsh"); os.makedirs(res_dir, exist_ok=True)
 import datetime  # noqa: E402
 json.dump(dict(title=title, args=vars(args), by_terrain=out, total=dict(ok=S, n=N, p=p, lo=lo, hi=hi)),
