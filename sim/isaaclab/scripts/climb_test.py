@@ -36,6 +36,9 @@ TUNE = dict(
     lqr_r=1.0,           # LQR 입력 가중 (두 바퀴 토크 합 N·m)
     wheel_tau_max=7.0,   # 바퀴 토크 한계 [N·m] (AK45-10 피크)
     wz_max=2.5,          # 제자리 회전 최대 [rad/s] (143 deg/s). 5 는 사용자가 너무 빠르다고 함 (4 / 6 rad/s 도 추종·안정은 됨)
+    turn_limit=False,    # 달릴 때 회전 한계 (wheel_margin) 켜기. 사용자: 조향은 사람이 조심 -> 끔 (자갈길 3 km/h 급회전은 넘어질 수 있음)
+    rl_on=True,          # 잔차 RL 보정 섞기 (패드 B 로 켜기/끄기). 드라이브 중에만, 들림·점프 중엔 끔
+    rl_policy="logs/rsl_rl/wheeled_biped_residual/2026-09-26_19-59-38_pv_rl2/model_2200.pt",   # 잔차 정책 (pv rl2 2200: 대회형 시험 세트 72/72)
     wheel_margin=0.7,    # (0.85 -> 0.7: 자갈길 최고 속도 급회전 6/8 -> 8/8. 3 km/h 에서는 회전 0.5 rad/s 로 제한됨) 달리며 돌 때 바깥 바퀴 속도 한계 = 모터 한계 x 이 비율 -> 속도가 빠를수록 회전 한계를 줄인다
     vmax_kmh=3.0,        # 최고 속도 [km/h] (사용자 2026-09-26). 스틱 끝 = 이 속도. 모터 한계는 4.1 km/h (18.85 rad/s x 0.06)
     vmax_motor_frac=0.75,  # 최고 속도 <= 이 비율 x (배터리 전압으로 추정한 바퀴 모터 한계 x R). 모터가 약하면 자동으로 낮춘다
@@ -694,7 +697,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
     yr = float(d.root_ang_vel_w[0, 2])
     rtf = f"{stats['rtf']:.2f}x" if stats["rtf"] == stats["rtf"] else "-"
     lines = [
-        f"PHASE  {('LIFTED' if stats.get('lift') else phase.upper()):8s}  CTRL {args.ctrl.upper()}",
+        f"PHASE  {('LIFTED' if stats.get('lift') else phase.upper()):8s}  CTRL {args.ctrl.upper()}" + (f" + RL {'ON' if args.rl_on else 'OFF'} (B)" if RL['pol'] is not None else ""),
         f"SPEED  {abs(v_now)*3.6:3.1f} km/h ({v_now:+.2f} m/s) / cmd {vx*3.6:+.1f} / max {args.vmax_kmh:.1f}" + ("  BRAKE" if stats.get("brake") else ""),
         f"YAW    {yr:+.2f} / cmd {wz:+.2f} rad/s",
         f"TILT   P {pitch:+5.1f}  R {roll:+5.1f} deg",
@@ -715,7 +718,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
     for kk, pl in plots.items():
         pl.set_data(*hist[kk])
 
-RESTART = ("dr_mass", "dr_com_cm", "dr_motor", "dr_seed", "imu_tilt_bias_deg", "render_hz", "physics_hz", "color_body", "color_legs", "color_wheels", "spawn_z", "obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
+RESTART = ("rl_policy", "dr_mass", "dr_com_cm", "dr_motor", "dr_seed", "imu_tilt_bias_deg", "render_hz", "physics_hz", "color_body", "color_legs", "color_wheels", "spawn_z", "obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
            "ridge_lane", "ridge_len", "cad_file", "cad_unit", "gen_type", "gen_h", "gen_len", "gen_seed", "env_name")   # 장면을 다시 만들어야 해서 재시작 필요
 CLI_KEYS = {k for k in TUNE if f"--{k}" in sys.argv}                        # 명령줄로 준 값은 파일보다 우선
 
@@ -811,6 +814,16 @@ def check_leg_osc(t):
 
 
 ACTQ = collections.deque(maxlen=16)
+from wheeled_biped_isaaclab.tasks.balance import rewards as _crew  # noqa: E402
+RL = dict(pol=None, prev=torch.zeros(4, device=dev), b_prev=False)
+if args.ctrl == "lqr" and args.rl_policy:
+    _rp = args.rl_policy if os.path.isabs(args.rl_policy) else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", args.rl_policy)
+    if os.path.isfile(_rp):
+        from policy_io import load_actor
+        RL["pol"] = load_actor(_rp, dev)
+        print(f"[RL] 잔차 정책 {os.path.basename(os.path.dirname(_rp))}/{os.path.basename(_rp)} ({'켬' if args.rl_on else '끔'}, 패드 B 로 전환)", flush=True)
+    else:
+        print(f"[RL] 정책 파일 없음: {_rp}", flush=True)
 EST = dict(th=0.0, thd=0.0, v=0.0)
 
 
@@ -877,6 +890,12 @@ def episode():
             vx, wz, dh, estop, reset_h = J.command_from_gamepad(pad, (-_vm, _vm), (-args.wz_max, args.wz_max))
             trig = max(J.trigger(pad, J.AXIS_RT), J.trigger(pad, J.lt_axis(pad)))
             y, back = pad.button(BTN_Y) or trig > 0.5, pad.button(BTN_START)   # 점프: Y, RT, LT 어느 것이든
+            bb = pad.button(1)
+            if bb and not RL["b_prev"]:                            # B = 잔차 RL 켜기/끄기
+                args.rl_on = not args.rl_on
+                RL["prev"] = torch.zeros(4, device=dev)
+                print(f"[RL] {'켬' if args.rl_on else '끔'}", flush=True)
+            RL["b_prev"] = bb
             y_edge, y_prev = y and not y_prev, y
             if k % int(2.0 / dt) == 0 and k > 0 and phase == "drive":
                 reload_tune()                                      # 패드: 2 s 마다 파일 TUNE 반영 (점프 중엔 안 함)
@@ -976,8 +995,9 @@ def episode():
                 x_err = max(-0.3, min(0.3, x_err + (v_now - v_ref) * dt))
                 tau_w = lqr.torque(l_p, x_err, v_now - v_ref, th - th_ref, thd)
                 # 바깥 바퀴 = (|v| + 0.094 |wz|) / R <= 한계 x wheel_margin -> 회전 한계
-                wz_lim = max(0.5, (args.wheel_margin * 18.85 * R - abs(v_now)) / 0.094)
-                wz = max(-wz_lim, min(wz_lim, wz))
+                if args.turn_limit:
+                    wz_lim = max(0.5, (args.wheel_margin * 18.85 * R - abs(v_now)) / 0.094)
+                    wz = max(-wz_lim, min(wz_lim, wz))
                 tau_y = args.yaw_kd * (wz - wz_now)
                 wheel_term.cfg.torque_scale = args.wheel_tau_max
                 act[0, 2] = max(-1.0, min(1.0, (0.5 * tau_w - tau_y) / args.wheel_tau_max))
@@ -1018,6 +1038,20 @@ def episode():
                 act[0, 0], act[0, 1] = (tl - h_ref) / 0.12, (tr - h_ref) / 0.12
                 legs_act.stiffness[:] = args.vmc_kp; legs_act.damping[:] = args.vmc_kd
                 ffF = 0.5 * _m_pend * 9.81
+                if RL["pol"] is not None and args.rl_on:                  # 잔차 RL: 학습 환경과 같은 관측 37 -> 보정 4
+                    tau_b = act[0, 2:4] * args.wheel_tau_max
+                    h_b = torch.tensor([tl, tr], device=dev)
+                    ctrl_o = torch.cat([
+                        torch.tensor([th * 5.0, v_now, v_ref, x_err * 5.0, dlt * 10.0, 0.0, 0.0, 0.0], device=dev),
+                        tau_b / args.wheel_tau_max, (h_b - args.idle_h) * 10.0, (h_now - args.idle_h) * 10.0,
+                        tau / 5.0, RL["prev"]])
+                    o = torch.cat([d.projected_gravity_b[0], d.root_ang_vel_b[0], cmd.command[0], cad.leg_vel(env)[0],
+                                   cad.wheel_vel(env)[0], _crew.imu_specific_force_g(env)[0], ctrl_o]).float()[None]
+                    res = RL["pol"](o)[0].clamp(-1.0, 1.0)
+                    RL["prev"] = res.clone()
+                    act[0, 2:4] = (act[0, 2:4] + res[:2] * 1.5 / args.wheel_tau_max).clamp(-1.0, 1.0)
+                    hh = (h_b + res[2:] * 0.02).clamp(H_MIN, H_MAX)
+                    act[0, :2] = (hh - h_ref) / 0.12
             elif phase == "land":
                 ffF = 0.5 * _m_pend * 9.81
             else:

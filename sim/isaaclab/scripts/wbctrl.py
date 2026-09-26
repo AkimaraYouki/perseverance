@@ -161,8 +161,9 @@ class WBController:
                 self.x_err = 0.0
             self.x_err = max(-0.3, min(0.3, self.x_err + (v_now - v_ref) * DT))
             tau_w = self.lqr.torque(l_p, self.x_err, v_now - v_ref, th - th_ref, thd)
-            wz_lim = max(0.5, (P.wheel_margin * w_max * R_WHEEL - abs(v_now)) / HALF_TRACK)
-            wz = max(-wz_lim, min(wz_lim, wz))
+            if getattr(P, "turn_limit", True):
+                wz_lim = max(0.5, (P.wheel_margin * w_max * R_WHEEL - abs(v_now)) / HALF_TRACK)
+                wz = max(-wz_lim, min(wz_lim, wz))
             tau_y = P.yaw_kd * (wz - wz_now)
             act[2] = max(-1.0, min(1.0, (0.5 * tau_w - tau_y) / P.wheel_tau_max))
             act[3] = max(-1.0, min(1.0, (0.5 * tau_w + tau_y) / P.wheel_tau_max))
