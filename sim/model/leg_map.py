@@ -24,7 +24,7 @@ L3 = 0.08000   # |I-K|  커플러
 L4 = 0.17098   # |I-W|  생크
 L5 = 0.08000   # |P-K|  로커
 
-R_WHEEL = float(os.environ.get("WB_WHEEL_R", "0.060"))   # 바퀴 반지름 (지름 120 mm). 시뮬 바퀴 크기 비교는 환경변수 WB_WHEEL_R
+R_WHEEL = float(os.environ.get("WB_WHEEL_R", "0.070"))   # 바퀴 반지름: 지름 140 mm (CAD export 6, 2026-09-27. 이전 120 mm). 시뮬 비교는 환경변수 WB_WHEEL_R
 
 ASSEMBLY_SIGN = -1.0   # 조립 분기
 

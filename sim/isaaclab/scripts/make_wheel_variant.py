@@ -23,7 +23,7 @@ app = AppLauncher(args).app
 
 from pxr import Gf, Sdf, Usd, UsdGeom  # noqa: E402
 
-SRC = os.path.expanduser("~/wheeled_biped_isaaclab/usd_loop")
+SRC = os.path.expanduser("~/wheeled_biped_isaaclab/usd_loop_e5_R60")   # CAD export 5 (120 mm) 에서
 R0, I_ROTOR = 0.060, 1.625e-3
 
 

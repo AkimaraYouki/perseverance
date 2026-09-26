@@ -43,7 +43,16 @@ M_SIGN = {"L": +1.0, "R": -1.0}               # M 증가 = 다리 펴짐 (L), R 
 WHEEL_SIGN = (-1.0, +1.0)                     # (L, R): CAD 바퀴축 -> 정책의 +y 규약
 LEG_JOINTS = ["L_joint_M", "R_joint_M"]
 WHEEL_JOINTS = ["L_joint_W", "R_joint_W"]
-USD_PATH = os.path.expanduser("~/wheeled_biped_isaaclab/usd_loop/robot_simple.usd")
+# 로봇 USD (WB_WHEEL_R 로 고름):
+#   70 mm = usd_loop          CAD export 6 (바퀴 140 mm, 2026-09-27 교체, 기본)
+#   60 mm = usd_loop_e5_R60   CAD export 5 (바퀴 120 mm, 이전 기본)
+#   그 밖 = usd_loop_R{mm}    export 5 에서 바퀴 반지름·질량·관성만 바꾼 사본 (scripts/make_wheel_variant.py)
+_R_MM = int(round(R_WHEEL * 1000))
+_USD_DIR = {70: "usd_loop", 60: "usd_loop_e5_R60"}.get(_R_MM, f"usd_loop_R{_R_MM}")
+USD_PATH = os.path.expanduser(f"~/wheeled_biped_isaaclab/{_USD_DIR}/robot_simple.usd")
+# 바퀴 축 관성 (한 개) = 모터 회전자 반사관성 (fix_urdf: 157.33e-7 x 10^2 = 1.573e-3) + 바퀴 자체.
+#   CAD: 120 mm 자체 1.82e-4 -> 1.755e-3, 140 mm 자체 2.661e-4 -> 1.839e-3. 사본은 make_wheel_variant 와 같은 식
+WHEEL_IZZ = {70: 1.8394e-3, 60: 1.755e-3}.get(_R_MM, 1.625e-3 + 1.3e-4 * (R_WHEEL / 0.060) ** 4)
 
 # --- leg_map 표 (theta -> 다리 관절값, dh/dtheta) -------------------------------
 _TH = torch.linspace(leg_map.THETA_MIN - 0.08, leg_map.THETA_MAX + 0.08, 2001, dtype=torch.float64)

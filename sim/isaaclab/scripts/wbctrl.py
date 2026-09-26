@@ -19,7 +19,7 @@ import numpy as np
 import lqr_vmc
 
 H_MIN, H_MAX = 0.1225, 0.2425
-R_WHEEL = float(os.environ.get("WB_WHEEL_R", "0.060"))   # leg_map 과 같은 환경변수
+R_WHEEL = float(os.environ.get("WB_WHEEL_R", "0.070"))   # leg_map 과 같은 환경변수 (기본 140 mm)
 W_WHEEL_MAX = 18.85                    # 바퀴 모터 한계 (명목, 제어기가 믿는 값)
 HALF_TRACK = 0.094
 DT = 0.005

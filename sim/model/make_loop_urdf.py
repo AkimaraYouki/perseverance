@@ -11,7 +11,7 @@ Isaac Sim 5.1 폐루프 튜토리얼(rig_closed_loop_structures) 방식:
      CAD 영점 자세에서 두 P 가 월드에서 일치하는지(조립 잔차)도 검사한다.
   2. closing_* 링크/관절을 지운다 (질량 없는 링크는 PhysX 관절 트리에서 문제를 낸다).
   3. 충돌체를 단순화한다. CAD 는 보이는 메시 전부(몸체 93 개)가 충돌체라 관절부에서 링크끼리
-     겹친다. 바퀴 = 원통(R 60, 폭 30), 몸체 = 상자, 다리 링크 = 없음. 모양(visual)은 CAD 그대로.
+     겹친다. 바퀴 = 원통(반지름은 타이어 STL 에서, 폭 30), 몸체 = 상자, 다리 링크 = 없음. 모양(visual)은 CAD 그대로.
 
     python3 make_loop_urdf.py <export_(N)_fixed/robot.urdf> [--out robot_loop.urdf]
 """
@@ -21,6 +21,18 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
+
+
+def _stl_points(path):
+    """STL (이진/ASCII) 꼭짓점 [n, 3]."""
+    import struct
+    raw = Path(path).read_bytes()
+    if raw[:5] == b"solid" and b"facet" in raw[:300]:
+        return np.array([[float(v) for v in ln.split()[1:4]] for ln in raw.decode(errors="ignore").splitlines()
+                         if ln.strip().startswith("vertex")])
+    n = struct.unpack("<I", raw[80:84])[0]
+    rec = np.frombuffer(raw[84:84 + n * 50], dtype=np.dtype([("n", "<3f4"), ("v", "<9f4"), ("a", "<u2")]))
+    return rec["v"].reshape(-1, 3).astype(float)
 
 
 def rpy_mat(r, p, y):
@@ -98,7 +110,13 @@ def main():
             if lim is not None:
                 lim.set("lower", f"{-3.14159:.5f}"); lim.set("upper", f"{3.14159:.5f}")
 
-    # 충돌체 단순화
+    # 충돌체 단순화. 바퀴 반지름은 타이어 STL (rubberpad.stl) 지름의 절반 — export 5 는 120 mm, 6 은 140 mm
+    wheel_r = 0.06
+    tire = Path(a.src).parent / "assets" / "rubberpad.stl"
+    if tire.exists():
+        pts = _stl_points(tire)
+        wheel_r = round(float(np.sort(pts.max(0) - pts.min(0))[-1]) / 2, 4)
+    print(f"바퀴 충돌 원통 반지름 {wheel_r * 1000:.1f} mm")
     for l in root.findall("link"):
         for c in l.findall("collision"):
             l.remove(c)
@@ -107,7 +125,7 @@ def main():
         com = i.find("origin").get("xyz") if i is not None else "0 0 0"
         if n.endswith("_wheel"):       # 회전축 = 로컬 z (W 관절 축 0 0 1) — 원통 기본축과 같다
             c = ET.SubElement(l, "collision"); ET.SubElement(c, "origin", {"xyz": com, "rpy": "0 0 0"})
-            g = ET.SubElement(c, "geometry"); ET.SubElement(g, "cylinder", {"radius": "0.06", "length": "0.03"})
+            g = ET.SubElement(c, "geometry"); ET.SubElement(g, "cylinder", {"radius": f"{wheel_r:.4f}", "length": "0.03"})
         elif n == "base_link":
             c = ET.SubElement(l, "collision"); ET.SubElement(c, "origin", {"xyz": com, "rpy": "0 0 0"})
             g = ET.SubElement(c, "geometry"); ET.SubElement(g, "box", {"size": "0.15 0.19 0.13"})

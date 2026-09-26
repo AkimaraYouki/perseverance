@@ -17,12 +17,12 @@ from isaaclab.utils.math import quat_apply
 sys.path.insert(0, os.path.expanduser("~/perseverance/sim/model"))
 import leg_map  # noqa: E402
 
-LOOP = json.load(open("/home/parksuho/Desktop/휠 레그드 로봇/export_(5)_fixed/loop_closure.json"))
+LOOP = json.load(open(os.environ.get("LOOP_JSON", "/home/parksuho/Desktop/휠 레그드 로봇/export_(6)_fixed/loop_closure.json")))
 sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=1 / 800, gravity=(0.0, 0.0, 0.0) if os.environ.get("NOGRAV") else (0.0, 0.0, -9.81)))
 cfg = ArticulationCfg(
     prim_path="/World/Robot",
     spawn=sim_utils.UsdFileCfg(
-        usd_path=os.path.expanduser("~/wheeled_biped_isaaclab/usd_loop/robot_simple.usd"),
+        usd_path=os.path.expanduser(os.environ.get("LOOP_USD", "~/wheeled_biped_isaaclab/usd_loop/robot_simple.usd")),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             fix_root_link=True, enabled_self_collisions=False,
             solver_position_iteration_count=int(os.environ.get("PIT","16")), solver_velocity_iteration_count=int(os.environ.get("VIT","4")))),
@@ -54,7 +54,7 @@ def world_pt(body, p):
     pos, q = body_pose(body)
     return pos + quat_apply(q.unsqueeze(0), torch.tensor([p], device=pos.device, dtype=pos.dtype))[0]
 
-hipL = torch.tensor([0.08, 0.001, 0.0])  # URDF L_joint_M 원점 (base_link 기준)
+hipL = torch.tensor([float(v) for v in os.environ.get("HIP_L", "0 0.081 0").split()])  # URDF L_joint_M 원점 (base_link 기준, export 6. export 5 는 "0.08 0.001 0")
 print("관절 한계(deg):", [(n, round(math.degrees(float(a)),1), round(math.degrees(float(b)),1)) for n,(a,b) in zip(names, robot.data.joint_pos_limits[0].tolist())], flush=True)
 print("질량(g):", [(n, round(float(m)*1000,1)) for n, m in zip(robot.body_names, robot.root_physx_view.get_masses()[0].tolist())], flush=True)
 print("관성 대각(kg m2):", [(n, [round(float(x),6) for x in I[[0,4,8]]]) for n, I in zip(robot.body_names, robot.root_physx_view.get_inertias()[0])], flush=True)
