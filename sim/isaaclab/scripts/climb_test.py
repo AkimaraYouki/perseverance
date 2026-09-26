@@ -12,7 +12,7 @@
 발동: 바퀴 중심이 다음 모서리 앞 trigger 에 오면 (조종자 버튼 대신). 2 단 계단은 모서리마다 한 번씩 = 연속 점프.
 
     obstacle plateau   평대 (높이 step_h, 윗면 length)
-    obstacle stairs2   2 단 계단 (한 단 step_h, 단 폭 tread)
+    obstacle stairs2   ㅗ 모양 2 단 (한 단 step_h, 칸 길이 tread: 아래 단 | 윗단 | 아래 단)
     --mode stance        한 바퀴 서기 위험 시험 (평지),  --mode none  점프 없이 달리기
 
 튜닝 값은 아래 TUNE 에 모여 있다.
@@ -22,6 +22,7 @@ import argparse
 import json
 import math
 import os
+import itertools
 import sys
 
 from isaaclab.app import AppLauncher
@@ -52,10 +53,10 @@ TUNE = dict(
     contact_tau=2.0,     # 접지 판정 고관절 토크 [N·m] (descend 0.04 s 뒤부터)
     t_fly_max=0.45,      # 이륙 뒤 이 시간 안에 접지를 못 느끼면 강제로 land [s]
     # --- 장애물 ---
-    obstacle="plateau",  # plateau (평대) | stairs2 (2 단 계단)
+    obstacle="plateau",  # plateau (평대) | stairs2 (ㅗ 모양 2 단: 아래 단 | 윗단 | 아래 단)
     step_h=0.08,         # 턱(한 단) 높이 [m]
     length=0.35,         # 평대 윗면 길이 [m]
-    tread=0.35,          # 2 단 계단 단 폭 [m]
+    tread=1.0,           # stairs2 한 칸 길이 [m] (대회: 1 m | 1 m | 1 m)
     edge=1.0,            # 첫 모서리 x [m]
     # --- 기타 ---
     hip="dc",            # dc (토크-속도 모델) | ideal
@@ -76,6 +77,9 @@ for k, v in TUNE.items():
         ap.add_argument(f"--{k}", choices=CHOICES.get(k), default=v)
     else:
         ap.add_argument(f"--{k}", type=float, default=v)
+ap.add_argument("--joystick", nargs="?", const="/dev/input/js0", default=None, metavar="DEV",
+                help="패드로 조종: 왼스틱 세로 전후, 오른스틱 가로 회전, RT/LT 높이, Y 점프, A 정지, START 처음으로, 십자키/LB/RB/BACK 카메라")
+ap.add_argument("--pad", choices=("auto", "classic", "modern"), default="classic")
 ap.add_argument("--record", default=None, metavar="DIR")
 ap.add_argument("--out", default=None)
 AppLauncher.add_app_launcher_args(ap)
@@ -132,9 +136,9 @@ if args.mode in ("jump", "none"):
         cfg.scene.obstacle = box("obstacle", args.edge, args.edge + args.length, args.step_h)
         edges, top = [args.edge], args.step_h
     else:
-        end = args.edge + args.tread + 0.8
-        cfg.scene.obstacle = box("tier1", args.edge, end, args.step_h)
-        cfg.scene.obstacle2 = box("tier2", args.edge + args.tread, end, 2 * args.step_h)
+        # ㅗ 모양 (대회): 아래 단 tread | 윗단 tread | 아래 단 tread. 오르는 모서리 둘만 점프 대상
+        cfg.scene.obstacle = box("tier1", args.edge, args.edge + 3 * args.tread, args.step_h)
+        cfg.scene.obstacle2 = box("tier2", args.edge + args.tread, args.edge + 2 * args.tread, 2 * args.step_h)
         edges, top = [args.edge, args.edge + args.tread], 2 * args.step_h
 if True:                                                              # 옆에서 로봇을 따라가는 카메라 (창·녹화 공통)
     cfg.viewer.origin_type = "asset_root"; cfg.viewer.asset_name = "robot"; cfg.viewer.env_index = 0
@@ -170,15 +174,150 @@ hip_sign = torch.tensor([cad.M_SIGN["L"], cad.M_SIGN["R"]], device=dev)
 wheel_ids = robot.find_joints(cad.WHEEL_JOINTS, preserve_order=True)[0]
 wheel_term = env.action_manager.get_term("wheels")
 scale0 = wheel_term.cfg.torque_scale
-wsign = torch.ones(2, device=dev)                                  # 바퀴 관절축 -> 세계 +y (전진 구름) 부호. 달릴 때 잰다
+wsign = torch.tensor(cad.WHEEL_SIGN, device=dev, dtype=torch.float32)   # 관절축 -> +y 부호 (기록용). 행동은 이미 +y 규약
 legs_act = robot.actuators["legs"]
 kp0, kd0 = legs_act.stiffness.clone(), legs_act.damping.clone()
+
+
+def yaw_of(q):
+    w, x, y, z = (float(v) for v in q)
+    return math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
 
 
 def soft_legs(on):
     legs_act.stiffness[:] = args.land_kp if on else kp0
     legs_act.damping[:] = args.land_kd if on else kd0
 
+
+pad = None
+BTN_Y, BTN_BACK = 3, 6
+import time  # noqa: E402
+if args.joystick:
+    from wheeled_biped_isaaclab import joystick_input as J
+    pad = J.Gamepad(args.joystick)
+    pad.poll()
+    if args.pad != "auto":
+        pad.axis_right_x = J.AXIS_RIGHT_X_CLASSIC if args.pad == "classic" else J.AXIS_RIGHT_X_MODERN
+        pad.layout, pad._layout_done = args.pad, True
+    print(f"[패드] {args.joystick} ({pad.layout}) — 왼스틱 세로 전후 / 오른스틱 가로 회전 / RT·LT 높이 / "
+          f"Y 점프 / A 정지 / START 처음으로 / 십자키·LB·RB·BACK 카메라.  모서리: " + ", ".join(f"x {e:.2f} m" for e in edges), flush=True)
+rng = cmd.cfg.ranges
+
+
+# ── 창 모드 HUD + 카메라 (play_joy.py 에서 옮김. omni.ui 는 한글이 깨져서 영어) ─────────────────────
+BTN_LB, BTN_RB, BTN_START, DPAD_X, DPAD_Y = 4, 5, 7, 6, 7
+_c = (0.2, -1.4, 0.35)
+cam0 = (math.atan2(_c[1], _c[0]), math.hypot(_c[0], _c[1]), _c[2])
+cam = list(cam0)                                                      # [방위각 rad, 수평거리 m, 높이 m]
+vcc = getattr(env, "viewport_camera_controller", None)
+
+
+def apply_cam():
+    if vcc is not None:
+        yaw, dd, hz = cam
+        vcc.update_view_location(eye=(dd * math.cos(yaw), dd * math.sin(yaw), hz), lookat=(0.0, 0.0, 0.12))
+
+
+HIST = 200
+hist = {k: [0.0] * HIST for k in ("pitch", "vx", "hip", "wheel_z")}
+hud, plots = None, {}
+stats = dict(falls=0, jumps=0, last="-", rtf=float("nan"), mark=(0.0, None))
+if not args.headless:
+    try:
+        import omni.kit.viewport.utility as vp_utils
+        import omni.ui as ui
+        _font = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+        _fst = {"font_size": 15, "color": 0xFFFFFFFF, "font": _font}
+        with vp_utils.get_active_viewport_window().get_frame("wb_jump_hud"):
+            with ui.HStack():
+                ui.Spacer()
+                with ui.VStack(width=ui.Pixel(430)):
+                    ui.Spacer(height=8)
+                    with ui.ZStack():
+                        ui.Rectangle(style={"background_color": 0xB0000000, "border_radius": 6})
+                        with ui.VStack(spacing=2):
+                            ui.Spacer(height=8)
+                            hud = ui.Label("", style=_fst, alignment=ui.Alignment.LEFT_TOP)
+                            ui.Spacer(height=6)
+                            for key, lab, col in (("pitch", "pitch", 0xFF44FFFF), ("vx", "vx", 0xFF44AAFF),
+                                                  ("hip", "hip Nm", 0xFF4444FF), ("wheel_z", "wheel z", 0xFF44FF88)):
+                                with ui.HStack(height=ui.Pixel(26)):
+                                    ui.Spacer(width=8)
+                                    ui.Label(lab, width=ui.Pixel(80), style=_fst)
+                                    plots[key] = ui.Plot(ui.Type.LINE, -1.0, 1.0, *([0.0] * HIST), width=ui.Pixel(310),
+                                                         height=ui.Pixel(24), style={"color": col, "background_color": 0x30FFFFFF})
+                            ui.Spacer(height=8)
+                    ui.Spacer()
+                ui.Spacer(width=12)
+        print("[HUD] 활성", flush=True)
+    except Exception as e:
+        print(f"[HUD] 비활성: {type(e).__name__} {e}", flush=True)
+
+
+def push(key, val):
+    h = hist[key]
+    h.append(max(-1.0, min(1.0, val)))
+    del h[0]
+
+
+def pad_camera():
+    """십자키 둘러보기, LB 멀리 / RB 가까이, BACK 카메라 초기화 (play_joy 와 같음)."""
+    moved = False
+    dx, dy = pad.axis(DPAD_X), pad.axis(DPAD_Y)
+    if dx:
+        cam[0] += dx * 1.2 * dt; moved = True
+    if dy:
+        cam[2] = min(3.0, max(0.05, cam[2] - dy * 0.6 * dt)); moved = True
+    if pad.button(BTN_LB) or pad.button(BTN_RB):
+        cam[1] = min(4.0, max(0.3, cam[1] * (1.0 + (0.8 if pad.button(BTN_LB) else -0.8) * dt))); moved = True
+    if pad.button(BTN_BACK):
+        cam[:] = list(cam0); moved = True
+    if moved:
+        apply_cam()
+
+
+def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
+    d = robot.data
+    g = d.projected_gravity_b[0]
+    pitch = math.degrees(math.asin(max(-1.0, min(1.0, float(g[0])))))
+    roll = math.degrees(math.asin(max(-1.0, min(1.0, float(g[1])))))
+    v_now = float(d.root_com_lin_vel_b[0, 0])
+    wb = [(float(z) - R) * 1000 for z in wheel_pos[:, 2]]
+    wt = [float(x) for x in d.applied_torque[0, wheel_ids] * wsign]
+    ahead = [e for e in edges if e > wx - 0.03]
+    dist = f"{(ahead[0]-wx)*1000:5.0f} mm  (edge {edges.index(ahead[0])+1}/{len(edges)}, auto trigger {args.trigger*1000:.0f})" if ahead else "past last edge"
+    push("pitch", pitch / 30.0); push("vx", v_now / 1.0); push("hip", float(tau.abs().max()) / 9.0)
+    push("wheel_z", min(wb) / 200.0 * 2 - 1)
+    m_sim, m_wall = stats["mark"]
+    now = time.time()
+    if m_wall is None or now - m_wall > 1.0:
+        if m_wall is not None and now > m_wall:
+            stats["rtf"] = (t - m_sim) / (now - m_wall) if t > m_sim else stats["rtf"]
+        stats["mark"] = (t, now)
+    rtf = stats["rtf"]
+    hud.text = "\n".join([
+        f"PHASE     {phase.upper()}" + ("   [Y] = JUMP" if phase == "drive" and pad is not None else ""),
+        f"EDGE      {dist}",
+        f"CMD       vx {vx:+.2f}  wz {wz:+.2f}  h {(h_cmd+R)*1000:5.1f} mm",
+        f"ACTUAL    vx {v_now:+.2f} m/s",
+        f"TILT      pitch {pitch:+6.1f}  roll {roll:+6.1f} deg",
+        f"WHEEL z   L {wb[0]:5.0f}  R {wb[1]:5.0f} mm (bottom)",
+        f"HIP   Nm  L {float(tau[0]):+5.2f}  R {float(tau[1]):+5.2f}  (peak 9)",
+        f"WHEEL Nm  L {wt[0]:+5.2f}  R {wt[1]:+5.2f}  (peak 7)",
+        "",
+        f"LAST JUMP {stats['last']}",
+        f"JUMPS {stats['jumps']}   FALLS {stats['falls']}",
+        "",
+        f"TUNE  trigger {args.trigger:.2f}  v {args.v:.2f}",
+        f"      extract_pitch {args.extract_pitch:+.0f}  air_pitch {args.air_pitch:+.0f}",
+        f"      air_kp {args.air_kp:.0f}  kd {args.air_kd:.1f}  land_kp {args.land_kp:.0f}  h_land {args.h_land:.3f}",
+        "",
+        (f"SIM SPEED {rtf:4.2f}x real-time" if rtf == rtf else "SIM SPEED measuring..."),
+        ("PAD  LStick fwd/back  RStick turn  RT/LT height  Y jump  A stop  START restart  DPad/LB/RB/BACK cam"
+         if pad is not None else "file save -> next try uses new TUNE"),
+    ])
+    for kk, pl in plots.items():
+        pl.set_data(*hist[kk])
 
 RESTART = ("obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0")   # 장면을 다시 만들어야 해서 재시작 필요
 CLI_KEYS = {k for k in TUNE if f"--{k}" in sys.argv}                        # 명령줄로 준 값은 파일보다 우선
@@ -205,7 +344,7 @@ def reload_tune():
 
 
 dt = env.step_dt
-LOOP = not args.headless and not args.record                          # 창으로 볼 때는 계속 반복
+LOOP = not args.headless and not args.record and pad is None          # 창으로 볼 때는 계속 반복
 rec = None
 if args.record:
     import datetime
@@ -217,17 +356,17 @@ if args.record:
 
 
 def episode():
-    global wsign
     soft_legs(False)
     wheel_term.cfg.torque_scale = scale0
     obs, _ = env.reset()
     phase, t_phase, next_edge, h0 = "drive", 0.0, 0, H_CRUISE
     log, jumps = [], []
     fell, fell_t = False, None
-    LEG_TARGET = {"retract": H_MIN, "extract": H_MAX, "fly": H_MIN, "descend": args.h_land, "land": args.h_land}
-    for k in range(int(args.seconds / dt)):
+    y_prev, back_prev, h_cmd, wall0 = True, True, H_CRUISE, None
+    for k in (itertools.count() if pad is not None else range(int(args.seconds / dt))):
         if not app.is_running():
             return None
+        LEG_TARGET = {"retract": H_MIN, "extract": H_MAX, "fly": H_MIN, "descend": args.h_land, "land": args.h_land}
         t = k * dt
         d = robot.data
         wheel_pos = d.body_pos_w[0, wheel_bodies]                 # (2, 3)
@@ -235,14 +374,29 @@ def episode():
         h_now = cad.leg_state(robot)[0][0]                         # (2,) 다리 길이
         tau = d.applied_torque[0, leg_ids] * hip_sign
         # --- 상태머신 --------------------------------------------------------------------------------
-        vx = args.v
+        vx, wz, y_edge = args.v, 0.0, False
+        if pad is not None:                                        # 패드: 속도·회전·높이는 사람이, 점프는 Y
+            pad.poll()
+            vx, wz, dh, estop, reset_h = J.command_from_gamepad(pad, rng.lin_vel_x, rng.ang_vel_z)
+            h_cmd = H_CRUISE if reset_h else min(rng.height[1], max(rng.height[0], h_cmd + dh * 0.1 * dt))
+            y, back = pad.button(BTN_Y), pad.button(BTN_START)
+            y_edge, y_prev = y and not y_prev, y
+            if back and not back_prev:
+                print("[처음으로]", flush=True)
+                return "restart"
+            back_prev = back
+            pad_camera()
+            if wall0 is None:
+                wall0 = time.time() - t
+            time.sleep(max(0.0, wall0 + t - time.time()))           # 실제 시간에 맞춘다
         if args.mode == "jump":
             tp = t - t_phase
-            if phase == "drive" and next_edge < len(edges) and wx >= edges[next_edge] - args.trigger:
+            auto_go = pad is None and next_edge < len(edges) and wx >= edges[next_edge] - args.trigger
+            if phase == "drive" and (auto_go or y_edge):
+                if pad is not None:
+                    reload_tune()                                  # 점프마다 파일의 TUNE 을 다시 읽는다
+                    next_edge = next((i for i, e in enumerate(edges) if e > wx - 0.03), len(edges))
                 phase, t_phase, h0 = "retract", t, float(h_now.mean())
-                wv = d.joint_vel[0, wheel_ids]
-                if float(wv.abs().min()) > 1.0:
-                    wsign = torch.sign(wv)
                 jumps.append(dict(edge=next_edge, t_trigger=round(t, 3), x_trigger=round(wx, 3)))
             elif phase == "retract" and tp >= args.t_retract:
                 phase, t_phase = "extract", t
@@ -263,16 +417,23 @@ def episode():
                                  wheel_bottom_mm=round((float(wheel_pos[:, 2].min()) - R) * 1000, 1))
                 phase, t_phase = "land", t
                 wheel_term.cfg.torque_scale = scale0
+                stats["jumps"] += 1
+                j, e = jumps[-1], (edges[next_edge] if next_edge < len(edges) else None)
+                rel = (lambda x: f"{1000*(x-e):+.0f} mm") if e is not None else (lambda x: f"x {x:.3f} m")
+                stats["last"] = f"edge {next_edge+1 if e is not None else '-'}: takeoff {rel(j['x_takeoff'])} land {rel(j['x_land'])}"
+                if pad is not None:
+                    print(f"[점프 {len(jumps)}] 모서리 {next_edge+1 if e is not None else '-'}  이륙 {rel(j['x_takeoff'])}  "
+                          f"착지 {rel(j['x_land'])} ({j['contact']})  착지 때 바퀴 바닥 {j['wheel_bottom_mm']} mm", flush=True)
             elif phase == "land" and tp >= args.land_s:
                 soft_legs(False)
                 phase, t_phase = "drive", t
                 next_edge += 1
-            if next_edge >= len(edges):
+            if pad is None and next_edge >= len(edges):
                 vx = 0.0                                           # 다 올라가면 멈춘다 (윗면 20–50 cm)
         elif args.mode == "stance":
             vx = 0.0
             phase = "stand" if t < 1.0 else ("lean" if t < 2.0 else "lift")
-        cmd.set(torch.tensor([vx], device=dev), torch.tensor([0.0], device=dev), torch.tensor([H_CRUISE], device=dev),
+        cmd.set(torch.tensor([vx], device=dev), torch.tensor([wz], device=dev), torch.tensor([h_cmd], device=dev),
                 mode=torch.tensor([0.0], device=dev))
         act = policy(obs["policy"]).clone()
         h_ref = float(cmd.command[0, 2])
@@ -289,7 +450,7 @@ def episode():
                     pitch = math.asin(max(-1.0, min(1.0, float(d.projected_gravity_b[0, 0]))))
                     ref = args.extract_pitch if phase == "extract" else args.air_pitch
                     u = args.air_kp * (pitch - math.radians(ref)) + args.air_kd * float(d.root_ang_vel_b[0, 1])
-                    act[0, 2:] = wsign * max(-1.0, min(1.0, u / args.air_tau))
+                    act[0, 2:] = max(-1.0, min(1.0, u / args.air_tau))   # 두 바퀴 같은 값 (+y 규약, 좌우 부호는 액션 항이 처리)
         elif args.mode == "stance" and phase != "stand":
             s = min(1.0, (t - 1.0) / 1.0)
             hl, hr = H_CRUISE + 0.045 * s, H_CRUISE - 0.045 * s     # 좌우 길이차 9 cm -> 약 24 deg 기울기
@@ -299,14 +460,22 @@ def episode():
         obs, _, term, _, _ = env.step(act)
         if bool(term[0]) and not fell:
             fell, fell_t = True, t
+            stats["falls"] += 1
+            if pad is not None:
+                print(f"[넘어짐] 단계 {phase} — 처음으로", flush=True)
+                return "restart"
             if LOOP:
                 break                                              # 창 모드: 넘어지면 바로 다음 시도
+        if hud is not None and k % 5 == 0:
+            hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge)
         # --- 기록 ------------------------------------------------------------------------------------
+        if pad is not None:
+            continue
         g = d.projected_gravity_b[0]
         mvel = d.joint_vel[0, leg_ids] * hip_sign
         log.append(dict(t=t, phase=phase, wx=wx, wz_l=float(wheel_pos[0, 2]), wz_r=float(wheel_pos[1, 2]),
                         bz=float(d.root_com_pos_w[0, 2]), bx=float(d.root_com_pos_w[0, 0]),
-                        pitch=math.degrees(math.asin(max(-1, min(1, float(g[0]))))),
+                        yaw=math.degrees(yaw_of(d.root_quat_w[0])), pitch=math.degrees(math.asin(max(-1, min(1, float(g[0]))))),
                         roll=math.degrees(math.asin(max(-1, min(1, float(g[1]))))),
                         hl=float(h_now[0]), hr=float(h_now[1]), tau_l=float(tau[0]), tau_r=float(tau[1]),
                         w_l=float(mvel[0]), w_r=float(mvel[1]),
@@ -330,6 +499,7 @@ def judge(L, jumps, fell, fell_t):
         air = [r for r in L if r["phase"] in ("extract", "fly", "descend", "land")]
         res["pitch_range_in_jump_deg"] = [float(min(r["pitch"] for r in air)), float(max(r["pitch"] for r in air))] if air else None
         res["final_x"] = L[-1]["wx"]
+        res["yaw_max_deg"] = float(max(abs(r["yaw"]) for r in L))
     else:
         lift = [r for r in L if r["phase"] == "lift"]
         ok = [r for r in lift if abs(r["roll"]) < 40]
@@ -346,7 +516,7 @@ def summary(n, res):
     pr = res.get("pitch_range_in_jump_deg")
     print(f"#{n} {'성공' if res.get('success') else '실패'}"
           + (f"  넘어짐 {res['fell_t']:.2f} s" if res["fell"] else "")
-          + (f"  pitch {pr[0]:.0f}~{pr[1]:.0f} deg" if pr else "") + f"  {js}", flush=True)
+          + (f"  pitch {pr[0]:.0f}~{pr[1]:.0f} deg" if pr else "") + f"  yaw 최대 {res.get('yaw_max_deg', 0):.0f} deg  {js}", flush=True)
 
 
 n = 0
@@ -358,6 +528,8 @@ with torch.inference_mode():
         r = episode()
         if r is None:
             break
+        if r == "restart":
+            continue
         res, L = r
         if LOOP:
             summary(n, res)

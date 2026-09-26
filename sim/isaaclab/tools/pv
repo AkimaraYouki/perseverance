@@ -325,6 +325,9 @@ jump)
   cd "$PROJ"
   args=(); rec=0
   for a in "$@"; do [ "$a" = "--record" ] && rec=1 || args+=("$a"); done
+  if [[ " ${args[*]} " == *" --joystick "* ]] && [[ " ${args[*]} " != *" --obstacle "* ]]; then
+    args+=(--obstacle stairs2)                                   # 패드 모드 기본 = 2 단 턱
+  fi
   if [ "$rec" = 1 ]; then
     dir="$OUT/video/climb"; mkdir -p "$dir"
     echo "녹화 (헤드리스): $dir"
@@ -334,7 +337,7 @@ jump)
     export DISPLAY="$(desktop_display)"
     setsid nohup "$IL" -p scripts/_isaaclab_launch.py scripts/climb_test.py "${args[@]}" > "$RUNLOG/jump.log" 2>&1 < /dev/null &
     echo "점프 시험 창 (DISPLAY $DISPLAY, 부팅 1~2분). 반복 재생, 시도마다 결과 한 줄:"
-    echo "  tail -f $RUNLOG/jump.log | grep -E '^#|튜닝'"
+    echo "  tail -f $RUNLOG/jump.log | grep -E '^#|^\\[|튜닝'"
     echo "  튜닝: $PROJ/scripts/climb_test.py 의 TUNE 을 고치고 저장 -> 다음 시도부터 적용 (장애물·고관절 값만 재시작 필요)"
   fi
   ;;
@@ -357,6 +360,7 @@ pv — PERSEVERANCE 휠-레그 원스톱 (odm 과 같은 문법)
             ... --from <ver> [iter]         다른 버전 체크포인트에서 새 버전으로 (예: pv train r4 1500 4096 --from r3)
   pv watch  [ver]                           진행 한 줄 (20 s 완주율, 지형 단계, std, ETA, 크래시)
   pv jump   [--record] [--obstacle stairs2] 점프 상태머신 시험 창 (튜닝: scripts/climb_test.py 의 TUNE, 저장하면 바로 반영)
+  pv jump   --joystick                      패드로 몰고 Y 로 점프 (기본 2 단 턱). 점프마다 TUNE 다시 읽음
   pv play   [ver] [iter] [--joystick]       재생 — 이 PC 모니터에 네이티브 창
             ... --terrain rugged --level 7  지형 (flat gravel rugged rough wave_long wave_short slope_up slope_down bumps)
             ... --mode manual               시작 높이 모드 (패드 X 로 전환)
