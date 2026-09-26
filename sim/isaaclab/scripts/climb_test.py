@@ -37,12 +37,17 @@ TUNE = dict(
                          #   착지 2.9 J (1.2 m/s), 8 cm 낙하 3.2 J -> 0.1365(CAD 자세) 는 1.6 J 라 바닥을 친다.
                          #   0.1825 = 6.8 J (2.2 배 여유) + 신장 60 mm (구덩이). ※ r3 정책은 자동 공칭 0.1365 로 학습됐다
     # --- 접근·발동 ---
-    v=0.8,               # 접근 속도 [m/s]. 바퀴 한계 18.85 rad/s x R 0.06 = 1.13 m/s 라 0.8 이 여유 있는 최대
-    trigger=0.38,        # 바퀴 중심이 모서리 앞 이 거리에 오면 발동 [m]. 발동~이륙 사이 v 0.8 에서 약 0.24 m 간다
+    v=0.5,               # 접근 속도 [m/s] (자동 시험용. 패드는 스틱). 바퀴 한계 18.85 rad/s x R 0.06 = 1.13 m/s, 웅크림·숙임 여유 두고 0.5~0.6
+    trigger=0.32,        # 바퀴 중심이 모서리 앞 이 거리에 오면 발동 [m] (자동 시험). v 0.5 에서 이륙 -116 mm, 착지 +47 mm (2026-09-26)
     # --- 1 retract: 웅크림 (정책이 균형) ---
-    t_retract=0.12,      # [s]. 앞 75 % 동안 램프로 접고 나머지는 유지. 한 번에 접으면 바퀴가 들린다
+    t_retract=0.30,      # [s]. 앞 75 % 동안 램프로 접고 나머지는 유지. 한 번에 접으면 바퀴가 들린다.
+                         #   빨리 접으면 다리 링크 회전이 바퀴 관절 속도에 더해져 모터 한계 18.85 rad/s 에 붙는다
+                         #   (0.12 s, v 0.8: 14.2 -> 18.7 rad/s, 토크 0 = 바퀴 제어 불능). HUD WHEEL rad/s 로 확인
     # --- 2 extract: 신전 = 이륙 (바퀴는 pitch PD) ---
-    extract_pitch=3.0,   # 신전 중 pitch 목표 [deg, + = 앞으로 숙임]. 뒤로 젖힌 채 밀면 전진 속도를 잃는다 (-7 deg 에서 0.4 m/s)
+    retract_lean=8.0,    # 웅크리는 동안 앞으로 숙일 pitch [deg]. 0 = 균형 정책 그대로. >0 = 바퀴 pitch PD 로 숙인다
+                         #   (펴는 동안 고관절 반작용으로 몸이 뒤로 ~17 deg 젖혀지며 전진 속도를 잃는다 -> 미리 숙여 상쇄. 숙이면 가속도 된다)
+    extract_wheels="pd",  # 신전 중 바퀴: pd (pitch PD. 숙임 8 deg 와 같이 쓰면 이륙 0.62 m/s, 숙임 없으면 0.18) | policy (균형 정책 그대로) | free (토크 0)
+    extract_pitch=0.0,   # 신전 중 pitch 목표 [deg, + = 앞으로 숙임]. 뒤로 젖힌 채 밀면 전진 속도를 잃는다 (-7 deg 에서 0.4 m/s)
     # --- 3 fly / 4 descend: 공중 (바퀴 = 반작용 휠) ---
     t_tuck=0.12,         # 이륙 뒤 다리를 최대로 접어 두는 시간 [s]. 그 뒤 착지 길이로 부드럽게 편다
     air_ctrl=True,       # False = Ascento 원형 (공중 바퀴 토크 0) -> 뒤로 -190 deg/s 로 넘어갔다
@@ -72,7 +77,7 @@ TUNE = dict(
 POLICY = "logs/rsl_rl/wheeled_biped_balance/2026-09-25_18-24-20_rough_v3/model_7099.pt"   # 관측 25 균형 정책 (r3)
 # ==========================================================================================
 
-CHOICES = dict(obstacle=("plateau", "stairs2"), pd_from=("extract", "fly"), hip=("dc", "ideal"))
+CHOICES = dict(extract_wheels=("pd", "policy", "free"), obstacle=("plateau", "stairs2"), pd_from=("extract", "fly"), hip=("dc", "ideal"))
 ap = argparse.ArgumentParser()
 ap.add_argument("--policy", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", POLICY))
 ap.add_argument("--mode", choices=("jump", "stance", "none"), default="jump")
@@ -294,6 +299,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
     v_now = float(d.root_com_lin_vel_b[0, 0])
     wb = [(float(z) - R) * 1000 for z in wheel_pos[:, 2]]
     wt = [float(x) for x in d.applied_torque[0, wheel_ids] * wsign]
+    ws = [float(x) for x in d.joint_vel[0, wheel_ids] * wsign]
     ahead = [e for e in edges if e > wx - 0.03]
     dist = f"{(ahead[0]-wx)*1000:5.0f} mm  (edge {edges.index(ahead[0])+1}/{len(edges)}, auto trigger {args.trigger*1000:.0f})" if ahead else "past last edge"
     push("pitch", pitch / 30.0); push("vx", v_now / 1.0); push("hip", float(tau.abs().max()) / 9.0)
@@ -315,6 +321,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
         f"WHEEL z   L {wb[0]:5.0f}  R {wb[1]:5.0f} mm (bottom)",
         f"HIP   Nm  L {float(tau[0]):+5.2f}  R {float(tau[1]):+5.2f}  (peak 9)",
         f"WHEEL Nm  L {wt[0]:+5.2f}  R {wt[1]:+5.2f}  (peak 7)",
+        f"WHEEL r/s L {ws[0]:+5.1f}  R {ws[1]:+5.1f}  (limit 18.85{'  SATURATED' if max(abs(x) for x in ws) > 17.0 else ''})",
         "",
         f"LAST JUMP {stats['last']}",
         f"JUMPS {stats['jumps']}   FALLS {stats['falls']}",
@@ -413,7 +420,8 @@ def episode():
                 jumps.append(dict(edge=next_edge, t_trigger=round(t, 3), x_trigger=round(wx, 3)))
             elif phase == "retract" and tp >= args.t_retract:
                 phase, t_phase = "extract", t
-                if args.air_ctrl and args.pd_from == "extract":
+                wheel_term.cfg.torque_scale = scale0
+                if args.air_ctrl and args.pd_from == "extract" and args.extract_wheels == "pd":
                     wheel_term.cfg.torque_scale = args.air_tau
             elif phase == "extract" and (float(h_now.min()) >= H_MAX - 0.008 or tp >= 0.25):
                 phase, t_phase = "fly", t
@@ -455,7 +463,14 @@ def episode():
             if phase == "retract":
                 tgt = h0 + (H_MIN - h0) * min(1.0, (t - t_phase) / (0.75 * args.t_retract))
             act[0, :2] = (tgt - h_ref) / 0.12
-            pd_phases = ("fly", "descend") if args.pd_from == "fly" else ("extract", "fly", "descend")
+            pd_phases = ("fly", "descend") if args.pd_from == "fly" or args.extract_wheels != "pd" else ("extract", "fly", "descend")
+            if phase == "extract" and args.extract_wheels == "free":
+                act[0, 2:] = 0.0
+            if phase == "retract" and args.retract_lean > 0:
+                wheel_term.cfg.torque_scale = args.air_tau
+                pitch = math.asin(max(-1.0, min(1.0, float(d.projected_gravity_b[0, 0]))))
+                u = args.air_kp * (pitch - math.radians(args.retract_lean)) + args.air_kd * float(d.root_ang_vel_b[0, 1])
+                act[0, 2:] = max(-1.0, min(1.0, u / args.air_tau))
             if phase in pd_phases:                                 # 지면 균형 제어 끔
                 if not args.air_ctrl:
                     act[0, 2:] = 0.0
