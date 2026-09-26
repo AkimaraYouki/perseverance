@@ -723,7 +723,7 @@ class ResidualObservationsCfg:
 class ResidualRewardsCfg:
     alive = RewTerm(func=mdp.is_alive, weight=1.0)
     terminated = RewTerm(func=mdp.is_terminated, weight=-50.0)        # 넘어짐이 최우선 (대회: 95 %)
-    track_v = RewTerm(func=resid.track_v_exp, weight=1.0, params={"std": 0.2})
+    track_v = RewTerm(func=resid.track_v_exp, weight=3.0, params={"std": 0.2})   # 1.0 이면 험지에서 속도를 줄여 버림 (rl1: 삼각형길 18 s 에 4.2~6.7 m, 기본 7.1 m)
     track_wz = RewTerm(func=resid.track_wz_exp, weight=0.5, params={"std": 0.7})
     upright = RewTerm(func=resid.upright_l2, weight=-5.0)
     ang_vel_xy = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.02)

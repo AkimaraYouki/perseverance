@@ -51,19 +51,8 @@ env = gym.make(TASK, cfg=cfg).unwrapped
 dev = env.device
 pol = None
 if args.policy:
-    sd = torch.load(args.policy, map_location=dev, weights_only=False)["model_state_dict"]
-    ks = sorted({k.split(".")[1] for k in sd if k.startswith("actor.")}, key=int)
-    layers = []
-    for j, k in enumerate(ks):
-        w, b = sd[f"actor.{k}.weight"], sd[f"actor.{k}.bias"]
-        lin = torch.nn.Linear(w.shape[1], w.shape[0]).to(dev); lin.weight.data[:] = w; lin.bias.data[:] = b
-        layers += [lin] + ([torch.nn.ELU()] if j < len(ks) - 1 else [])
-    mlp = torch.nn.Sequential(*layers).eval()
-    if "actor_obs_normalizer._mean" in sd:
-        mu, sg = sd["actor_obs_normalizer._mean"], sd["actor_obs_normalizer._std"]
-        pol = lambda o: mlp((o - mu) / (sg + 1e-2))  # noqa: E731
-    else:
-        pol = mlp
+    from policy_io import load_actor
+    pol = load_actor(args.policy, dev)
 if args.level is not None:
     t = env.scene.terrain
     t.terrain_levels[:] = args.level

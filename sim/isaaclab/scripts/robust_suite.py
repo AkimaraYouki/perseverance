@@ -144,16 +144,8 @@ if not args.policy:
     wheel_term.cfg.torque_scale = P.wheel_tau_max                    # 모든 바퀴 행동 = 토크 / wheel_tau_max
 pol = None
 if args.policy:
-    sd_ = torch.load(args.policy, map_location=dev, weights_only=False)["model_state_dict"]
-    ks_ = sorted({k.split(".")[1] for k in sd_ if k.startswith("actor.")}, key=int)
-    layers_ = []
-    for j_, k_ in enumerate(ks_):
-        w_, b_ = sd_[f"actor.{k_}.weight"], sd_[f"actor.{k_}.bias"]
-        lin_ = torch.nn.Linear(w_.shape[1], w_.shape[0]).to(dev); lin_.weight.data[:] = w_; lin_.bias.data[:] = b_
-        layers_ += [lin_] + ([torch.nn.ELU()] if j_ < len(ks_) - 1 else [])
-    mlp_ = torch.nn.Sequential(*layers_).eval()
-    mu_, sg_ = sd_.get("actor_obs_normalizer._mean"), sd_.get("actor_obs_normalizer._std")
-    pol = (lambda o: mlp_((o - mu_) / (sg_ + 1e-2))) if mu_ is not None else mlp_
+    from policy_io import load_actor
+    pol = load_actor(args.policy, dev)
 leg_ids = robot.find_joints(cad.LEG_JOINTS, preserve_order=True)[0]
 wheel_ids = robot.find_joints(cad.WHEEL_JOINTS, preserve_order=True)[0]
 wheel_bodies = robot.find_bodies(["l_wheel", "r_wheel"], preserve_order=True)[0]
