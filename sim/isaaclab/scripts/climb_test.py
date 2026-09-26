@@ -64,7 +64,11 @@ TUNE = dict(
     contact_tau=2.0,     # 접지 판정 고관절 토크 [N·m] (descend 0.04 s 뒤부터)
     t_fly_max=0.45,      # 이륙 뒤 이 시간 안에 접지를 못 느끼면 강제로 land [s]
     # --- 장애물 ---
-    obstacle="plateau",  # plateau (평대) | stairs2 (ㅗ 모양 2 단: 아래 단 | 윗단 | 아래 단) | ridges (ㅅㅅㅅ 삼각형길)
+    obstacle="plateau",  # plateau (평대) | stairs2 (ㅗ 모양 2 단: 아래 단 | 윗단 | 아래 단) | ridges (ㅅㅅㅅ 삼각형길) | cad (아래 cad_file)
+    cad_file="~/perseverance/sim/obstacles/obstacle.stl",   # obstacle="cad": STL/OBJ/FBX. 좌표 규약 (CAD 에서 그대로):
+                         #   원점 = 출발할 때 두 바퀴 축 가운데 바로 아래 바닥, +X = 달리는 방향, +Z = 위, 바닥면 Z = 0.
+                         #   바퀴는 Y = +-99 mm 를 지난다. 파일을 고쳐 저장하면 다음 실행 때 다시 변환한다
+    cad_unit=0.001,      # CAD 단위 -> m (mm 로 뽑았으면 0.001, m 면 1.0)
     step_h=0.08,         # 턱(한 단) 높이 [m]
     length=0.35,         # 평대 윗면 길이 [m]
     tread=1.0,           # stairs2 한 칸 길이 [m] (대회: 1 m | 1 m | 1 m)
@@ -82,7 +86,7 @@ TUNE = dict(
 POLICY = "logs/rsl_rl/wheeled_biped_balance/2026-09-25_18-24-20_rough_v3/model_7099.pt"   # 관측 25 균형 정책 (r3)
 # ==========================================================================================
 
-CHOICES = dict(obstacle=("plateau", "stairs2", "ridges"), extract_wheels=("pd", "policy", "free"), pd_from=("extract", "fly"), hip=("dc", "ideal"))
+CHOICES = dict(obstacle=("plateau", "stairs2", "ridges", "cad"), extract_wheels=("pd", "policy", "free"), pd_from=("extract", "fly"), hip=("dc", "ideal"))
 ap = argparse.ArgumentParser()
 ap.add_argument("--policy", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", POLICY))
 ap.add_argument("--mode", choices=("jump", "stance", "none"), default="jump")
@@ -202,6 +206,24 @@ if args.obstacle == "ridges" and args.mode in ("jump", "none"):
     # 두 바퀴 가운데 = 루트 y - 0.08 (스캐너 오프셋과 같음) -> 루트를 +0.08 에 두면 바퀴 가운데가 차선 경계에 온다
     _p = cfg.scene.robot.init_state.pos
     cfg.scene.robot.init_state.pos = (_p[0], _p[1] + 0.08, _p[2])
+if args.obstacle == "cad" and args.mode in ("jump", "none"):
+    # CAD 메시 -> USD (정적 충돌체, 삼각형 메시 그대로). 결과는 ~/pv_out/cad_obstacles/ 에 캐시 (파일이 바뀌면 다시 변환)
+    from isaaclab.sim.converters import MeshConverter, MeshConverterCfg
+    from isaaclab.sim.schemas import schemas_cfg
+    _src = os.path.expanduser(args.cad_file)
+    if not os.path.isfile(_src):
+        raise SystemExit(f"CAD 파일이 없다: {_src}  (TUNE 의 cad_file 또는 --cad_file)")
+    _conv = MeshConverter(MeshConverterCfg(
+        asset_path=_src, usd_dir=os.path.expanduser("~/pv_out/cad_obstacles"),
+        usd_file_name=os.path.splitext(os.path.basename(_src))[0] + ".usd", make_instanceable=False,
+        collision_props=schemas_cfg.CollisionPropertiesCfg(collision_enabled=True),
+        mesh_collision_props=schemas_cfg.TriangleMeshPropertiesCfg(),          # 삼각형 메시 그대로 (정적 충돌체라 가능)
+        scale=(args.cad_unit,) * 3))
+    print(f"[CAD] {_src} -> {_conv.usd_path}", flush=True)
+    cfg.scene.cad_obstacle = AssetBaseCfg(prim_path="/World/cad_obstacle", spawn=sim_utils.UsdFileCfg(usd_path=_conv.usd_path),
+                                          init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, 0.0)))
+    _p = cfg.scene.robot.init_state.pos                                  # 바퀴 가운데 = 루트 y - 0.08 -> CAD Y 0 에 맞춘다
+    cfg.scene.robot.init_state.pos = (_p[0], _p[1] + 0.08, _p[2])
 if not args.headless and not args.record:
     cfg.sim.render_interval = cfg.decimation * 4                      # 창: 렌더 50 Hz (200 Hz 마다 그리면 실시간의 0.17 배)
 if True:                                                              # 옆에서 로봇을 따라가는 카메라 (창·녹화 공통)
@@ -210,6 +232,9 @@ if True:                                                              # 옆에�
 env = gym.make(TASK, cfg=cfg, render_mode="rgb_array" if args.record else None).unwrapped
 dev = env.device
 robot = env.scene["robot"]
+if args.obstacle == "cad" and args.mode in ("jump", "none"):                # 마찰 1.0 (다른 장애물과 같게)
+    sim_utils.spawn_rigid_body_material("/World/Materials/cadMat", sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0))
+    sim_utils.bind_physics_material("/World/cad_obstacle", "/World/Materials/cadMat")
 cmd = env.command_manager.get_term("base_velocity")
 cmd.pin(True)
 
@@ -387,7 +412,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
         pl.set_data(*hist[kk])
 
 RESTART = ("obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
-           "ridge_lane", "ridge_len")   # 장면을 다시 만들어야 해서 재시작 필요
+           "ridge_lane", "ridge_len", "cad_file", "cad_unit")   # 장면을 다시 만들어야 해서 재시작 필요
 CLI_KEYS = {k for k in TUNE if f"--{k}" in sys.argv}                        # 명령줄로 준 값은 파일보다 우선
 
 
@@ -579,7 +604,7 @@ def episode():
 def judge(L, jumps, fell, fell_t):
     tau_max = max(max(abs(r["tau_l"]), abs(r["tau_r"])) for r in L)
     w_max = max(max(abs(r["w_l"]), abs(r["w_r"])) for r in L)
-    res = dict(mode=args.mode, tune={k: getattr(args, k) for k in TUNE}, wsign=wsign.tolist(),
+    res = dict(mode=args.mode, tune={k: getattr(args, k) for k in TUNE}, wsign=wsign.tolist(), wheel_y=wheel_y0,
                fell=fell, fell_t=fell_t, tau_hip_max_nm=tau_max, hip_speed_max_rad_s=w_max,
                current_max_a_kt060=tau_max / 0.5994, current_max_a_kt081=tau_max / 0.81, jumps=jumps)
     if args.obstacle == "ridges" and args.mode in ("jump", "none"):
