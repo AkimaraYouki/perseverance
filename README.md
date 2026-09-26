@@ -63,14 +63,22 @@ colcon test && colcon test-result --verbose     # unit tests (parser, codec, con
 **Gen2 Motor Test CLI**, **Gen2 Sensor Hub Test**, **Gen2 Bench Check**.
 
 Motor test (UI and CLI share the C++ `MotorTester`): modes **current**, **velocity**, **position**
-(relative joint move with the drive's position-speed loop, speed limit, holds until the end).
+(relative joint move with the drive's position-speed loop, speed limit, holds until the end) and
+**accel ±** (balance: current steps +I / −I, flipped when the speed passes ±flip speed or after the
+max pulse, so the wheel swings between about ±speed). Accel ± reports the acceleration in each
+direction (least-squares slope per full pulse), **asymmetry %**, **reversal time** (flip → velocity
+crosses 0), the current reached per direction and an inertia estimate Kt·(|I+|+|I−|)/(|a+|+|a−|).
+At the current 50 Hz upload these are coarse — set 500 Hz in the CubeMars tool first.
+CLI: `a <motor> <A> <s> <flip rad/s> [pulse_s]`, e.g. `a 0 1.0 3 5 0.5`.
+Only **one process per CAN interface may command motors** (`/run/lock/gen2_can_<if>.lock`): a second
+motor_test_node / motor_cli exits with "another process already commands can0 (pid …)".
 Limits = motor capability (user request): |I| ≤ 5 A, |ω| ≤ 20 rad/s, move ≤ 720°, ≤ 10 s; position
 tests refused near the ±3200° feedback wrap. Explicit "robot lifted" confirmation, 100 Hz stream, abort on STOP / Space / Esc /
 Enter / Ctrl+C, stale feedback, drive fault, over-temperature, over-speed, **GUI heartbeat lost
 (0.5 s)**; always ends with 0 A. The drive itself stops after 1 s without commands
 (AppParams `timeout_msec 1000`). **A hardware E-stop is still required.**
 
-Integration test without hardware (vcan + fake drive, 14 checks):
+Integration test without hardware (vcan + fake drive with 20 % weaker negative torque, 26 checks):
 ```bash
 sudo modprobe vcan; sudo ip link add vcan0 type vcan; sudo ip link set vcan0 up
 python3 src/gen2_hardware/test/test_motor_test_node.py src/gen2_hardware/config/motors.yaml
@@ -99,7 +107,7 @@ the still-window means (static lean trim). Do not commit bags; put CSV excerpts 
 |---|---|---|---|
 | 1 ROS env | `ros2 doctor --report`, `colcon build`, `colcon test` | builds, 0 test failures | ✅ |
 | 2 CAN only | `ip -d link show can0` | UP, 1 Mbit/s, ERROR-ACTIVE, `rx_error_frames 0` in diagnostics | ✅ |
-| 3 motor state read-only | bench + `ros2 topic echo /motors/state` | each motor fresh (`stale false`), ~50 Hz feedback, `tx_frames 0` | ✅ 1/3 motors (AK45-10 id 69) |
+| 3 motor state read-only | bench + `ros2 topic echo /motors/state` | each motor fresh (`stale false`), ~50 Hz feedback, `tx_frames 0` | ✅ 1/4 motors (AK45-10, id 69 → changed to **1** on 2026-09-26, re-check) |
 | 3b position scale | UI "Hand-rotation scale check" or `motor_cli` → `r` | 1 output turn ⇒ raw Δ = `raw_deg_per_output_rev`; set `verified.position_scale` | ⬜ do it |
 | 4 single motor low power | UI / CLI current test 0.2–0.5 A, 1 s, wheel lifted | moves smoothly, result `done`, no drive fault | ⬜ |
 | 5 ID / direction / velocity | UI velocity test 1 rad/s | "mean(2nd half)" ≈ command (±10 %), + command = + joint motion; set `verified.*` | ⬜ |
@@ -136,7 +144,8 @@ Accuracy depends on the PM02 current calibration.
   Drives that appear on the bus but are not in `motors.yaml` are **discovered automatically**
   (read-only): `/motors/state` entry `id_<N>?` with `configured: false` and raw values, a WARN
   diagnostic, and a row `#N?` on the LCD. Add them to `motors.yaml` to get scaling and commands.
-  Only one AK45-10 (id 69) is on the bus so far; add the others to `motors.yaml` with their IDs.
+  Only one AK45-10 is on the bus so far (user changed its ID 69 → 1 on 2026-09-26); add the others
+  to `motors.yaml` with their IDs.
   AK60-6 V3.0 supports disable (mode 15) and has Kt 0.5994 N·m/A in the V3.2.0 manual table.
 - Feedback upload is 50 Hz (`send_can_status_rate_hz`); balance control needs 500–1000 Hz
   uploads (AK 3.0: up to 2000 Hz) — change in CubeMars tool before step 12.

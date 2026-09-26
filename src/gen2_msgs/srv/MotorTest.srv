@@ -1,10 +1,12 @@
 # Start a guarded bench test on one motor (motor_test_node). Refused unless confirm_lifted.
 string motor                 # motor name from motors.yaml
 string mode                  # "current" (A) | "velocity" (joint rad/s) | "position" (joint deg, relative move)
+                             # | "accel" (A amplitude: bang-bang +I/-I, flips at +-speed_rad_s)
 float64 value
 float64 duration_s
-float64 speed_rad_s          # position mode: speed limit (joint rad/s), required
+float64 speed_rad_s          # position mode: speed limit; accel mode: reversal speed (joint rad/s), required
 float64 accel_rad_s2         # position mode: acceleration (joint rad/s^2), <= 0 -> default
+float64 pulse_s              # accel mode: max time per direction before flipping (s)
 bool confirm_lifted          # operator confirms: robot lifted / wheel free / hand on E-stop
 ---
 bool accepted

@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -61,6 +62,8 @@ public:
     max_t_ = node.declare_parameter("cli.max_test_duration_s", 3.0);
     max_move_ = node.declare_parameter("cli.max_position_move_deg", 720.0);
     bus_ = std::make_unique<MotorBus>(ifname, declare_motor_params(node));
+    std::string lock_err;
+    if (!bus_->claim_commander(lock_err)) {throw std::runtime_error(lock_err);}
     bus_->start();
     TestLimits lim;
     lim.max_current_a = max_i_;
@@ -110,6 +113,12 @@ public:
         double deg = 0, t = 0, w = 0;
         in >> deg >> t >> w;
         position_test(m, deg, t, w);
+      } else if (cmd == "a") {
+        std::size_t m = arg_motor(in);
+        double amps = 0, t = 0, w = 0, pulse = 0.5;
+        in >> amps >> t >> w;
+        if (!(in >> pulse)) {pulse = 0.5;}
+        accel_test(m, amps, t, w, pulse);
       } else if (cmd == "o") {set_origin(arg_motor(in));}
       else if (cmd == "x") {std::cout << tester_->zero_all() << "\n";}
       else {std::cout << "unknown command, 'h' for help\n";}
@@ -127,6 +136,8 @@ private:
       "  c <motor> <A> <sec>   current test   |A| <= %.2f, sec <= %.1f\n"
       "  v <motor> <rad/s> <s> velocity test  |w| <= %.2f rad/s\n"
       "  p <motor> <deg> <s> <rad/s>  position move (relative joint deg) at speed, holds until s\n"
+      "  a <motor> <A> <s> <rad/s> [pulse_s]  accel test both directions: +I/-I steps, flip at\n"
+      "                        +-rad/s (or after pulse_s, default 0.5): a+, a-, asymmetry, reversal\n"
       "  o <motor>             set TEMPORARY origin here (cleared at power off)\n"
       "  x                     send 0 A to all motors\n"
       "  q                     quit\n"
@@ -246,7 +257,8 @@ private:
     return st == "yes";
   }
 
-  void run_test(std::size_t m, TestMode mode, double value, double sec, double speed = 0.0)
+  void run_test(std::size_t m, TestMode mode, double value, double sec, double speed = 0.0,
+    double pulse = 0.0)
   {
     if (!valid_motor(m)) {return;}
     const auto & c = bus_->motors()[m];
@@ -257,12 +269,16 @@ private:
     } else if (mode == TestMode::kVelocity) {
       std::snprintf(q, sizeof(q), "VELOCITY TEST %s: %.2f rad/s for %.1f s (limit %.2f rad/s)",
         c.name.c_str(), value, sec, tester_->velocity_limit(m));
-    } else {
+    } else if (mode == TestMode::kPosition) {
       std::snprintf(q, sizeof(q), "POSITION TEST %s: move %+.1f deg at %.2f rad/s, hold until %.1f s",
         c.name.c_str(), value, speed, sec);
+    } else {
+      std::snprintf(q, sizeof(q), "ACCEL TEST %s: +-%.2f A steps, flip at +-%.2f rad/s (max %.2f s), "
+        "%.1f s", c.name.c_str(), std::fabs(value), speed, pulse, sec);
     }
     if (!confirm(q)) {std::cout << "cancelled\n"; return;}
-    const std::string err = tester_->start(m, mode, value, sec, speed);
+    const std::string err = tester_->start(m, mode,
+        mode == TestMode::kAccel ? std::fabs(value) : value, sec, speed, 0.0, pulse);
     if (!err.empty()) {std::cout << "rejected: " << err << "\n"; return;}
     while (tester_->status().running) {
       if (g_sigint) {tester_->stop("Ctrl+C");}
@@ -281,6 +297,13 @@ private:
     } else if (mode == TestMode::kPosition) {
       std::printf("  position: target %+.2f deg, final error %+.2f deg\n",
         rad2deg(st.target_rad), rad2deg(st.position_error_rad));
+    } else if (mode == TestMode::kAccel) {
+      std::printf("  accel +: %+8.1f rad/s^2 at %+.2f A    accel -: %+8.1f rad/s^2 at %+.2f A\n"
+        "  asymmetry %+.1f %%   reversal (flip -> w = 0) %.0f ms   inertia est %.2e kg m^2\n"
+        "  %d full pulses, feedback %.0f Hz%s\n",
+        st.accel_pos_rad_s2, st.current_pos_a, st.accel_neg_rad_s2, st.current_neg_a,
+        st.accel_asymmetry_pct, st.reversal_ms, st.inertia_est_kgm2, st.pulses, st.feedback_hz,
+        st.feedback_hz < 200 ? "  (low upload rate: coarse estimate, set 500 Hz in CubeMars tool)" : "");
     } else {
       std::printf("  velocity-scale check: commanded %.3f rad/s, position-derived mean %.3f rad/s\n"
         "  (includes accel/decel; ratio far from 1 => pole_pairs/gear/raw_deg_per_output_rev wrong)\n",
@@ -293,6 +316,10 @@ private:
   void position_test(std::size_t m, double deg, double sec, double speed)
   {
     run_test(m, TestMode::kPosition, deg, sec, speed);
+  }
+  void accel_test(std::size_t m, double amps, double sec, double speed, double pulse)
+  {
+    run_test(m, TestMode::kAccel, amps, sec, speed, pulse);
   }
 
   void set_origin(std::size_t m)

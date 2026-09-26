@@ -7,12 +7,13 @@
     motors:
       # Robot = 4 actuators (user-confirmed 2026-09-24): wheels AK45-10 x2, legs AK60-6 V3.0 x2.
       # Naming follows REP-103 / sim URDF: L = +y (left), R = -y. Final names will be
-      # wheel_l, wheel_r, leg_l, leg_r. Only one AK45-10 (id 69, side not yet known) is on the
-      # bus today; rename it once its side is known and add the others with their CAN IDs.
+      # wheel_l, wheel_r, leg_l, leg_r. Only one AK45-10 (side not yet known) is on the bus
+      # today; rename it once its side is known and add the others with their CAN IDs.
       names: ["ak45_a"]
       ak45_a:
         model: "AK45-10"
-        can_id: 69                  # AppParams controller_id 69; seen as ext id 0x2945
+        can_id: 1                   # user set controller_id 1 on 2026-09-26 (was 69 = ext id 0x2945);
+                                    # uploads now arrive as ext id 0x2901
         # CubeMars AK45-10 KV75 datasheet (user-supplied 2026-09-24): 24 V rated, 14 pole pairs,
         # 10:1, Kt 0.127 N·m/A (rotor side), rated 2.5 N·m @ 2.1 A, peak 7 N·m @ 5 A,
         # no-load 180 rpm, rated 150 rpm (output). Drive AppParams l_current_max is 35 A — far

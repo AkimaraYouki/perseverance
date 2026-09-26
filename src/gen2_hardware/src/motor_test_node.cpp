@@ -9,6 +9,7 @@
 // The 100 Hz command loop runs in C++ (MotorTester); the GUI never streams motor commands.
 
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 #include "gen2_hardware/motor_bus.hpp"
@@ -36,8 +37,12 @@ public:
     lim.max_duration_s = declare_parameter("cli.max_test_duration_s", 3.0);
     lim.max_position_move_deg = declare_parameter("cli.max_position_move_deg", 720.0);
     lim.default_accel_rad_s2 = declare_parameter("cli.default_accel_rad_s2", 20.0);
+    lim.min_pulse_s = declare_parameter("cli.min_pulse_s", 0.05);
+    lim.max_pulse_s = declare_parameter("cli.max_pulse_s", 2.0);
     const double hb = declare_parameter("heartbeat_timeout_s", 0.5);
     bus_ = std::make_unique<MotorBus>(ifname, declare_motor_params(*this));
+    std::string lock_err;
+    if (!bus_->claim_commander(lock_err)) {throw std::runtime_error(lock_err);}
     bus_->start();
     tester_ = std::make_unique<MotorTester>(*bus_, lim);
     tester_->require_heartbeat(hb);
@@ -89,9 +94,10 @@ private:
     if (rq.mode == "current") {mode = TestMode::kCurrent;}
     else if (rq.mode == "velocity") {mode = TestMode::kVelocity;}
     else if (rq.mode == "position") {mode = TestMode::kPosition;}
-    else {rs.accepted = false; rs.message = "mode must be current|velocity|position"; return;}
+    else if (rq.mode == "accel") {mode = TestMode::kAccel;}
+    else {rs.accepted = false; rs.message = "mode must be current|velocity|position|accel"; return;}
     const std::string err = tester_->start(m, mode, rq.value, rq.duration_s, rq.speed_rad_s,
-        rq.accel_rad_s2);
+        rq.accel_rad_s2, rq.pulse_s);
     rs.accepted = err.empty();
     rs.message = err.empty() ? "started" : err;
     RCLCPP_INFO(get_logger(), "start %s %s %.3f for %.2f s (speed %.2f) -> %s", rq.motor.c_str(),
@@ -106,7 +112,8 @@ private:
     m.running = st.running;
     m.motor = st.motor < bus_->motors().size() ? bus_->motors()[st.motor].name : "";
     m.mode = st.mode == TestMode::kCurrent ? "current" :
-      st.mode == TestMode::kVelocity ? "velocity" : "position";
+      st.mode == TestMode::kVelocity ? "velocity" :
+      st.mode == TestMode::kPosition ? "position" : "accel";
     m.value = st.value;
     m.elapsed_s = st.elapsed_s;
     m.duration_s = st.duration_s;
@@ -119,6 +126,16 @@ private:
     m.speed_rad_s = st.speed_rad_s;
     m.target_rad = st.target_rad;
     m.position_error_rad = st.position_error_rad;
+    m.pulse_s = st.pulse_s;
+    m.accel_pos_rad_s2 = st.accel_pos_rad_s2;
+    m.accel_neg_rad_s2 = st.accel_neg_rad_s2;
+    m.accel_asymmetry_pct = st.accel_asymmetry_pct;
+    m.reversal_ms = st.reversal_ms;
+    m.current_pos_a = st.current_pos_a;
+    m.current_neg_a = st.current_neg_a;
+    m.inertia_est_kgm2 = st.inertia_est_kgm2;
+    m.feedback_hz = st.feedback_hz;
+    m.pulses = st.pulses;
     m.heartbeat_ok = tester_->heartbeat_ok();
     for (std::size_t i = 0; i < bus_->motors().size(); ++i) {
       m.motor_names.push_back(bus_->motors()[i].name);

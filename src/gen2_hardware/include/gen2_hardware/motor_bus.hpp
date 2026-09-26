@@ -64,7 +64,13 @@ public:
   std::vector<uint8_t> unconfigured_ids() const;
   MotorFeedback unconfigured_feedback(uint8_t id) const {return unknown_slots_[id].load();}
 
-  // TX is refused unless enable_tx(true) was called (read-only by default).
+  // Only one process per CAN interface may command motors: claim_commander() takes an exclusive
+  // flock on /run/lock/gen2_can_<ifname>.lock (released automatically when the process dies).
+  // Two motor_test_nodes on one bus would both answer the same start request and drive the motor
+  // twice; motor_cli + a controller would fight. Returns false (err names the holder's PID) if taken.
+  bool claim_commander(std::string & err);
+  bool is_commander() const {return lock_fd_ >= 0;}
+  // TX is refused unless this process is the commander and enable_tx(true) was called.
   void enable_tx(bool on) {tx_enabled_ = on;}
   bool tx_enabled() const {return tx_enabled_;}
   bool send(const cubemars::Frame & f, std::string & err);
@@ -85,6 +91,7 @@ private:
   std::thread rx_thread_;
   std::atomic<bool> running_{false};
   std::atomic<bool> tx_enabled_{false};
+  int lock_fd_ = -1;
   BusStats stats_;
 };
 

@@ -13,10 +13,12 @@ import time
 
 p = argparse.ArgumentParser()
 p.add_argument('--iface', default='vcan0')
-p.add_argument('--id', type=int, default=69)
+p.add_argument('--id', type=int, default=1)
 p.add_argument('--rate', type=float, default=100.0)
 p.add_argument('--pole-pairs', type=float, default=14)
 p.add_argument('--gear', type=float, default=10)
+p.add_argument('--neg-gain', type=float, default=1.0,
+               help='torque gain for negative current (direction asymmetry, e.g. 0.8)')
 a = p.parse_args()
 
 s = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
@@ -68,7 +70,8 @@ while True:
         cur = 0.2 * (p_t - pos_deg)
     elif mode == 'current':
         cur = target
-        erpm += cur * 20000.0 * dt - erpm * damping[0] * dt
+        gain = a.neg_gain if cur < 0 else 1.0
+        erpm += cur * gain * 20000.0 * dt - erpm * damping[0] * dt
     elif mode == 'rpm':
         erpm += (target - erpm) * min(1.0, 10.0 * dt)
         cur = 0.1 * (target - erpm) / 1000.0

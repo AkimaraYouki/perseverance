@@ -1,6 +1,7 @@
 #include "gen2_hardware/motor_tester.hpp"
 
 #include <chrono>
+#include <vector>
 #include <cmath>
 
 namespace gen2_hardware
@@ -34,7 +35,8 @@ bool MotorTester::heartbeat_ok() const
 }
 
 std::string MotorTester::start(
-  std::size_t m, TestMode mode, double value, double duration, double speed, double accel)
+  std::size_t m, TestMode mode, double value, double duration, double speed, double accel,
+  double pulse)
 {
   if (m >= bus_.motors().size()) {return "no such motor";}
   {
@@ -46,7 +48,7 @@ std::string MotorTester::start(
   if (!(duration > 0) || duration > limits_.max_duration_s) {
     return "duration must be in (0, " + std::to_string(limits_.max_duration_s) + "] s";
   }
-  if (mode == TestMode::kCurrent && std::fabs(value) > current_limit(m)) {
+  if ((mode == TestMode::kCurrent || mode == TestMode::kAccel) && std::fabs(value) > current_limit(m)) {
     return "|current| exceeds limit " + std::to_string(current_limit(m)) + " A";
   }
   if (mode == TestMode::kVelocity && std::fabs(value) > velocity_limit(m)) {
@@ -54,6 +56,15 @@ std::string MotorTester::start(
   }
   if (mode != TestMode::kCurrent && !(c.pole_pairs > 0 && c.gear_ratio > 0)) {
     return "pole_pairs/gear_ratio not configured";
+  }
+  if (mode == TestMode::kAccel) {
+    if (!(pulse >= limits_.min_pulse_s) || pulse > limits_.max_pulse_s || pulse * 2.0 > duration) {
+      return "pulse must be in [" + std::to_string(limits_.min_pulse_s) + ", " +
+             std::to_string(limits_.max_pulse_s) + "] s and <= duration/2";
+    }
+    if (!(speed > 0) || speed > velocity_limit(m)) {
+      return "reversal speed must be in (0, " + std::to_string(velocity_limit(m)) + "] rad/s";
+    }
   }
   if (mode == TestMode::kPosition) {
     if (std::fabs(value) > limits_.max_position_move_deg) {
@@ -86,13 +97,15 @@ std::string MotorTester::start(
     st_.mode = mode;
     st_.value = value;
     st_.duration_s = duration;
-    st_.speed_rad_s = mode == TestMode::kPosition ? speed : 0.0;
+    st_.speed_rad_s = (mode == TestMode::kPosition || mode == TestMode::kAccel) ? speed : 0.0;
+    st_.reversal_speed_rad_s = mode == TestMode::kAccel ? speed : 0.0;
+    st_.pulse_s = mode == TestMode::kAccel ? pulse : 0.0;
     st_.result = "running";
     st_.test_id = id;
   }
   stop_ = false;
   if (!(accel > 0)) {accel = limits_.default_accel_rad_s2;}
-  th_ = std::thread([=] {run(id, m, mode, value, duration, speed, accel);});
+  th_ = std::thread([=] {run(id, m, mode, value, duration, speed, accel, pulse);});
   return "";
 }
 
@@ -119,7 +132,7 @@ TestStatus MotorTester::status() const
 
 void MotorTester::run(
   uint64_t id, std::size_t m, TestMode mode, double value, double duration, double speed,
-  double accel)
+  double accel, double pulse)
 {
   (void)id;
   const auto & c = bus_.motors()[m];
@@ -144,6 +157,12 @@ void MotorTester::run(
     mode == TestMode::kPosition ? speed * 1.5 + 0.5 : velocity_limit(m) * 1.5;
   double peak_i = 0, peak_w = 0, w_sum = 0;
   int w_n = 0;
+  // accel mode state: current sign, pulse index, flip times (pulse k starts at flips[k])
+  int sign = 1, pulse_idx = 0;
+  std::vector<double> flips{0.0};
+  std::vector<AccelSample> samples;      // one per new feedback frame
+  uint64_t last_rx = fb0.rx_count;
+  const int64_t mono0 = mono_now_ns();
   std::string why = "done";
   const auto period = std::chrono::nanoseconds(static_cast<int64_t>(1e9 / limits_.rate_hz));
   const auto t0 = std::chrono::steady_clock::now();
@@ -163,6 +182,18 @@ void MotorTester::run(
     if (fb.status.error != 0) {why = std::string("drive fault: ") + cubemars::error_text(fb.status.error); break;}
     if (fb.status.temperature_c > c.max_temperature_c) {why = "over-temperature"; break;}
     if (std::fabs(w) > vel_guard) {why = "over-speed guard"; break;}
+    if (mode == TestMode::kAccel) {
+      if ((sign > 0 && w >= speed) || (sign < 0 && w <= -speed) || t - flips.back() >= pulse) {
+        sign = -sign;
+        ++pulse_idx;
+        flips.push_back(t);
+      }
+      if (fb.rx_count != last_rx) {
+        last_rx = fb.rx_count;
+        samples.push_back({(fb.mono_ns - mono0) * 1e-9, w, fb.status.current_a * c.direction,
+            pulse_idx});
+      }
+    }
     peak_i = std::max(peak_i, std::fabs(fb.status.current_a));
     peak_w = std::max(peak_w, std::fabs(w));
     if (t > duration * 0.5) {w_sum += w; ++w_n;}
@@ -176,6 +207,9 @@ void MotorTester::run(
         break;
       case TestMode::kPosition:
         f = cubemars::encode_pos_spd(c.can_id, target_raw_deg, pos_erpm, pos_erpm_s2);
+        break;
+      case TestMode::kAccel:   // bang-bang, starts with +value (joint direction), no ramp
+        f = cubemars::encode_current(c.can_id, sign * value / c.direction);
         break;
     }
     std::string err;
@@ -200,6 +234,59 @@ void MotorTester::run(
   if (mode == TestMode::kPosition) {
     st_.position_error_rad = target_joint - c.raw_to_joint_pos(fb1.status.position_deg);
   }
+  if (mode == TestMode::kAccel) {
+    const double span = samples.size() > 1 ? samples.back().t - samples.front().t : 0.0;
+    st_.feedback_hz = span > 0 ? (samples.size() - 1) / span : 0.0;
+    analyse_accel(samples, flips, c.kt_nm_per_a);
+  }
+}
+
+// Per full pulse k (1 .. last-1; pulse 0 starts from rest, the last one may be cut off):
+// least-squares slope of joint velocity and mean current over the samples more than 15 ms after
+// the flip (current rise + upload delay), averaged per direction. Reversal = flip -> velocity crosses zero, linearly
+// interpolated between samples. Called with mtx_ held.
+void MotorTester::analyse_accel(
+  const std::vector<AccelSample> & samples, const std::vector<double> & flips, double kt)
+{
+  double a_sum[2] = {0, 0}, i_sum[2] = {0, 0}, rev = 0;
+  int a_n[2] = {0, 0}, i_n[2] = {0, 0}, n_rev = 0;
+  const int last = static_cast<int>(flips.size()) - 1;
+  for (int k = 1; k < last; ++k) {
+    const bool positive = (k % 2 == 0);
+    const int d = positive ? 0 : 1;
+    const double t0 = flips[k];
+    double st = 0, sw = 0, stt = 0, stw = 0;
+    int n = 0;
+    const AccelSample * prev = nullptr;
+    bool crossed = false;
+    for (const auto & x : samples) {
+      if (x.pulse != k) {if (x.pulse < k) {prev = &x;} continue;}
+      if (!crossed && prev && ((positive && prev->w <= 0 && x.w > 0) ||
+        (!positive && prev->w >= 0 && x.w < 0)))
+      {
+        const double tz = prev->t + (x.t - prev->t) * (-prev->w) / (x.w - prev->w);
+        rev += std::max(0.0, tz - t0); ++n_rev; crossed = true;
+      }
+      prev = &x;
+      if (x.t - t0 < 0.015) {continue;}
+      i_sum[d] += x.i; ++i_n[d];
+      st += x.t; sw += x.w; stt += x.t * x.t; stw += x.t * x.w; ++n;
+    }
+    const double den = n * stt - st * st;
+    if (n >= 2 && den > 1e-12) {a_sum[d] += (n * stw - st * sw) / den; ++a_n[d];}
+  }
+  st_.pulses = a_n[0] + a_n[1];
+  st_.accel_pos_rad_s2 = a_n[0] ? a_sum[0] / a_n[0] : 0.0;
+  st_.accel_neg_rad_s2 = a_n[1] ? a_sum[1] / a_n[1] : 0.0;
+  const double ap = std::fabs(st_.accel_pos_rad_s2), an = std::fabs(st_.accel_neg_rad_s2);
+  st_.accel_asymmetry_pct = (a_n[0] && a_n[1] && ap + an > 1e-9) ?
+    (ap - an) / ((ap + an) / 2.0) * 100.0 : 0.0;
+  st_.reversal_ms = n_rev ? rev / n_rev * 1000.0 : 0.0;
+  st_.current_pos_a = i_n[0] ? i_sum[0] / i_n[0] : 0.0;
+  st_.current_neg_a = i_n[1] ? i_sum[1] / i_n[1] : 0.0;
+  const double i_abs = std::fabs(st_.current_pos_a) + std::fabs(st_.current_neg_a);
+  st_.inertia_est_kgm2 = (std::isfinite(kt) && a_n[0] && a_n[1] && ap + an > 1e-9) ?
+    kt * i_abs / (ap + an) : 0.0;
 }
 
 void MotorTester::send_zero(std::size_t m)

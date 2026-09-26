@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "gen2_hardware/motor_bus.hpp"
 
@@ -23,10 +24,19 @@ struct TestLimits
   double current_ramp_s = 0.3;
   double max_position_move_deg = 720.0;     // joint degrees per position test
   double default_accel_rad_s2 = 20.0;       // position test acceleration if not given
+  double min_pulse_s = 0.05;                // accel test half period bounds
+  double max_pulse_s = 2.0;
   double rate_hz = 100.0;
 };
 
-enum class TestMode {kCurrent, kVelocity, kPosition};
+enum class TestMode {kCurrent, kVelocity, kPosition, kAccel};
+
+// Accel (bidirectional) test for balancing: bang-bang current +I / -I (steps, no ramp). The
+// current flips when the joint speed passes +speed (while +I) or -speed (while -I), or after
+// pulse_s if the speed is not reached, so the wheel swings between about +-speed. From the
+// feedback it estimates the acceleration in each direction (least-squares slope of velocity in
+// each full pulse), the reversal time (flip -> velocity crosses zero) and the current reached
+// per direction. The first pulse (from rest) and a cut-off last pulse are not used.
 
 // Position tests are RELATIVE moves (joint degrees from the position at start) with the drive's
 // position-speed loop (mode 6). The 0x29 feedback position is int16 x0.1 deg and wraps at
@@ -51,7 +61,20 @@ struct TestStatus
   double speed_rad_s = 0.0;           // position mode: speed limit
   double target_rad = 0.0;            // position mode: joint target (absolute)
   double position_error_rad = 0.0;    // position mode: target - final
+  double pulse_s = 0.0;               // accel mode: half period
+  double reversal_speed_rad_s = 0.0;  // accel mode: flip speed (= speed_rad_s)
+  double accel_pos_rad_s2 = 0.0;      // accel mode: mean slope during +I pulses
+  double accel_neg_rad_s2 = 0.0;      // accel mode: mean slope during -I pulses (negative)
+  double accel_asymmetry_pct = 0.0;   // (|a+| - |a-|) / mean(|a+|,|a-|) * 100
+  double reversal_ms = 0.0;           // mean time from current flip to velocity sign change
+  double current_pos_a = 0.0;         // mean measured current during +I pulses
+  double current_neg_a = 0.0;         // mean measured current during -I pulses
+  double inertia_est_kgm2 = 0.0;      // Kt * (|I+|+|I-|) / (|a+|+|a-|), friction included
+  double feedback_hz = 0.0;           // measured upload rate during the test
+  int pulses = 0;                     // pulses used for the estimates
 };
+
+struct AccelSample {double t, w, i; int pulse;};  // t from the test start (feedback arrival)
 
 class MotorTester
 {
@@ -62,8 +85,9 @@ public:
   // Returns empty string if accepted, otherwise the rejection reason.
   // value: current [A] | velocity [joint rad/s] | position move [joint deg, relative].
   // speed_rad_s / accel_rad_s2: position mode only (speed required, accel <= 0 -> default).
+  // accel mode: value = current amplitude [A], speed_rad_s = flip speed, pulse_s = max half period.
   std::string start(std::size_t motor, TestMode mode, double value, double duration_s,
-    double speed_rad_s = 0.0, double accel_rad_s2 = 0.0);
+    double speed_rad_s = 0.0, double accel_rad_s2 = 0.0, double pulse_s = 0.0);
   void stop(const std::string & why);
   void wait();
   TestStatus status() const;
@@ -82,8 +106,10 @@ public:
 
 private:
   void run(uint64_t id, std::size_t m, TestMode mode, double value, double duration,
-    double speed, double accel);
+    double speed, double accel, double pulse);
   void send_zero(std::size_t m);
+  void analyse_accel(const std::vector<AccelSample> & samples, const std::vector<double> & flips,
+    double kt);
 
   MotorBus & bus_;
   TestLimits limits_;

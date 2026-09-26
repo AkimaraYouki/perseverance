@@ -12,10 +12,16 @@ from gen2_msgs.srv import MotorTest
 from std_msgs.msg import Empty
 from std_srvs.srv import Trigger
 
+import yaml
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-drive = subprocess.Popen([sys.executable, os.path.join(HERE, 'fake_cubemars_drive.py')],
-                         stdout=subprocess.PIPE, text=True)
 cfg = sys.argv[1]
+_m = yaml.safe_load(open(cfg))['/**']['ros__parameters']['motors']
+CAN_ID = _m[_m['names'][0]]['can_id']   # the fake drive answers as the first configured motor
+# neg-gain 0.8: the fake wheel accelerates 20 % less with negative current (asymmetry check)
+drive = subprocess.Popen([sys.executable, os.path.join(HERE, 'fake_cubemars_drive.py'), '--id', str(CAN_ID),
+                          '--neg-gain', '0.8'],
+                         stdout=subprocess.PIPE, text=True)
 node_p = subprocess.Popen(['ros2', 'run', 'gen2_hardware', 'motor_test_node', '--ros-args',
                            '--params-file', cfg, '-p', 'can_interface:=vcan0'],
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -47,10 +53,10 @@ def call(cli, req):
     return f.result()
 
 
-def req(mode='current', value=0.5, dur=1.0, confirm=True, speed=0.0):
+def req(mode='current', value=0.5, dur=1.0, confirm=True, speed=0.0, pulse=0.0):
     r = MotorTest.Request()
     r.motor, r.mode, r.value, r.duration_s, r.confirm_lifted = 'ak45_a', mode, value, dur, confirm
-    r.speed_rad_s = speed
+    r.speed_rad_s, r.pulse_s = speed, pulse
     return r
 
 
@@ -72,6 +78,12 @@ def check(name, ok, detail=''):
 try:
     assert start.wait_for_service(timeout_sec=10), 'service not up'
     spin(1.5)
+    second = subprocess.run(['ros2', 'run', 'gen2_hardware', 'motor_test_node', '--ros-args',
+                             '--params-file', cfg, '-p', 'can_interface:=vcan0'],
+                            capture_output=True, text=True, timeout=20)
+    check('second motor_test_node on the same bus refuses to start',
+          second.returncode != 0 and 'already commands vcan0' in second.stderr + second.stdout,
+          (second.stderr + second.stdout).strip().splitlines()[-1][-90:] if (second.stderr + second.stdout).strip() else 'no output')
     r = call(start, req(confirm=False))
     check('rejects without lifted confirmation', not r.accepted, r.message)
     r = call(start, req(value=6.0))
@@ -113,6 +125,25 @@ try:
     check('position move 90 deg completes', r.accepted and m.result == 'done', f'{r.message} / {m.result}')
     check('position final error < 1 deg', abs(math.degrees(m.position_error_rad)) < 1.0,
           f'moved {math.degrees(m.moved_rad):.1f} deg, error {math.degrees(m.position_error_rad):+.2f} deg')
+
+    spin(1.0)
+    r = call(start, req(mode='accel', value=1.0, dur=3.0, speed=0.0, pulse=0.5))
+    check('rejects accel test without reversal speed', not r.accepted, r.message)
+    r = call(start, req(mode='accel', value=1.0, dur=3.0, speed=1.0, pulse=0.01))
+    check('rejects accel pulse below 0.05 s', not r.accepted, r.message)
+    r = call(start, req(mode='accel', value=1.0, dur=3.0, speed=1.0, pulse=0.5))
+    m = wait_done()
+    check('accel test (both directions) completes', r.accepted and m.result == 'done', f'{r.message} / {m.result}')
+    # fake: +1 A -> ~15 rad/s^2, -1 A x 0.8 -> ~12 rad/s^2 (plus damping), 100 Hz upload
+    check('accel + and - measured with correct signs', 8 < m.accel_pos_rad_s2 < 25 and -20 < m.accel_neg_rad_s2 < -6,
+          f'a+ {m.accel_pos_rad_s2:+.1f}, a- {m.accel_neg_rad_s2:+.1f} rad/s^2, {m.pulses} pulses, '
+          f'{m.feedback_hz:.0f} Hz')
+    check('direction asymmetry detected (+ stronger)', 8 < m.accel_asymmetry_pct < 40,
+          f'{m.accel_asymmetry_pct:+.1f} %')
+    check('reversal time and per-direction current', 10 < m.reversal_ms < 300 and m.pulses >= 4 and
+          abs(m.current_pos_a - 1.0) < 0.1 and abs(m.current_neg_a + 1.0) < 0.1,
+          f'reversal {m.reversal_ms:.0f} ms, I+ {m.current_pos_a:+.2f}, I- {m.current_neg_a:+.2f}')
+    check('speed stays near the reversal speed', m.peak_velocity_rad_s < 1.6, f'peak {m.peak_velocity_rad_s:.2f} rad/s')
 
     spin(1.0)
     drive.send_signal(signal.SIGUSR2)  # low friction: constant current makes the wheel run away

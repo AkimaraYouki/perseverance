@@ -25,6 +25,7 @@ from std_msgs.msg import Empty  # noqa: E402
 from std_srvs.srv import Trigger  # noqa: E402
 
 WINDOW_S = 10.0
+PLOT_POINTS = 400        # per line; the history holds up to 2000 samples
 BG, PANEL, FG, DIM = '#11151c', '#1b212b', '#e6e8ec', '#8a93a3'
 GREEN, RED, AMBER, BLUE = '#2fb86a', '#d9443a', '#e8a93a', '#4f9dff'
 
@@ -111,12 +112,10 @@ class App:
         self.mode = tk.StringVar(value='current')
         mrow = ttk.Frame(tp)
         mrow.pack(anchor=tk.W)
-        ttk.Radiobutton(mrow, text='Current (A)', variable=self.mode, value='current',
-                        command=self._limits).pack(side=tk.LEFT)
-        ttk.Radiobutton(mrow, text='Velocity (rad/s)', variable=self.mode, value='velocity',
-                        command=self._limits).pack(side=tk.LEFT, padx=10)
-        ttk.Radiobutton(mrow, text='Position (deg)', variable=self.mode, value='position',
-                        command=self._limits).pack(side=tk.LEFT)
+        for k, (txt, val) in enumerate((('Current (A)', 'current'), ('Velocity (rad/s)', 'velocity'),
+                                        ('Position (deg)', 'position'), ('Accel ± (A, both dirs)', 'accel'))):
+            ttk.Radiobutton(mrow, text=txt, variable=self.mode, value=val,
+                            command=self._limits).grid(row=k // 2, column=k % 2, sticky=tk.W, padx=(0, 10))
         self.value = tk.DoubleVar(value=0.3)
         vrow = tk.Frame(tp, bg=PANEL)
         vrow.pack(anchor=tk.W, pady=4)
@@ -137,12 +136,22 @@ class App:
         self.dur_spin = tk.Spinbox(drow, from_=0.2, to=3.0, increment=0.2, width=6,
                                    textvariable=self.duration, font=('DejaVu Sans', 11))
         self.dur_spin.pack(side=tk.LEFT, padx=6)
-        ttk.Label(drow, text='Speed rad/s').pack(side=tk.LEFT, padx=(10, 0))
+        self.speed_lbl = ttk.Label(drow, text='Speed rad/s')
+        self.speed_lbl.pack(side=tk.LEFT, padx=(10, 0))
         self.speed = tk.DoubleVar(value=2.0)
         self.speed_spin = tk.Spinbox(drow, from_=0.1, to=20.0, increment=0.5, width=6,
                                      textvariable=self.speed, font=('DejaVu Sans', 11),
                                      state=tk.DISABLED)
         self.speed_spin.pack(side=tk.LEFT, padx=6)
+        # accel test: current flips at ±speed, or after max pulse if the speed is not reached
+        prow = ttk.Frame(tp)
+        prow.pack(anchor=tk.W)
+        ttk.Label(prow, text='Max pulse s').pack(side=tk.LEFT)
+        self.pulse = tk.DoubleVar(value=0.5)
+        self.pulse_spin = tk.Spinbox(prow, from_=0.05, to=2.0, increment=0.05, width=6,
+                                     textvariable=self.pulse, font=('DejaVu Sans', 11),
+                                     state=tk.DISABLED)
+        self.pulse_spin.pack(side=tk.LEFT, padx=6)
         self.lifted = tk.BooleanVar(value=False)
         ttk.Checkbutton(tp, text='Robot lifted / wheel free / hand on E-stop',
                         variable=self.lifted, command=self._buttons).pack(anchor=tk.W, pady=6)
@@ -204,6 +213,7 @@ class App:
         self._last_status_id = None
         self._heartbeat()
         self._refresh()
+        self._plot()
 
     # ------------------------------------------------------------------ helpers
     def _limits(self):
@@ -218,18 +228,24 @@ class App:
             lim, unit, res = st.max_current_a[i], 'A', 0.05
         elif mode == 'velocity':
             lim, unit, res = vlim, 'rad/s', 0.1
-        else:
+        elif mode == 'position':
             lim, unit, res = st.max_position_move_deg, 'deg', 1.0
-        self.scale.configure(from_=-lim, to=lim, resolution=res)
+        else:  # accel: amplitude, the test itself alternates +I / -I
+            lim, unit, res = st.max_current_a[i], 'A', 0.05
+        lo = 0.0 if mode == 'accel' else -lim
+        self.scale.configure(from_=lo, to=lim, resolution=res)
         try:
-            v = max(-lim, min(lim, self.value.get()))
+            v = max(lo, min(lim, self.value.get()))
         except tk.TclError:
             v = 0.0
         self.value.set(v)
         self.value_unit.configure(text=unit)
         self.dur_spin.configure(to=st.max_duration_s)
-        self.speed_spin.configure(to=vlim, state=tk.NORMAL if mode == 'position' else tk.DISABLED)
-        extra = f', speed ≤ {vlim:.1f} rad/s (relative move)' if mode == 'position' else ''
+        self.speed_spin.configure(to=vlim, state=tk.NORMAL if mode in ('position', 'accel') else tk.DISABLED)
+        self.speed_lbl.configure(text='Flip at ± rad/s' if mode == 'accel' else 'Speed rad/s')
+        self.pulse_spin.configure(state=tk.NORMAL if mode == 'accel' else tk.DISABLED)
+        extra = (f', speed ≤ {vlim:.1f} rad/s (relative move)' if mode == 'position' else
+                 f'; +I until +speed, then -I until -speed, … (speed ≤ {vlim:.1f})' if mode == 'accel' else '')
         self.limit_lbl.configure(
             text=f'limit ±{lim:.2f} {unit}, duration ≤ {st.max_duration_s:.1f} s{extra}')
         return lim
@@ -261,8 +277,10 @@ class App:
         try:
             req.value = float(self.value.get())
             req.duration_s = float(self.duration.get())
-            if req.mode == 'position':
+            if req.mode in ('position', 'accel'):
                 req.speed_rad_s = float(self.speed.get())
+            if req.mode == 'accel':
+                req.pulse_s = float(self.pulse.get())
         except (tk.TclError, ValueError):
             messagebox.showerror('Motor test', 'invalid number')
             return
@@ -364,6 +382,15 @@ class App:
                 if st.mode == 'position':
                     txt += (f"\ntarget {math.degrees(st.target_rad):.1f}°  "
                             f"final error {math.degrees(st.position_error_rad):+.2f}°")
+                if st.mode == 'accel' and st.pulses:
+                    txt += (f"\naccel +{st.accel_pos_rad_s2:8.1f} rad/s² @ {st.current_pos_a:+.2f} A"
+                            f"\naccel −{abs(st.accel_neg_rad_s2):8.1f} rad/s² @ {st.current_neg_a:+.2f} A"
+                            f"\nasymmetry {st.accel_asymmetry_pct:+.1f} %   reversal {st.reversal_ms:.0f} ms"
+                            f"\nJ est {st.inertia_est_kgm2:.2e} kg·m²   {st.pulses} pulses @ {st.feedback_hz:.0f} Hz")
+                    if st.feedback_hz < 200:
+                        txt += "\n(low upload rate → coarse; set 500 Hz in CubeMars tool)"
+                elif st.mode == 'accel':
+                    txt += "\naccel: no full pulse measured (longer duration / lower flip speed)"
                 col = GREEN if st.result in ('done', 'idle') else AMBER
             txt += f"\nheartbeat {'OK' if st.heartbeat_ok else 'LOST'}"
             self.status_lbl.configure(text=txt, foreground=col)
@@ -371,10 +398,19 @@ class App:
                 self._last_status_id = st.test_id
                 self._limits()
         self._buttons()
-        # plots
+        self.root.after(100, self._refresh)
+
+    def _plot(self):
+        # Separate from _refresh: a full matplotlib redraw costs ~100-300 ms on the Orin. The next
+        # redraw is scheduled 2x the last draw time later (>= 200 ms), so the Tk loop (heartbeat,
+        # STOP key, status text) is never starved. Lines are decimated to <= PLOT_POINTS.
+        t_start = time.monotonic()
+        now = t_start
         with self.ros.lock:
-            h = list(self.ros.hist.get(name, []))
+            h = list(self.ros.hist.get(self.motor.get(), []))
         h = [x for x in h if now - x[0] <= WINDOW_S]
+        if len(h) > PLOT_POINTS:
+            h = h[::len(h) // PLOT_POINTS + 1]
         if h:
             t = [x[0] - now for x in h]
             for i, (ax, line) in enumerate(zip(self.axes, self.lines)):
@@ -382,9 +418,13 @@ class App:
                 line.set_data(t, y)
                 lo, hi = min(y), max(y)
                 pad = max(0.05, 0.1 * (hi - lo))
-                ax.set_ylim(lo - pad, hi + pad)
-        self.canvas.draw_idle()
-        self.root.after(100, self._refresh)
+                cur_lo, cur_hi = ax.get_ylim()
+                # rescale only when the data leaves the view or uses < 1/3 of it (tick relayout is slow)
+                if lo < cur_lo or hi > cur_hi or (hi - lo + 2 * pad) < (cur_hi - cur_lo) / 3:
+                    ax.set_ylim(lo - pad, hi + pad)
+        self.canvas.draw()
+        spent = time.monotonic() - t_start
+        self.root.after(max(200, int(2000 * spent)), self._plot)
 
 
 def main():

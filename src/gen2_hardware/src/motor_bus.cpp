@@ -1,6 +1,11 @@
 #include "gen2_hardware/motor_bus.hpp"
 
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+
 #include <chrono>
+#include <cstring>
 #include <sstream>
 
 namespace gen2_hardware
@@ -34,6 +39,31 @@ MotorBus::MotorBus(std::string ifname, std::vector<MotorConfig> motors)
 MotorBus::~MotorBus()
 {
   stop();
+  if (lock_fd_ >= 0) {::close(lock_fd_);}
+}
+
+bool MotorBus::claim_commander(std::string & err)
+{
+  if (lock_fd_ >= 0) {return true;}
+  const std::string path = "/run/lock/gen2_can_" + ifname_ + ".lock";
+  const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0666);
+  if (fd < 0) {
+    err = "cannot open " + path + ": " + std::strerror(errno);
+    return false;
+  }
+  if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
+    char buf[32] = {0};
+    const ssize_t n = ::pread(fd, buf, sizeof(buf) - 1, 0);
+    ::close(fd);
+    err = "another process already commands " + ifname_ + " (pid " +
+      (n > 0 ? std::string(buf, static_cast<std::size_t>(n)) : std::string("?")) +
+      ", lock " + path + ")";
+    return false;
+  }
+  const std::string pid = std::to_string(::getpid());
+  if (::ftruncate(fd, 0) != 0 || ::pwrite(fd, pid.data(), pid.size(), 0) < 0) {}  // PID is informational
+  lock_fd_ = fd;
+  return true;
 }
 
 std::vector<uint8_t> MotorBus::unconfigured_ids() const
@@ -66,8 +96,8 @@ void MotorBus::stop()
 
 bool MotorBus::send(const cubemars::Frame & f, std::string & err)
 {
-  if (!tx_enabled_) {
-    err = "TX disabled (read-only bus)";
+  if (!tx_enabled_ || lock_fd_ < 0) {
+    err = lock_fd_ < 0 ? "not the commander of this bus" : "TX disabled (read-only bus)";
     return false;
   }
   if (!tx_sock_.is_open() && !tx_sock_.open(ifname_, err)) {
