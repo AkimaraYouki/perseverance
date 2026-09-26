@@ -208,6 +208,7 @@ def command_from_gamepad(
     pad: "Gamepad",
     lin_vel_x_range: tuple[float, float],
     ang_vel_z_range: tuple[float, float],
+    use_estop: bool = True,
 ) -> tuple[float, float, float, bool, bool]:
     """패드 -> (vx, wz, 높이 변화 입력 -1..1, 비상정지, 높이 초기화).
 
@@ -222,7 +223,7 @@ def command_from_gamepad(
 
     방향 규약: +x 앞, yaw 반시계 +. 스틱은 위/왼쪽이 음수라 부호를 뒤집는다.
     """
-    estop = pad.button(BUTTON_A)
+    estop = pad.button(BUTTON_A) and use_estop      # climb_test 는 A 를 다리 수동/자동 전환에 쓴다 (use_estop=False)
     reset_h = pad.button(BUTTON_B)
     if estop:
         return 0.0, 0.0, 0.0, True, reset_h

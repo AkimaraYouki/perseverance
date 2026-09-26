@@ -82,6 +82,8 @@ TUNE = dict(
     level_max=0.10,      # 좌우 다리 길이 차 한계 [m]
     leg_kp=60.0,         # 주행 중 고관절 P [N·m/rad] (학습값 60 = 바퀴에서 4.5 kN/m, 정하중 처짐 4 mm = 딱딱).
     leg_kd=1.5,          # 주행 중 고관절 D [N·m·s/rad]. 낮추면 서스펜션처럼 먼저 받아 준다 (실기 MIT kp/kd 그대로)
+    leg_rate=0.08,       # 다리 수동 모드 (패드 A 로 켜고 끔): 오른쪽 스틱 세로 끝까지 = 이 속도 [m/s] 로 높이 이동, 놓으면 유지.
+                         #   자동으로 돌아가면 이 속도로 idle_h 로 복귀. roll 수평 맞추기는 수동에서도 동작 (높이 가운데만 사람이 정함)
     idle_h=0.1825,       # [m, 다리 관절값]. 행정 가운데 = 좌우 ±60 mm. 0.20 은 신장 여유 42.5 mm 라 8 cm 엇갈린 삼각형길에서 다리가 끝에 닿음 (2026-09-26 LQR 시험). 충격 흡수 계산 (2026-09-26 계산, leg_map + URDF 4.03 kg):
                          #   정하중 토크는 행정 전체 2.1~2.3 N·m (정격 3 아래) 라 제약이 아니다.
                          #   9 N·m 로 바닥까지 눌리며 흡수 가능한 에너지 = 약 1.15 J / 압축 10 mm.
@@ -707,7 +709,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
         f"SPEED  {abs(v_now)*3.6:3.1f} km/h ({v_now:+.2f} m/s) / cmd {vx*3.6:+.1f} / max {args.vmax_kmh:.1f}" + ("  BRAKE" if stats.get("brake") else "") + ("  BUMP" if stats.get("bump") else ""),
         f"YAW    {yr:+.2f} / cmd {wz:+.2f} rad/s",
         f"TILT   P {pitch:+5.1f}  R {roll:+5.1f} deg",
-        f"LEGS   L {hl:3.0f}  R {hr:3.0f}  idle {args.idle_h*1000:3.0f} mm",
+        f"LEGS   L {hl:3.0f}  R {hr:3.0f}  " + (f"MANUAL {LEG['h']*1000:3.0f} mm" if LEG["manual"] else f"AUTO {args.idle_h*1000:3.0f} mm"),
         f"WHL z  L {wb[0]:3.0f}  R {wb[1]:3.0f} mm",
         f"HIP    L {float(tau[0]):+5.2f}  R {float(tau[1]):+5.2f} Nm",
         f"WHL    L {wt[0]:+5.2f}  R {wt[1]:+5.2f} Nm",
@@ -779,6 +781,7 @@ if args.record:
 
 
 gov = dict(vf=0.0, i=0.0, ref=0.0)
+LEG = dict(manual=False, h=0.1825, a_prev=False)             # 다리 수동 모드 (패드 A), 높이 가운데 [m]
 bump = dict(t=0.0, quiet=0.0)                                   # 턱 감속 남은 시간, 이 시각 전엔 턱 안 봄 (착지 직후)
 lift = dict(on=False, t_un=0.0, t_ld=0.0)                              # 들림 (손으로 들기, 공중 스폰) 상태
 _m_tot = float(robot.root_physx_view.get_masses()[0].sum())
@@ -876,6 +879,7 @@ def episode():
     x_err = 0.0                                                # LQR 진행거리 오차 (명령 속도 적분 대비)
     lift.update(on=False, t_un=0.0, t_ld=0.0)
     gov.update(vf=0.0, i=0.0, ref=0.0)                         # 속도 제한·브레이크 상태
+    LEG["h"] = args.idle_h                                      # 처음으로: 다리 높이 가운데는 IDLE 에서 (수동/자동 선택은 유지)
     bump.update(t=0.0, quiet=0.0)
     roll_pi.reset()
     if args.ctrl == "lqr":
@@ -908,7 +912,14 @@ def episode():
         if pad is not None:                                        # 패드: 속도·회전·높이는 사람이, 점프는 Y
             pad.poll()
             _vm = args.vmax_kmh / 3.6
-            vx, wz, dh, estop, reset_h = J.command_from_gamepad(pad, (-_vm, _vm), (-args.wz_max, args.wz_max))
+            vx, wz, dh, estop, reset_h = J.command_from_gamepad(pad, (-_vm, _vm), (-args.wz_max, args.wz_max), use_estop=False)
+            a_btn = pad.button(0)
+            if a_btn and not LEG["a_prev"]:                        # A = 다리 수동/자동
+                LEG["manual"] = not LEG["manual"]
+                print(f"[다리] {'수동 (오른쪽 스틱 세로)' if LEG['manual'] else '자동 (IDLE 로 복귀)'}", flush=True)
+            LEG["a_prev"] = a_btn
+            if LEG["manual"]:
+                LEG["h"] = min(H_MAX - 0.02, max(H_MIN + 0.02, LEG["h"] + args.leg_rate * dh * dt))
             trig = max(J.trigger(pad, J.AXIS_RT), J.trigger(pad, J.lt_axis(pad)))
             y, back = pad.button(BTN_Y) or trig > 0.5, pad.button(BTN_START)   # 점프: Y, RT, LT 어느 것이든
             bb = pad.button(1)
@@ -1068,7 +1079,10 @@ def episode():
                 dlt = roll_pi(rl, dt, args.roll_kp, args.roll_ki, args.level_max,
                               freeze=airborne or abs(math.degrees(rl)) > args.roll_freeze_deg, leak=args.roll_leak,
                               rate=RF["r"], kd=args.roll_kd)
-                tl = min(H_MAX, max(H_MIN, args.idle_h + 0.5 * dlt)); tr = min(H_MAX, max(H_MIN, args.idle_h - 0.5 * dlt))
+                if not LEG["manual"]:                              # 자동: 다리 높이 가운데를 idle_h 로 부드럽게
+                    LEG["h"] += max(-args.leg_rate * dt, min(args.leg_rate * dt, args.idle_h - LEG["h"]))
+                hc = LEG["h"]
+                tl = min(H_MAX, max(H_MIN, hc + 0.5 * dlt)); tr = min(H_MAX, max(H_MIN, hc - 0.5 * dlt))
                 act[0, 0], act[0, 1] = (tl - h_ref) / 0.12, (tr - h_ref) / 0.12
                 legs_act.stiffness[:] = args.vmc_kp; legs_act.damping[:] = args.vmc_kd
                 ffF = 0.5 * _m_pend * 9.81
