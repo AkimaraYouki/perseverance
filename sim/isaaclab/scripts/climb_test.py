@@ -35,7 +35,8 @@ TUNE = dict(
     lqr_qx=2.0, lqr_qv=5.0, lqr_qth=100.0, lqr_qthd=5.0,   # LQR 상태 가중 [진행거리 m, 속도 m/s, 진자각 rad, 각속도 rad/s]
     lqr_r=1.0,           # LQR 입력 가중 (두 바퀴 토크 합 N·m)
     wheel_tau_max=7.0,   # 바퀴 토크 한계 [N·m] (AK45-10 피크)
-    vmax=1.13,           # 패드 스틱 최대 속도 [m/s] = 바퀴 모터 한계 18.85 rad/s x 0.06 (4.1 km/h). 예전 0.85
+    vmax_kmh=3.0,        # 최고 속도 [km/h] (사용자 2026-09-26). 스틱 끝 = 이 속도. 모터 한계는 4.1 km/h (18.85 rad/s x 0.06)
+    brake_gain=6.0,      # 실제 속도가 최고 속도를 넘으면(내리막 등) 목표 = 최고 - brake_gain x 초과분 -> 뒤로 젖히며 감속. 30 cm 경사 내리막: 2 면 3.4 km/h, 6 이면 3.1
     speed_guard=1,    # 바퀴 관절 속도가 모터 한계(18.85 rad/s)의 이 비율을 넘으면 목표 속도를 낮춰 뒤로 젖히며 감속 (푸시백).
                          #   한계에 붙으면 앞으로 기울 때 바퀴를 더 못 돌려 고꾸라진다 (내리막 0.9 m/s, 2026-09-26). 1 = 끔
     yaw_kd=1.0,          # 회전: 좌우 바퀴 토크 차 = yaw_kd x (명령 - 실제 yaw rate) [N·m·s/rad]
@@ -497,7 +498,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
     rtf = f"{stats['rtf']:.2f}x" if stats["rtf"] == stats["rtf"] else "-"
     lines = [
         f"PHASE  {phase.upper():8s}  CTRL {args.ctrl.upper()}",
-        f"SPEED  {v_now:+.2f} m/s {abs(v_now)*3.6:3.1f} km/h / cmd {vx:+.2f} (max {args.vmax*3.6:.1f} km/h)",
+        f"SPEED  {abs(v_now)*3.6:3.1f} km/h ({v_now:+.2f} m/s) / cmd {vx*3.6:+.1f} / max {args.vmax_kmh:.1f}" + ("  BRAKE" if stats.get("brake") else ""),
         f"YAW    {yr:+.2f} / cmd {wz:+.2f} rad/s",
         f"TILT   P {pitch:+5.1f}  R {roll:+5.1f} deg",
         f"LEGS   L {hl:3.0f}  R {hr:3.0f}  idle {args.idle_h*1000:3.0f} mm",
@@ -600,7 +601,8 @@ def episode():
             wz = max(-1.0, min(1.0, -args.heading_kp * yaw_of(robot.data.root_quat_w[0])))
         if pad is not None:                                        # 패드: 속도·회전·높이는 사람이, 점프는 Y
             pad.poll()
-            vx, wz, dh, estop, reset_h = J.command_from_gamepad(pad, (-args.vmax, args.vmax), rng.ang_vel_z)
+            _vm = args.vmax_kmh / 3.6
+            vx, wz, dh, estop, reset_h = J.command_from_gamepad(pad, (-_vm, _vm), rng.ang_vel_z)
             y, back = pad.button(BTN_Y), pad.button(BTN_START)
             y_edge, y_prev = y and not y_prev, y
             if k % int(2.0 / dt) == 0 and k > 0 and phase == "drive":
@@ -672,7 +674,13 @@ def episode():
             ffF = 0.0
             if phase in ("drive", "retract", "extract", "land"):
                 th_ref = math.radians(args.retract_lean) if phase == "retract" else 0.0
+                vx = max(-args.vmax_kmh / 3.6, min(args.vmax_kmh / 3.6, vx))
                 v_ref = vx
+                over = abs(v_now) - args.vmax_kmh / 3.6
+                stats["brake"] = over > 0
+                if over > 0:                                       # 최고 속도 초과 (내리막) -> 브레이크: 한계보다 낮은 목표
+                    v_ref = math.copysign(max(0.0, args.vmax_kmh / 3.6 - args.brake_gain * over), v_now)
+                    x_err = 0.0
                 ww = float(robot.data.joint_vel[0, wheel_ids].abs().max()) / 18.85
                 if ww > args.speed_guard and args.speed_guard < 1.0:     # 푸시백: 지금 속도보다 낮은 목표 -> LQR 이 뒤로 젖혀 감속
                     cut = min(1.0, (ww - args.speed_guard) / (1.0 - args.speed_guard))
