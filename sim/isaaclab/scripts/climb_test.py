@@ -734,7 +734,7 @@ def reload_tune():
         print(f"[튜닝] TUNE 읽기 실패, 이전 값 유지: {e}", flush=True)
         return
     for k, v in ns["TUNE"].items():
-        if k in CLI_KEYS or getattr(args, k, None) == v:
+        if k in CLI_KEYS or k in ("rl_on",) or getattr(args, k, None) == v:   # rl_on 은 패드 B 로만 (파일값은 시작할 때만)
             continue
         if k in RESTART:
             print(f"[튜닝] {k} = {v} 는 재시작해야 적용된다 (지금 {getattr(args, k)})", flush=True)
