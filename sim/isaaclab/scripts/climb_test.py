@@ -57,7 +57,7 @@ TUNE = dict(
     land_detect_s=0.02,  # 들린 뒤 한쪽 다리라도 하중이 이만큼 [s] -> 내려놓음: 균형 즉시 재개 (Ascento 처럼 접지 즉시.
                          #   두 다리 0.1 s 기다리면 한 바퀴부터 닿는 동안 균형 없이 뒤로 넘어짐, 손 들기 시험)
     lift_wheel_kd=0.05,  # 들린 동안 바퀴 속도 감쇠 [N·m·s/rad] (헛돌지 않게)
-    contact_tau_min=0.8, # 고관절 토크가 이보다 작은 다리 = 바퀴가 뜸 -> roll 적분 멈춤 [N·m] (실기: 전류)
+    contact_tau_min=0.8, # 접지 판정: 고관절 토크가 다리를 펴는 쪽(+, 몸을 받침)으로 이 이상 [N·m] (실기: 전류). 뜨면 0 이나 반대 부호
     roll_freeze_deg=20.0,  # |roll| 이 이보다 크면 roll 적분 멈춤 (다리로 못 잡는 기울기)
     # --- 다리 높이: 항상 자동 모드 (정책이 외란·지형에 맞춰 정한다). idle_h 는 자동 모드 공칭 = IDLE ---
     level_rate=10.0,     # 좌우 수평 유지 [1/s]: 좌우 다리 길이 차를 roll 이 0 이 되게 적분 (d(hL-hR)/dt = rate x 0.198 x sin(roll)).
@@ -121,6 +121,10 @@ TUNE = dict(
     imu_tilt_bias_deg=0.5,    # 기울기 바이어스 (시작 때 ± 무작위) [deg]
     imu_gyro_noise=0.01,      # 자이로 잡음 σ [rad/s]
     enc_vel_noise=0.05,       # 바퀴 엔코더 속도 잡음 σ [rad/s]
+    v_fuse_hz=0.0,       # 속도 추정: IMU 가속도 적분 + 바퀴 오도메트리 상보 필터 교차 주파수 [Hz] (0 = 오도메트리 저역통과만). 꺼 둠:
+                         #   몸통 가속도 != 바퀴축 가속도 (pitch 흔들림) -> 기구학 변환 없이 섞으면 평지도 0.37 m/s 틀림. 변환 넣은 뒤 다시
+                         #   턱에서 바퀴가 튀고 미끄러지면 오도메트리만으로는 0.6~0.9 m/s 틀림 (삼각형길, 2026-09-26)
+    imu_acc_noise=0.05,  # 가속도계 잡음 σ [m/s^2]
     v_lpf_hz=10.0,       # 속도 추정 저역통과 [Hz]: 바퀴 엔코더 속도는 바퀴 자체의 빠른 요동을 담는다 -> 걸러야 지연과 겹쳐 발진 안 함
                          #   (필터 없이 센서 + 지연 5 ms 면 바퀴 속도 +-18 rad/s 발진 -> 넘어짐, 2026-09-26)
     delay_ms=5.0,        # 제어 지연: 센서 -> 명령 적용 [ms] (200 Hz 한 주기 = 5 ms)
@@ -430,7 +434,27 @@ def lqr_state():
         rb = quat_apply_inverse(d.root_quat_w[0:1], (c - ax)[None])[0].tolist()
         th = SENSE["pitch"] + math.atan2(rb[0], rb[2])
         thd = SENSE["gy"]
-        v_raw = R * (0.5 * (SENSE["wl"] + SENSE["wr"]) + thd)      # 바퀴 절대 회전 = 관절 + 몸체 pitch 회전
+        # 땅을 짚은 바퀴만 속도 추정에 쓴다 (뜬 바퀴는 헛돌아 엔코더가 의미 없다 — 삼각형길에서 한 바퀴가 떠
+        # -16 rad/s 로 돌자 평균이 '후진 중' 으로 나와 LQR 이 앞으로 가속, 폭주·넘어짐, 2026-09-26). 접지 = 고관절 토크(실기: 전류)
+        th_ = (d.applied_torque[0, leg_ids] * hip_sign).tolist()    # 부호 있음 (+ = 몸을 받침). 절댓값이면 뜬 다리의 반대 토크를 접지로 오판
+        # 바퀴 절대 회전 = 엔코더(정강이 기준) + 정강이 링크 회전(몸체 pitch + 4절 링크가 다리 길이에 따라 도는 몫).
+        # 실기: 링크 회전은 고관절 각속도 x 4절 링크 기구학으로 계산 (몸체 pitch 만 더하면 다리가 움직일 때 0.5 m/s 넘게 틀림).
+        # 시뮬: 바퀴 절대 회전(= 그 계산의 결과)에 엔코더 잡음을 얹는다.
+        psi_ = yaw_of(d.root_quat_w[0]); yh = torch.tensor([-math.sin(psi_), math.cos(psi_), 0.0], device=dev)
+        wabs = (d.body_ang_vel_w[0, wheel_bodies] @ yh).tolist()
+        if args.enc_vel_noise > 0:
+            wabs = [w_ + _rng.normal(0, args.enc_vel_noise) for w_ in wabs]
+        ws_ = [w_ for w_, t_ in zip(wabs, th_) if t_ >= args.contact_tau_min]
+        if args.v_fuse_hz > 0:                                      # 상보 필터: 가속도 적분(빠른 성분) + 오도메트리(느린 성분)
+            acc = d.body_lin_acc_w[0, 0].tolist()                   # 실기: 가속도계 비력을 자세로 돌려 중력 뺀 값
+            a_h = acc[0] * math.cos(psi_) + acc[1] * math.sin(psi_) + _rng.normal(0, args.imu_acc_noise)
+            VF["v"] += a_h * dt
+            if ws_:
+                VF["v"] += (1.0 - math.exp(-2 * math.pi * args.v_fuse_hz * dt)) * (R * sum(ws_) / len(ws_) - VF["v"])
+            return th, thd, math.sqrt(sum(x * x for x in rb)), VF["v"], SENSE["gz"]
+        if not ws_:                                                 # 둘 다 뜸 -> 직전 추정 유지
+            return th, thd, math.sqrt(sum(x * x for x in rb)), VF["v"], SENSE["gz"]
+        v_raw = R * sum(ws_) / len(ws_)
         if args.v_lpf_hz > 0:
             VF["v"] += (1.0 - math.exp(-2 * math.pi * args.v_lpf_hz * dt)) * (v_raw - VF["v"])
         else:
@@ -884,9 +908,9 @@ def episode():
                 wheel_term.cfg.torque_scale = args.wheel_tau_max
                 act[0, 2] = max(-1.0, min(1.0, (0.5 * tau_w - tau_y) / args.wheel_tau_max))
                 act[0, 3] = max(-1.0, min(1.0, (0.5 * tau_w + tau_y) / args.wheel_tau_max))
-            unl = float(tau.abs().max()) < args.contact_tau_min       # 두 다리 모두 무하중
+            unl = float(tau.max()) < args.contact_tau_min            # 두 다리 모두 무하중 (펴는 쪽 토크가 없음)
             sf = float(torch.norm(d.body_lin_acc_w[0, 0] + torch.tensor([0.0, 0.0, 9.81], device=dev))) / 9.81
-            ldd = float(tau.abs().max()) >= args.contact_tau_min and sf > args.land_sf_min   # 한쪽 다리라도 하중 (+ 자유낙하 아님)
+            ldd = float(tau.max()) >= args.contact_tau_min and sf > args.land_sf_min   # 한쪽이라도 펴는 쪽으로 받침 (+ 자유낙하 아님)
             #   (공중에서 다리가 움직이는 토크를 접지로 오판하지 않게 — 스폰 낙하 0.14 s 에 오판했음)
             if phase == "drive" and not lift["on"]:
                 lift["t_un"] = lift["t_un"] + dt if unl else 0.0
@@ -910,7 +934,7 @@ def episode():
                 roll_pi.reset(0.0); x_err = 0.0; gov.update(i=0.0, ref=0.0, vf=0.0)
             elif phase == "drive":
                 rl = SENSE["roll"]
-                airborne = float(tau.abs().min()) < args.contact_tau_min
+                airborne = float(tau.min()) < args.contact_tau_min      # 부호 있음: + = 다리를 펴며 몸을 받침 (뜨면 0 이나 반대 부호)
                 dlt = roll_pi(rl, dt, args.roll_kp, args.roll_ki, args.level_max,
                               freeze=airborne or abs(math.degrees(rl)) > args.roll_freeze_deg, leak=args.roll_leak,
                               rate=RF["r"], kd=args.roll_kd)
