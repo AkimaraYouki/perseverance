@@ -18,7 +18,8 @@ drive = subprocess.Popen([sys.executable, os.path.join(HERE, 'fake_cubemars_driv
 cfg = sys.argv[1]
 node_p = subprocess.Popen(['ros2', 'run', 'gen2_hardware', 'motor_test_node', '--ros-args',
                            '--params-file', cfg, '-p', 'can_interface:=vcan0'],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                          start_new_session=True)  # own process group: ros2 run + the node
 rclpy.init()
 n = rclpy.create_node('motor_test_itest')
 hb = n.create_publisher(Empty, 'motor_test/heartbeat', 10)
@@ -46,9 +47,10 @@ def call(cli, req):
     return f.result()
 
 
-def req(mode='current', value=0.5, dur=1.0, confirm=True):
+def req(mode='current', value=0.5, dur=1.0, confirm=True, speed=0.0):
     r = MotorTest.Request()
     r.motor, r.mode, r.value, r.duration_s, r.confirm_lifted = 'ak45_a', mode, value, dur, confirm
+    r.speed_rad_s = speed
     return r
 
 
@@ -72,8 +74,12 @@ try:
     spin(1.5)
     r = call(start, req(confirm=False))
     check('rejects without lifted confirmation', not r.accepted, r.message)
-    r = call(start, req(value=5.0))
-    check('rejects current above limit', not r.accepted, r.message)
+    r = call(start, req(value=6.0))
+    check('rejects current above limit (5 A)', not r.accepted, r.message)
+    r = call(start, req(mode='position', value=800.0, dur=2.0, speed=1.0))
+    check('rejects position move above 720 deg', not r.accepted, r.message)
+    r = call(start, req(mode='position', value=90.0, dur=2.0, speed=25.0))
+    check('rejects position speed above limit', not r.accepted, r.message)
     r = call(start, req(mode='velocity', value=50.0))
     check('rejects velocity above limit', not r.accepted, r.message)
 
@@ -101,8 +107,16 @@ try:
     check('heartbeat loss aborts test', m.result == 'operator heartbeat lost', m.result)
 
     spin(1.0)
+    r = call(start, req(mode='position', value=90.0, dur=3.0, speed=2.0))
+    m = wait_done()
+    import math
+    check('position move 90 deg completes', r.accepted and m.result == 'done', f'{r.message} / {m.result}')
+    check('position final error < 1 deg', abs(math.degrees(m.position_error_rad)) < 1.0,
+          f'moved {math.degrees(m.moved_rad):.1f} deg, error {math.degrees(m.position_error_rad):+.2f} deg')
+
+    spin(1.0)
     drive.send_signal(signal.SIGUSR2)  # low friction: constant current makes the wheel run away
-    r = call(start, req(value=1.0, dur=3.0))
+    r = call(start, req(value=3.0, dur=3.0))
     m = wait_done()
     drive.send_signal(signal.SIGUSR2)
     check('over-speed guard aborts runaway wheel', m.result == 'over-speed guard', m.result)
@@ -119,11 +133,11 @@ try:
     m = wait_done()
     check('recovers after stale (new test ok)', r.accepted and m.result == 'done', m.result)
 finally:
-    node_p.send_signal(signal.SIGINT)
+    os.killpg(node_p.pid, signal.SIGINT)   # ros2 run does not always forward SIGINT to the node
     try:
         node_p.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        node_p.kill()
+        os.killpg(node_p.pid, signal.SIGKILL)
     time.sleep(0.3)
     drive.terminate()
     out = drive.communicate(timeout=3)[0].strip().splitlines()

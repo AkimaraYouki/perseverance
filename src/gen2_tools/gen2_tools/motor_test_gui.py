@@ -115,11 +115,19 @@ class App:
                         command=self._limits).pack(side=tk.LEFT)
         ttk.Radiobutton(mrow, text='Velocity (rad/s)', variable=self.mode, value='velocity',
                         command=self._limits).pack(side=tk.LEFT, padx=10)
+        ttk.Radiobutton(mrow, text='Position (deg)', variable=self.mode, value='position',
+                        command=self._limits).pack(side=tk.LEFT)
         self.value = tk.DoubleVar(value=0.3)
-        self.scale = tk.Scale(tp, variable=self.value, orient=tk.HORIZONTAL, length=300,
+        vrow = tk.Frame(tp, bg=PANEL)
+        vrow.pack(anchor=tk.W, pady=4)
+        self.scale = tk.Scale(vrow, variable=self.value, orient=tk.HORIZONTAL, length=250,
                               resolution=0.05, from_=-1, to=1, bg=PANEL, fg=FG,
                               highlightthickness=0, troughcolor='#2a3140', font=('DejaVu Sans', 10))
-        self.scale.pack(anchor=tk.W, pady=4)
+        self.scale.pack(side=tk.LEFT)
+        self.value_entry = tk.Entry(vrow, textvariable=self.value, width=8, font=('DejaVu Sans', 11))
+        self.value_entry.pack(side=tk.LEFT, padx=6, anchor=tk.S)
+        self.value_unit = ttk.Label(vrow, text='A')
+        self.value_unit.pack(side=tk.LEFT, anchor=tk.S)
         self.limit_lbl = ttk.Label(tp, text='', style='Dim.TLabel')
         self.limit_lbl.pack(anchor=tk.W)
         drow = ttk.Frame(tp)
@@ -129,6 +137,12 @@ class App:
         self.dur_spin = tk.Spinbox(drow, from_=0.2, to=3.0, increment=0.2, width=6,
                                    textvariable=self.duration, font=('DejaVu Sans', 11))
         self.dur_spin.pack(side=tk.LEFT, padx=6)
+        ttk.Label(drow, text='Speed rad/s').pack(side=tk.LEFT, padx=(10, 0))
+        self.speed = tk.DoubleVar(value=2.0)
+        self.speed_spin = tk.Spinbox(drow, from_=0.1, to=20.0, increment=0.5, width=6,
+                                     textvariable=self.speed, font=('DejaVu Sans', 11),
+                                     state=tk.DISABLED)
+        self.speed_spin.pack(side=tk.LEFT, padx=6)
         self.lifted = tk.BooleanVar(value=False)
         ttk.Checkbutton(tp, text='Robot lifted / wheel free / hand on E-stop',
                         variable=self.lifted, command=self._buttons).pack(anchor=tk.W, pady=6)
@@ -198,13 +212,26 @@ class App:
         if st is None or name not in st.motor_names:
             return None
         i = list(st.motor_names).index(name)
-        lim = st.max_current_a[i] if self.mode.get() == 'current' else st.max_velocity_rad_s[i]
-        self.scale.configure(from_=-lim, to=lim)
-        v = max(-lim, min(lim, self.value.get()))
+        mode = self.mode.get()
+        vlim = st.max_velocity_rad_s[i]
+        if mode == 'current':
+            lim, unit, res = st.max_current_a[i], 'A', 0.05
+        elif mode == 'velocity':
+            lim, unit, res = vlim, 'rad/s', 0.1
+        else:
+            lim, unit, res = st.max_position_move_deg, 'deg', 1.0
+        self.scale.configure(from_=-lim, to=lim, resolution=res)
+        try:
+            v = max(-lim, min(lim, self.value.get()))
+        except tk.TclError:
+            v = 0.0
         self.value.set(v)
+        self.value_unit.configure(text=unit)
         self.dur_spin.configure(to=st.max_duration_s)
-        unit = 'A' if self.mode.get() == 'current' else 'rad/s'
-        self.limit_lbl.configure(text=f'limit ±{lim:.2f} {unit}, duration ≤ {st.max_duration_s:.1f} s')
+        self.speed_spin.configure(to=vlim, state=tk.NORMAL if mode == 'position' else tk.DISABLED)
+        extra = f', speed ≤ {vlim:.1f} rad/s (relative move)' if mode == 'position' else ''
+        self.limit_lbl.configure(
+            text=f'limit ±{lim:.2f} {unit}, duration ≤ {st.max_duration_s:.1f} s{extra}')
         return lim
 
     def _buttons(self):
@@ -231,11 +258,13 @@ class App:
         req = MotorTest.Request()
         req.motor = self.motor.get()
         req.mode = self.mode.get()
-        req.value = float(self.value.get())
         try:
+            req.value = float(self.value.get())
             req.duration_s = float(self.duration.get())
+            if req.mode == 'position':
+                req.speed_rad_s = float(self.speed.get())
         except (tk.TclError, ValueError):
-            messagebox.showerror('Motor test', 'invalid duration')
+            messagebox.showerror('Motor test', 'invalid number')
             return
         req.confirm_lifted = bool(self.lifted.get())
         if req.value == 0.0:
@@ -332,6 +361,9 @@ class App:
                 txt = (f"last: {st.result}\n{st.motor} {st.mode} {st.value:+.2f}  "
                        f"moved {math.degrees(st.moved_rad):.1f}°  peak {st.peak_current_a:.2f} A, "
                        f"{st.peak_velocity_rad_s:.2f} rad/s  mean(2nd half) {st.mean_velocity_rad_s:.3f}")
+                if st.mode == 'position':
+                    txt += (f"\ntarget {math.degrees(st.target_rad):.1f}°  "
+                            f"final error {math.degrees(st.position_error_rad):+.2f}°")
                 col = GREEN if st.result in ('done', 'idle') else AMBER
             txt += f"\nheartbeat {'OK' if st.heartbeat_ok else 'LOST'}"
             self.status_lbl.configure(text=txt, foreground=col)

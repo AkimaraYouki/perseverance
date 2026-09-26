@@ -33,7 +33,8 @@ bool MotorTester::heartbeat_ok() const
   return t <= 0 || (mono_now_ns() - last_hb_ns_.load()) * 1e-9 < t;
 }
 
-std::string MotorTester::start(std::size_t m, TestMode mode, double value, double duration)
+std::string MotorTester::start(
+  std::size_t m, TestMode mode, double value, double duration, double speed, double accel)
 {
   if (m >= bus_.motors().size()) {return "no such motor";}
   {
@@ -51,10 +52,24 @@ std::string MotorTester::start(std::size_t m, TestMode mode, double value, doubl
   if (mode == TestMode::kVelocity && std::fabs(value) > velocity_limit(m)) {
     return "|velocity| exceeds limit " + std::to_string(velocity_limit(m)) + " rad/s";
   }
-  if (mode == TestMode::kVelocity && !(c.pole_pairs > 0 && c.gear_ratio > 0)) {
+  if (mode != TestMode::kCurrent && !(c.pole_pairs > 0 && c.gear_ratio > 0)) {
     return "pole_pairs/gear_ratio not configured";
   }
+  if (mode == TestMode::kPosition) {
+    if (std::fabs(value) > limits_.max_position_move_deg) {
+      return "|move| exceeds " + std::to_string(limits_.max_position_move_deg) + " deg";
+    }
+    if (!(speed > 0) || speed > velocity_limit(m)) {
+      return "position speed must be in (0, " + std::to_string(velocity_limit(m)) + "] rad/s";
+    }
+  }
   const MotorFeedback fb = bus_.feedback(m);
+  if (mode == TestMode::kPosition && fb.valid &&
+    std::fabs(fb.status.position_deg) > kPositionWrapGuardDeg)
+  {
+    return "raw position " + std::to_string(fb.status.position_deg) +
+           " deg is near the feedback wrap (+-3200): set a temporary origin first";
+  }
   if (!fb.valid || (mono_now_ns() - fb.mono_ns) * 1e-9 > c.feedback_stale_timeout_s) {
     return "feedback not fresh";
   }
@@ -71,11 +86,13 @@ std::string MotorTester::start(std::size_t m, TestMode mode, double value, doubl
     st_.mode = mode;
     st_.value = value;
     st_.duration_s = duration;
+    st_.speed_rad_s = mode == TestMode::kPosition ? speed : 0.0;
     st_.result = "running";
     st_.test_id = id;
   }
   stop_ = false;
-  th_ = std::thread([=] {run(id, m, mode, value, duration);});
+  if (!(accel > 0)) {accel = limits_.default_accel_rad_s2;}
+  th_ = std::thread([=] {run(id, m, mode, value, duration, speed, accel);});
   return "";
 }
 
@@ -100,7 +117,9 @@ TestStatus MotorTester::status() const
   return st_;
 }
 
-void MotorTester::run(uint64_t id, std::size_t m, TestMode mode, double value, double duration)
+void MotorTester::run(
+  uint64_t id, std::size_t m, TestMode mode, double value, double duration, double speed,
+  double accel)
 {
   (void)id;
   const auto & c = bus_.motors()[m];
@@ -108,10 +127,21 @@ void MotorTester::run(uint64_t id, std::size_t m, TestMode mode, double value, d
   const MotorFeedback fb0 = bus_.feedback(m);
   const double start_pos = c.raw_to_joint_pos(fb0.status.position_deg);
   // joint rad/s -> drive ERPM (inverse of MotorConfig::erpm_to_joint_vel)
-  const double erpm = mode == TestMode::kVelocity ?
-    value / c.direction * c.pole_pairs * c.gear_ratio * 60.0 / (2.0 * M_PI) : 0.0;
+  const double erpm_per_rad_s = c.pole_pairs * c.gear_ratio * 60.0 / (2.0 * M_PI);
+  const double erpm = mode == TestMode::kVelocity ? value / c.direction * erpm_per_rad_s : 0.0;
+  // position: relative joint move -> absolute drive degrees (inverse of raw_to_joint_pos)
+  const double move_rad = value * M_PI / 180.0;
+  const double target_raw_deg = fb0.status.position_deg +
+    move_rad / c.direction / (2.0 * M_PI) * c.raw_deg_per_output_rev;
+  const double target_joint = start_pos + move_rad;
+  const double pos_erpm = speed * erpm_per_rad_s;
+  const double pos_erpm_s2 = accel * erpm_per_rad_s;
+  if (mode == TestMode::kPosition) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    st_.target_rad = target_joint;
+  }
   const double vel_guard = mode == TestMode::kVelocity ? std::fabs(value) * 1.5 + 0.5 :
-    velocity_limit(m) * 1.5;
+    mode == TestMode::kPosition ? speed * 1.5 + 0.5 : velocity_limit(m) * 1.5;
   double peak_i = 0, peak_w = 0, w_sum = 0;
   int w_n = 0;
   std::string why = "done";
@@ -136,9 +166,18 @@ void MotorTester::run(uint64_t id, std::size_t m, TestMode mode, double value, d
     peak_i = std::max(peak_i, std::fabs(fb.status.current_a));
     peak_w = std::max(peak_w, std::fabs(w));
     if (t > duration * 0.5) {w_sum += w; ++w_n;}
-    const cubemars::Frame f = mode == TestMode::kCurrent ?
-      cubemars::encode_current(c.can_id, value * std::min(1.0, t / limits_.current_ramp_s)) :
-      cubemars::encode_rpm(c.can_id, erpm);
+    cubemars::Frame f;
+    switch (mode) {
+      case TestMode::kCurrent:
+        f = cubemars::encode_current(c.can_id, value * std::min(1.0, t / limits_.current_ramp_s));
+        break;
+      case TestMode::kVelocity:
+        f = cubemars::encode_rpm(c.can_id, erpm);
+        break;
+      case TestMode::kPosition:
+        f = cubemars::encode_pos_spd(c.can_id, target_raw_deg, pos_erpm, pos_erpm_s2);
+        break;
+    }
     std::string err;
     if (!bus_.send(f, err)) {why = "TX failed: " + err; break;}
     {
@@ -158,6 +197,9 @@ void MotorTester::run(uint64_t id, std::size_t m, TestMode mode, double value, d
   st_.result = why;
   st_.moved_rad = c.raw_to_joint_pos(fb1.status.position_deg) - start_pos;
   st_.mean_velocity_rad_s = w_n ? w_sum / w_n : 0.0;
+  if (mode == TestMode::kPosition) {
+    st_.position_error_rad = target_joint - c.raw_to_joint_pos(fb1.status.position_deg);
+  }
 }
 
 void MotorTester::send_zero(std::size_t m)

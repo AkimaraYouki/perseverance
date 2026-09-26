@@ -62,8 +62,10 @@ colcon test && colcon test-result --verbose     # unit tests (parser, codec, con
 `bash src/gen2_tools/scripts/install_desktop_shortcuts.sh` creates: **Gen2 Motor Test UI**,
 **Gen2 Motor Test CLI**, **Gen2 Sensor Hub Test**, **Gen2 Bench Check**.
 
-Motor test safety (UI and CLI share the C++ `MotorTester`): explicit "robot lifted" confirmation,
-|I| ≤ min(motor limit, 1.0 A), |ω| ≤ 2 rad/s, ≤ 3 s, 100 Hz stream, abort on STOP / Space / Esc /
+Motor test (UI and CLI share the C++ `MotorTester`): modes **current**, **velocity**, **position**
+(relative joint move with the drive's position-speed loop, speed limit, holds until the end).
+Limits = motor capability (user request): |I| ≤ 5 A, |ω| ≤ 20 rad/s, move ≤ 720°, ≤ 10 s; position
+tests refused near the ±3200° feedback wrap. Explicit "robot lifted" confirmation, 100 Hz stream, abort on STOP / Space / Esc /
 Enter / Ctrl+C, stale feedback, drive fault, over-temperature, over-speed, **GUI heartbeat lost
 (0.5 s)**; always ends with 0 A. The drive itself stops after 1 s without commands
 (AppParams `timeout_msec 1000`). **A hardware E-stop is still required.**

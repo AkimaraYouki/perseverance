@@ -21,10 +21,18 @@ struct TestLimits
   double max_velocity_rad_s = 2.0;
   double max_duration_s = 3.0;
   double current_ramp_s = 0.3;
+  double max_position_move_deg = 720.0;     // joint degrees per position test
+  double default_accel_rad_s2 = 20.0;       // position test acceleration if not given
   double rate_hz = 100.0;
 };
 
-enum class TestMode {kCurrent, kVelocity};
+enum class TestMode {kCurrent, kVelocity, kPosition};
+
+// Position tests are RELATIVE moves (joint degrees from the position at start) with the drive's
+// position-speed loop (mode 6). The 0x29 feedback position is int16 x0.1 deg and wraps at
+// +-3200 deg while the command is absolute multi-turn, so a test is refused when |raw| is near the
+// wrap (set a temporary origin first), and one move is limited to max_position_move_deg.
+constexpr double kPositionWrapGuardDeg = 3000.0;
 
 struct TestStatus
 {
@@ -40,6 +48,9 @@ struct TestStatus
   double peak_velocity_rad_s = 0.0;
   double moved_rad = 0.0;
   double mean_velocity_rad_s = 0.0;
+  double speed_rad_s = 0.0;           // position mode: speed limit
+  double target_rad = 0.0;            // position mode: joint target (absolute)
+  double position_error_rad = 0.0;    // position mode: target - final
 };
 
 class MotorTester
@@ -49,7 +60,10 @@ public:
   ~MotorTester();
 
   // Returns empty string if accepted, otherwise the rejection reason.
-  std::string start(std::size_t motor, TestMode mode, double value, double duration_s);
+  // value: current [A] | velocity [joint rad/s] | position move [joint deg, relative].
+  // speed_rad_s / accel_rad_s2: position mode only (speed required, accel <= 0 -> default).
+  std::string start(std::size_t motor, TestMode mode, double value, double duration_s,
+    double speed_rad_s = 0.0, double accel_rad_s2 = 0.0);
   void stop(const std::string & why);
   void wait();
   TestStatus status() const;
@@ -67,7 +81,8 @@ public:
   std::string set_temporary_origin(std::size_t m);
 
 private:
-  void run(uint64_t id, std::size_t m, TestMode mode, double value, double duration);
+  void run(uint64_t id, std::size_t m, TestMode mode, double value, double duration,
+    double speed, double accel);
   void send_zero(std::size_t m);
 
   MotorBus & bus_;

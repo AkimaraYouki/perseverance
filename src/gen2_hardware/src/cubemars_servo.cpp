@@ -116,6 +116,21 @@ Frame encode_set_origin(uint8_t id, uint8_t mode)
   return f;
 }
 
+Frame encode_pos_spd(uint8_t id, double deg, double erpm, double erpm_per_s2)
+{
+  Frame f;
+  f.id = make_id(Mode::kPosSpd, id);
+  f.len = 8;
+  put32(f.data, clamp_round(deg * 10000.0, -360000000.0, 360000000.0));
+  const int32_t spd = clamp_round(std::fabs(erpm) / 10.0, 0.0, 32767.0);
+  const int32_t acc = clamp_round(std::fabs(erpm_per_s2) / 10.0, 0.0, 32767.0);
+  f.data[4] = static_cast<uint8_t>(spd >> 8);
+  f.data[5] = static_cast<uint8_t>(spd);
+  f.data[6] = static_cast<uint8_t>(acc >> 8);
+  f.data[7] = static_cast<uint8_t>(acc);
+  return f;
+}
+
 Frame encode_disable(uint8_t id)
 {
   Frame f;

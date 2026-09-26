@@ -59,12 +59,14 @@ public:
     max_i_ = node.declare_parameter("cli.max_test_current_a", 1.0);
     max_w_ = node.declare_parameter("cli.max_test_velocity_rad_s", 2.0);
     max_t_ = node.declare_parameter("cli.max_test_duration_s", 3.0);
+    max_move_ = node.declare_parameter("cli.max_position_move_deg", 720.0);
     bus_ = std::make_unique<MotorBus>(ifname, declare_motor_params(node));
     bus_->start();
     TestLimits lim;
     lim.max_current_a = max_i_;
     lim.max_velocity_rad_s = max_w_;
     lim.max_duration_s = max_t_;
+    lim.max_position_move_deg = max_move_;
     tester_ = std::make_unique<MotorTester>(*bus_, lim);
   }
 
@@ -103,6 +105,11 @@ public:
         double w = 0, t = 0;
         in >> w >> t;
         velocity_test(m, w, t);
+      } else if (cmd == "p") {
+        std::size_t m = arg_motor(in);
+        double deg = 0, t = 0, w = 0;
+        in >> deg >> t >> w;
+        position_test(m, deg, t, w);
       } else if (cmd == "o") {set_origin(arg_motor(in));}
       else if (cmd == "x") {std::cout << tester_->zero_all() << "\n";}
       else {std::cout << "unknown command, 'h' for help\n";}
@@ -119,6 +126,7 @@ private:
       "  r <motor>             position-scale check: turn output by hand [read-only]\n"
       "  c <motor> <A> <sec>   current test   |A| <= %.2f, sec <= %.1f\n"
       "  v <motor> <rad/s> <s> velocity test  |w| <= %.2f rad/s\n"
+      "  p <motor> <deg> <s> <rad/s>  position move (relative joint deg) at speed, holds until s\n"
       "  o <motor>             set TEMPORARY origin here (cleared at power off)\n"
       "  x                     send 0 A to all motors\n"
       "  q                     quit\n"
@@ -238,7 +246,7 @@ private:
     return st == "yes";
   }
 
-  void run_test(std::size_t m, TestMode mode, double value, double sec)
+  void run_test(std::size_t m, TestMode mode, double value, double sec, double speed = 0.0)
   {
     if (!valid_motor(m)) {return;}
     const auto & c = bus_->motors()[m];
@@ -246,12 +254,15 @@ private:
     if (mode == TestMode::kCurrent) {
       std::snprintf(q, sizeof(q), "CURRENT TEST %s: %.2f A for %.1f s (limit %.2f A)", c.name.c_str(),
         value, sec, tester_->current_limit(m));
-    } else {
+    } else if (mode == TestMode::kVelocity) {
       std::snprintf(q, sizeof(q), "VELOCITY TEST %s: %.2f rad/s for %.1f s (limit %.2f rad/s)",
         c.name.c_str(), value, sec, tester_->velocity_limit(m));
+    } else {
+      std::snprintf(q, sizeof(q), "POSITION TEST %s: move %+.1f deg at %.2f rad/s, hold until %.1f s",
+        c.name.c_str(), value, speed, sec);
     }
     if (!confirm(q)) {std::cout << "cancelled\n"; return;}
-    const std::string err = tester_->start(m, mode, value, sec);
+    const std::string err = tester_->start(m, mode, value, sec, speed);
     if (!err.empty()) {std::cout << "rejected: " << err << "\n"; return;}
     while (tester_->status().running) {
       if (g_sigint) {tester_->stop("Ctrl+C");}
@@ -267,6 +278,9 @@ private:
       st.peak_velocity_rad_s, st.mean_velocity_rad_s);
     if (mode == TestMode::kCurrent) {
       std::cout << "  direction check: + current should move the joint in the direction you define as +.\n";
+    } else if (mode == TestMode::kPosition) {
+      std::printf("  position: target %+.2f deg, final error %+.2f deg\n",
+        rad2deg(st.target_rad), rad2deg(st.position_error_rad));
     } else {
       std::printf("  velocity-scale check: commanded %.3f rad/s, position-derived mean %.3f rad/s\n"
         "  (includes accel/decel; ratio far from 1 => pole_pairs/gear/raw_deg_per_output_rev wrong)\n",
@@ -276,6 +290,10 @@ private:
 
   void current_test(std::size_t m, double amps, double sec) {run_test(m, TestMode::kCurrent, amps, sec);}
   void velocity_test(std::size_t m, double w, double sec) {run_test(m, TestMode::kVelocity, w, sec);}
+  void position_test(std::size_t m, double deg, double sec, double speed)
+  {
+    run_test(m, TestMode::kPosition, deg, sec, speed);
+  }
 
   void set_origin(std::size_t m)
   {
@@ -290,7 +308,7 @@ private:
 
   std::unique_ptr<MotorBus> bus_;
   std::unique_ptr<MotorTester> tester_;
-  double max_i_, max_w_, max_t_;
+  double max_i_, max_w_, max_t_, max_move_;
 };
 
 int main(int argc, char ** argv)

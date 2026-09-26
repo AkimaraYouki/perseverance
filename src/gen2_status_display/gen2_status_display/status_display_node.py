@@ -104,6 +104,8 @@ class StatusDisplay(Node):
         motors = []
         for name, (t, lvl, msg, kv) in sorted(self.diag.items()):
             if ': motor: ' in name or name.startswith('motor: '):
+                if kv.get('gone') == 'True':
+                    continue  # unconfigured drive that disappeared
                 fresh = now - t < self.timeout
                 motors.append(dict(
                     name=name.split('motor: ')[-1], fresh=fresh,

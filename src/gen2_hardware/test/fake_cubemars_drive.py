@@ -47,15 +47,26 @@ while True:
                 mode, target = 'rpm', float(struct.unpack('>i', data[:4])[0])
             elif fn == 5:
                 pos_deg = 0.0
+            elif fn == 6:  # position-speed loop: int32 deg*1e4, int16 ERPM/10, int16 ERPM/s^2 /10
+                p_t = struct.unpack('>i', data[:4])[0] / 10000.0
+                spd = struct.unpack('>h', data[4:6])[0] * 10.0
+                mode, target = 'pos', (p_t, spd)
             last_cmd_t = time.monotonic()
-            print(f'CMD fn={fn} mode={mode} target={target:.3f}', flush=True)
+            tgt = f'{target[0]:.2f}deg@{target[1]:.0f}erpm' if isinstance(target, tuple) else f'{target:.3f}'
+            print(f'CMD fn={fn} mode={mode} target={tgt}', flush=True)
     except BlockingIOError:
         pass
     now = time.monotonic()
     dt, t_prev = now - t_prev, now
     if now - last_cmd_t > 1.0:            # drive-side timeout_msec 1000 -> release
         mode, target = 'idle', 0.0
-    if mode == 'current':
+    if mode == 'pos':
+        p_t, spd = target
+        out_spd = spd / a.pole_pairs / a.gear * 6.0            # output deg/s limit
+        want = max(-out_spd, min(out_spd, 5.0 * (p_t - pos_deg)))
+        erpm = want / 6.0 * a.pole_pairs * a.gear
+        cur = 0.2 * (p_t - pos_deg)
+    elif mode == 'current':
         cur = target
         erpm += cur * 20000.0 * dt - erpm * damping[0] * dt
     elif mode == 'rpm':

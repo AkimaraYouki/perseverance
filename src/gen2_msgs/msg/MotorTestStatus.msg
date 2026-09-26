@@ -11,9 +11,13 @@ float64 peak_current_a
 float64 peak_velocity_rad_s
 float64 moved_rad
 float64 mean_velocity_rad_s  # second half of the test
+float64 speed_rad_s          # position mode: speed limit
+float64 target_rad           # position mode: absolute joint target
+float64 position_error_rad   # position mode: target - final (after the test)
 bool heartbeat_ok
 # limits (per motor, same order as motor_names)
 string[] motor_names
 float64[] max_current_a
 float64[] max_velocity_rad_s
 float64 max_duration_s
+float64 max_position_move_deg

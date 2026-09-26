@@ -51,8 +51,12 @@
       #   t ±12 N·m. AK60-6 position range is blank in the manual table: verify before use. Vendor
       #   pack_cmd example clamps p_des/v_des to 0 and float_to_uint overflows at max — do not copy.
       #   Enable the 0x2A int32 position feedback (0.01°) for leg control (0x29 is only 0.1°).
-    # motor_cli bench limits (never exceed the per-motor limits above)
+    # motor test UI / CLI limits (user request 2026-09-26: allow the motor maximum). The effective
+    # limit is min(this, per-motor limit above). Guards stay active: STOP, heartbeat, stale
+    # feedback, drive fault, over-temperature, over-speed; always ends with 0 A.
     cli:
-      max_test_current_a: 1.0
-      max_test_velocity_rad_s: 2.0
-      max_test_duration_s: 3.0
+      max_test_current_a: 5.0          # = AK45-10 peak
+      max_test_velocity_rad_s: 20.0    # = wheel velocity limit (no-load 18.85 rad/s)
+      max_test_duration_s: 10.0
+      max_position_move_deg: 720.0     # one relative position move (joint degrees)
+      default_accel_rad_s2: 20.0       # position move acceleration when not given

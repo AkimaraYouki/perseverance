@@ -71,6 +71,10 @@ Frame encode_current_brake(uint8_t driver_id, double amps);
 Frame encode_rpm(uint8_t driver_id, double erpm);
 Frame encode_position(uint8_t driver_id, double deg);
 Frame encode_set_origin(uint8_t driver_id, uint8_t mode);
+// Position-speed loop (mode 6, manual 5.1.7): position deg (int32 x10000), speed limit ERPM
+// (int16 = ERPM/10), acceleration ERPM/s^2 (int16 = value/10, >= 0). The drive moves to the
+// position with that speed and acceleration and holds it.
+Frame encode_pos_spd(uint8_t driver_id, double deg, double erpm, double erpm_per_s2);
 Frame encode_disable(uint8_t driver_id);
 
 }  // namespace cubemars

@@ -34,6 +34,8 @@ public:
     lim.max_current_a = declare_parameter("cli.max_test_current_a", 1.0);
     lim.max_velocity_rad_s = declare_parameter("cli.max_test_velocity_rad_s", 2.0);
     lim.max_duration_s = declare_parameter("cli.max_test_duration_s", 3.0);
+    lim.max_position_move_deg = declare_parameter("cli.max_position_move_deg", 720.0);
+    lim.default_accel_rad_s2 = declare_parameter("cli.default_accel_rad_s2", 20.0);
     const double hb = declare_parameter("heartbeat_timeout_s", 0.5);
     bus_ = std::make_unique<MotorBus>(ifname, declare_motor_params(*this));
     bus_->start();
@@ -86,12 +88,14 @@ private:
     TestMode mode;
     if (rq.mode == "current") {mode = TestMode::kCurrent;}
     else if (rq.mode == "velocity") {mode = TestMode::kVelocity;}
-    else {rs.accepted = false; rs.message = "mode must be current|velocity"; return;}
-    const std::string err = tester_->start(m, mode, rq.value, rq.duration_s);
+    else if (rq.mode == "position") {mode = TestMode::kPosition;}
+    else {rs.accepted = false; rs.message = "mode must be current|velocity|position"; return;}
+    const std::string err = tester_->start(m, mode, rq.value, rq.duration_s, rq.speed_rad_s,
+        rq.accel_rad_s2);
     rs.accepted = err.empty();
     rs.message = err.empty() ? "started" : err;
-    RCLCPP_INFO(get_logger(), "start %s %s %.3f for %.2f s -> %s", rq.motor.c_str(), rq.mode.c_str(),
-      rq.value, rq.duration_s, rs.message.c_str());
+    RCLCPP_INFO(get_logger(), "start %s %s %.3f for %.2f s (speed %.2f) -> %s", rq.motor.c_str(),
+      rq.mode.c_str(), rq.value, rq.duration_s, rq.speed_rad_s, rs.message.c_str());
   }
 
   void publish()
@@ -101,7 +105,8 @@ private:
     m.header.stamp = now();
     m.running = st.running;
     m.motor = st.motor < bus_->motors().size() ? bus_->motors()[st.motor].name : "";
-    m.mode = st.mode == TestMode::kCurrent ? "current" : "velocity";
+    m.mode = st.mode == TestMode::kCurrent ? "current" :
+      st.mode == TestMode::kVelocity ? "velocity" : "position";
     m.value = st.value;
     m.elapsed_s = st.elapsed_s;
     m.duration_s = st.duration_s;
@@ -111,6 +116,9 @@ private:
     m.peak_velocity_rad_s = st.peak_velocity_rad_s;
     m.moved_rad = st.moved_rad;
     m.mean_velocity_rad_s = st.mean_velocity_rad_s;
+    m.speed_rad_s = st.speed_rad_s;
+    m.target_rad = st.target_rad;
+    m.position_error_rad = st.position_error_rad;
     m.heartbeat_ok = tester_->heartbeat_ok();
     for (std::size_t i = 0; i < bus_->motors().size(); ++i) {
       m.motor_names.push_back(bus_->motors()[i].name);
@@ -118,6 +126,7 @@ private:
       m.max_velocity_rad_s.push_back(tester_->velocity_limit(i));
     }
     m.max_duration_s = tester_->limits().max_duration_s;
+    m.max_position_move_deg = tester_->limits().max_position_move_deg;
     pub_->publish(m);
   }
 

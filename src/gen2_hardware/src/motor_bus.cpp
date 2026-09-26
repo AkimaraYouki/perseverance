@@ -124,6 +124,12 @@ void MotorBus::rx_loop()
     const auto it = by_id_.find(drv);
     if (it == by_id_.end()) {
       // Not configured: remember CubeMars status frames so the drive shows up (discovery only).
+      // Driver id 0 is skipped: an AK45-10 sends two 0x2900 status frames while booting, before
+      // its configured id is loaded (observed 2026-09-26) — it is not a real drive.
+      if (drv == 0) {
+        ++stats_.rx_unknown;
+        continue;
+      }
       if (auto st = cubemars::decode_status(rx.frame)) {
         MotorFeedback & fb = unknown_writer_[drv];
         fb.valid = true;

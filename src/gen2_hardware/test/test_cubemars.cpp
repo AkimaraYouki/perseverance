@@ -78,6 +78,24 @@ TEST(CubemarsServo, EncodeOtherModes)
   EXPECT_EQ(encode_current_brake(1, -5).data[3], 0);  // negative brake clamped to 0
 }
 
+TEST(CubemarsServo, EncodePosSpdMatchesManual)
+{
+  // comm_can_set_pos_spd: int32(pos*10000), int16(spd/10), int16(acc/10), id = driver | 6<<8
+  Frame f = encode_pos_spd(69, 90.0, 12000.0, 40000.0);
+  EXPECT_EQ(f.id, 0x0645u);
+  ASSERT_EQ(f.len, 8);
+  // 90 deg * 10000 = 900000 = 0x000DBBA0
+  EXPECT_EQ(f.data[0], 0x00); EXPECT_EQ(f.data[1], 0x0D); EXPECT_EQ(f.data[2], 0xBB); EXPECT_EQ(f.data[3], 0xA0);
+  // 12000 ERPM / 10 = 1200 = 0x04B0 ; 40000 / 10 = 4000 = 0x0FA0
+  EXPECT_EQ(f.data[4], 0x04); EXPECT_EQ(f.data[5], 0xB0);
+  EXPECT_EQ(f.data[6], 0x0F); EXPECT_EQ(f.data[7], 0xA0);
+  // negative position, speed magnitude only, clamp
+  Frame g = encode_pos_spd(1, -1.0, -500000.0, 1e9);
+  EXPECT_EQ(g.data[0], 0xFF);
+  EXPECT_EQ((g.data[4] << 8) | g.data[5], 32767);
+  EXPECT_EQ((g.data[6] << 8) | g.data[7], 32767);
+}
+
 TEST(MotorConfig, Conversions)
 {
   MotorConfig c;

@@ -97,6 +97,9 @@ private:
     // Drives seen on the bus but not in motors.yaml: raw values only, never commanded.
     for (uint8_t id : bus_->unconfigured_ids()) {
       const MotorFeedback fb = bus_->unconfigured_feedback(id);
+      if ((now - fb.mono_ns) * 1e-9 > unconfigured_forget_s_) {
+        continue;  // unplugged or re-numbered drive: stop listing it
+      }
       gen2_msgs::msg::MotorState m;
       m.name = unconfigured_name(id);
       m.can_id = id;
@@ -129,6 +132,12 @@ private:
   {
     const MotorFeedback fb = bus_->unconfigured_feedback(id);
     const double age = (mono_now_ns() - fb.mono_ns) * 1e-9;
+    if (age > unconfigured_forget_s_) {
+      s.summary(DiagnosticStatus::OK, "gone (no frames for 30 s)");
+      s.add("configured", false);
+      s.add("gone", true);
+      return;
+    }
     if (age > unconfigured_stale_s_) {
       s.summary(DiagnosticStatus::ERROR, "unconfigured drive: feedback stale");
     } else {
@@ -224,6 +233,7 @@ private:
   std::unique_ptr<MotorBus> bus_;
   std::set<uint8_t> diag_ids_;
   double unconfigured_stale_s_ = 0.5;
+  double unconfigured_forget_s_ = 30.0;
   rclcpp::Publisher<gen2_msgs::msg::MotorStateArray>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr timer_;
   diagnostic_updater::Updater updater_;
