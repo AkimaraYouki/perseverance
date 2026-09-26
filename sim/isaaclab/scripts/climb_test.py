@@ -35,6 +35,8 @@ TUNE = dict(
     lqr_qx=2.0, lqr_qv=5.0, lqr_qth=100.0, lqr_qthd=5.0,   # LQR 상태 가중 [진행거리 m, 속도 m/s, 진자각 rad, 각속도 rad/s]
     lqr_r=1.0,           # LQR 입력 가중 (두 바퀴 토크 합 N·m)
     wheel_tau_max=7.0,   # 바퀴 토크 한계 [N·m] (AK45-10 피크)
+    speed_guard=0.75,    # 바퀴 관절 속도가 모터 한계(18.85 rad/s)의 이 비율을 넘으면 목표 속도를 낮춰 뒤로 젖히며 감속 (푸시백).
+                         #   한계에 붙으면 앞으로 기울 때 바퀴를 더 못 돌려 고꾸라진다 (내리막 0.9 m/s, 2026-09-26). 1 = 끔
     yaw_kd=1.0,          # 회전: 좌우 바퀴 토크 차 = yaw_kd x (명령 - 실제 yaw rate) [N·m·s/rad]
     vmc_kp=60.0,         # 다리 가상 스프링 [N·m/rad, 관절] (바퀴에서 약 4.5 kN/m. 30 은 좌우 수평이 못 따라가 넘어짐). 자중은 피드포워드로 따로 받친다
     vmc_kd=1.0,          # 다리 가상 댐퍼 [N·m·s/rad]
@@ -95,7 +97,7 @@ TUNE = dict(
     ridge_lane=0.20,     # ridges 차선 폭 [m]. 차선마다 반 주기 엇갈림 -> 좌우 바퀴(간격 198 mm)가 번갈아 탄다
     ridge_len=5.0,       # ridges 길이 [m]
     # --- 기타 ---
-    spawn_z=0.30,        # 출발할 때 바퀴 바닥 높이 [m] — 공중에서 떨어뜨려 시작 (사용자 2026-09-26). 0 = 바닥에 닿게
+    spawn_z=0.10,        # 출발할 때 바퀴 바닥 높이 [m] — 공중에서 떨어뜨려 시작 (사용자 2026-09-26). 0 = 바닥에 닿게
     hip="dc",            # dc (토크-속도 모델) | ideal
     hip_w0=None,         # 고관절 무부하 속도 [rad/s] (24 V 33.5, 6S 처짐 21 V 29.3). None = 33.5
     seconds=8.0,
@@ -617,8 +619,14 @@ def episode():
             ffF = 0.0
             if phase in ("drive", "retract", "extract", "land"):
                 th_ref = math.radians(args.retract_lean) if phase == "retract" else 0.0
-                x_err = max(-0.3, min(0.3, x_err + (v_now - vx) * dt))
-                tau_w = lqr.torque(l_p, x_err, v_now - vx, th - th_ref, thd)
+                v_ref = vx
+                ww = float(robot.data.joint_vel[0, wheel_ids].abs().max()) / 18.85
+                if ww > args.speed_guard and args.speed_guard < 1.0:     # 푸시백: 지금 속도보다 낮은 목표 -> LQR 이 뒤로 젖혀 감속
+                    cut = min(1.0, (ww - args.speed_guard) / (1.0 - args.speed_guard))
+                    v_ref = v_now * (1.0 - 0.6 * cut) if v_now * vx >= 0 else vx
+                    x_err = 0.0
+                x_err = max(-0.3, min(0.3, x_err + (v_now - v_ref) * dt))
+                tau_w = lqr.torque(l_p, x_err, v_now - v_ref, th - th_ref, thd)
                 tau_y = args.yaw_kd * (wz - wz_now)
                 wheel_term.cfg.torque_scale = args.wheel_tau_max
                 act[0, 2] = max(-1.0, min(1.0, (0.5 * tau_w - tau_y) / args.wheel_tau_max))
