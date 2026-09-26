@@ -49,6 +49,13 @@ TUNE = dict(
     vmc_kd=1.0,          # 다리 가상 댐퍼 [N·m·s/rad]
     roll_kp=3.0,         # roll 수평 P: 좌우 다리 길이 차 += roll_kp x 0.198 x sin(roll)
     roll_ki=30.0,        # roll 수평 I [1/s]
+    roll_leak=0.5,       # roll 적분 누설 [1/s] (약 2 s 에 걸쳐 0 쪽으로 — 한계에 붙어 있지 않게)
+    lift_detect_s=0.05,  # 두 다리 모두 무하중(고관절 토크 < contact_tau_min)이 이만큼 [s] -> 들림: 균형 끄고 바퀴만 멈춤, 적분 비움
+    land_detect_s=0.02,  # 들린 뒤 한쪽 다리라도 하중이 이만큼 [s] -> 내려놓음: 균형 즉시 재개 (Ascento 처럼 접지 즉시.
+                         #   두 다리 0.1 s 기다리면 한 바퀴부터 닿는 동안 균형 없이 뒤로 넘어짐, 손 들기 시험)
+    lift_wheel_kd=0.05,  # 들린 동안 바퀴 속도 감쇠 [N·m·s/rad] (헛돌지 않게)
+    contact_tau_min=0.8, # 고관절 토크가 이보다 작은 다리 = 바퀴가 뜸 -> roll 적분 멈춤 [N·m] (실기: 전류)
+    roll_freeze_deg=20.0,  # |roll| 이 이보다 크면 roll 적분 멈춤 (다리로 못 잡는 기울기)
     # --- 다리 높이: 항상 자동 모드 (정책이 외란·지형에 맞춰 정한다). idle_h 는 자동 모드 공칭 = IDLE ---
     level_rate=10.0,     # 좌우 수평 유지 [1/s]: 좌우 다리 길이 차를 roll 이 0 이 되게 적분 (d(hL-hR)/dt = rate x 0.198 x sin(roll)).
                          #   정책은 평균 높이·앞뒤 균형만, 좌우 차는 이 루프가 맡는다 (IMU + 다리 각도만 쓰니 실기 그대로). 0 = 끔 (정책이 좌우도)
@@ -63,6 +70,7 @@ TUNE = dict(
     # --- 접근·발동 ---
     heading_kp=2.0,      # 자동 시험 방향 유지: wz = -heading_kp x yaw [1/s] (정책이 yaw 로 흘러서 직선 주행이 안 된다). 0 = 끔. 패드는 사람이 조향
     v=0.4,               # 접근 속도 [m/s] (자동 시험용. 패드는 스틱). 바퀴 한계 18.85 rad/s x R 0.06 = 1.13 m/s, 웅크림·숙임 여유 두고 0.5~0.6
+    jump_max_wz=1.0,     # 패드 점프는 회전 속도가 이보다 작을 때만 [rad/s] (돌면서 뛰면 공중에서 5.6 rad/s 로 돌며 착지 실패)
     jump_min_v=0.2,      # 패드 점프는 앞으로 이 속도 [m/s] 이상일 때만 (0.72 km/h). 제자리·후진 중 점프 막기
     trigger=0.40,        # 바퀴 중심이 모서리 앞 이 거리에 오면 발동 [m] (자동 시험). LQR v 0.4: 이륙 -185 mm, 착지 +9 mm (2026-09-26)
     # --- 1 retract: 웅크림 (정책이 균형) ---
@@ -134,6 +142,10 @@ ap.add_argument("--joystick", nargs="?", const="/dev/input/js0", default=None, m
                 help="패드로 조종: 왼스틱 세로 전후, 오른스틱 가로 회전, Y/LT/RT 점프, A 정지, START 처음으로, 십자키/LB/RB/BACK 카메라")
 ap.add_argument("--pad", choices=("auto", "classic", "modern"), default="classic")
 ap.add_argument("--wz", type=float, default=None, help="자동 시험: 회전 명령 [rad/s] 고정 (방향 유지 대신)")
+ap.add_argument("--hand", type=float, nargs=2, default=None, metavar=("T_GRAB", "T_RELEASE"),
+                help="손 들기 시험: 이 시각에 가상 손(몸통 스프링)으로 들었다가 놓는다 [s]")
+ap.add_argument("--hand_lift", type=float, default=0.15, help="손으로 드는 높이 [m]")
+ap.add_argument("--hand_roll", type=float, default=10.0, help="들고 있는 동안 옆으로 기울이는 각 [deg] (한쪽 바퀴부터 닿게)")
 ap.add_argument("--stop_at", type=float, default=None, help="자동 시험: 이 시각 [s] 에 속도 명령 0 (달리다 멈추기)")
 ap.add_argument("--record", default=None, metavar="DIR")
 ap.add_argument("--out", default=None)
@@ -505,7 +517,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
     yr = float(d.root_ang_vel_w[0, 2])
     rtf = f"{stats['rtf']:.2f}x" if stats["rtf"] == stats["rtf"] else "-"
     lines = [
-        f"PHASE  {phase.upper():8s}  CTRL {args.ctrl.upper()}",
+        f"PHASE  {('LIFTED' if stats.get('lift') else phase.upper()):8s}  CTRL {args.ctrl.upper()}",
         f"SPEED  {abs(v_now)*3.6:3.1f} km/h ({v_now:+.2f} m/s) / cmd {vx*3.6:+.1f} / max {args.vmax_kmh:.1f}" + ("  BRAKE" if stats.get("brake") else ""),
         f"YAW    {yr:+.2f} / cmd {wz:+.2f} rad/s",
         f"TILT   P {pitch:+5.1f}  R {roll:+5.1f} deg",
@@ -568,6 +580,26 @@ if args.record:
 
 
 gov = dict(vf=0.0, i=0.0, ref=0.0)
+lift = dict(on=False, t_un=0.0, t_ld=0.0)                              # 들림 (손으로 들기, 공중 스폰) 상태
+_m_tot = float(robot.root_physx_view.get_masses()[0].sum())
+from isaaclab.utils.math import quat_apply  # noqa: E402
+
+
+def hand_wrench(t, grab):
+    """가상 손: 몸통을 스프링-댐퍼로 잡아 들어 올리고 옆으로 기울인다 (월드 힘 + 몸체 토크)."""
+    d = robot.data
+    p, v = d.root_pos_w[0], d.root_lin_vel_w[0]
+    s_ = min(1.0, (t - grab["t0"]) / 0.5)                           # 0.5 s 동안 들어 올림
+    tgt = torch.tensor([grab["x"], grab["y"], grab["z"] + s_ * args.hand_lift], device=dev)
+    F = 400.0 * (tgt - p) - 40.0 * v
+    F[2] += _m_tot * 9.81
+    g = d.projected_gravity_b[0]
+    phi, th = -math.asin(max(-1.0, min(1.0, float(g[1])))), math.asin(max(-1.0, min(1.0, float(g[0]))))
+    w = d.root_ang_vel_b[0]
+    tb = torch.tensor([20.0 * (math.radians(args.hand_roll) * s_ - phi) - 2.0 * float(w[0]),
+                       20.0 * (0.0 - th) - 2.0 * float(w[1]), -1.0 * float(w[2])], device=dev)
+    tw = quat_apply(d.root_quat_w[0:1], tb[None])[0]
+    robot.set_external_force_and_torque(F[None, None], tw[None, None], body_ids=[0], is_global=True)
 import collections  # noqa: E402
 RING = collections.deque(maxlen=2000)                                 # 패드 모드: 최근 10 s 기록 (다리 진동 원인 찾기)
 OSC = dict(last=-99.0, x_prev=False)
@@ -615,6 +647,7 @@ def episode():
     phase, t_phase, next_edge, h0 = "drive", 0.0, 0, args.idle_h
     lvl = 0.0                                                  # 수평 유지 루프의 좌우 다리 길이 차 명령 hL - hR [m]
     x_err = 0.0                                                # LQR 진행거리 오차 (명령 속도 적분 대비)
+    lift.update(on=False, t_un=0.0, t_ld=0.0)
     gov.update(vf=0.0, i=0.0, ref=0.0)                         # 속도 제한·브레이크 상태
     roll_pi.reset()
     if args.ctrl == "lqr":
@@ -668,10 +701,12 @@ def episode():
             tp = t - t_phase
             auto_go = pad is None and next_edge < len(edges) and wx >= edges[next_edge] - args.trigger
             v_fwd = float(robot.data.root_com_lin_vel_b[0, 0])
-            if phase == "drive" and y_edge and v_fwd < args.jump_min_v:   # 제자리·후진 중 점프 막기
+            w_now = float(robot.data.root_ang_vel_w[0, 2])
+            if phase == "drive" and y_edge and (v_fwd < args.jump_min_v or abs(w_now) > args.jump_max_wz):  # 제자리·후진·회전 중 점프 막기
                 y_edge = False
-                stats["last"] = f"blocked: {v_fwd*3.6:+.1f} km/h (need >= {args.jump_min_v*3.6:.1f})"
-                print(f"[점프 막음] 속도 {v_fwd*3.6:+.1f} km/h — 앞으로 {args.jump_min_v*3.6:.1f} km/h 이상에서만", flush=True)
+                why = f"{v_fwd*3.6:+.1f} km/h" if v_fwd < args.jump_min_v else f"turning {w_now:+.1f} rad/s"
+                stats["last"] = f"blocked: {why}"
+                print(f"[점프 막음] {why} — 앞으로 {args.jump_min_v*3.6:.1f} km/h 이상, 회전 {args.jump_max_wz:.1f} rad/s 이하에서만", flush=True)
             if phase == "drive" and (auto_go or y_edge):
                 if pad is not None:
                     reload_tune()                                  # 점프마다 파일의 TUNE 을 다시 읽는다
@@ -750,9 +785,33 @@ def episode():
                 wheel_term.cfg.torque_scale = args.wheel_tau_max
                 act[0, 2] = max(-1.0, min(1.0, (0.5 * tau_w - tau_y) / args.wheel_tau_max))
                 act[0, 3] = max(-1.0, min(1.0, (0.5 * tau_w + tau_y) / args.wheel_tau_max))
-            if phase == "drive":
+            unl = float(tau.abs().max()) < args.contact_tau_min       # 두 다리 모두 무하중
+            ldd = float(tau.abs().max()) >= args.contact_tau_min      # 한쪽 다리라도 하중 (접지)
+            if phase == "drive" and not lift["on"]:
+                lift["t_un"] = lift["t_un"] + dt if unl else 0.0
+                if lift["t_un"] >= args.lift_detect_s:
+                    lift.update(on=True, t_ld=0.0)
+                    if pad is not None or args.hand:
+                        print(f"[들림] t {t:.2f}", flush=True)
+            elif phase == "drive" and lift["on"]:
+                lift["t_ld"] = lift["t_ld"] + dt if ldd else 0.0
+                if lift["t_ld"] >= args.land_detect_s:
+                    lift.update(on=False, t_un=0.0)
+                    x_err = 0.0; gov.update(i=0.0, ref=v_now, vf=v_now); roll_pi.reset(0.0)
+                    if pad is not None or args.hand:
+                        print(f"[내려놓음] t {t:.2f} — 균형 재개", flush=True)
+            stats["lift"] = lift["on"]
+            if phase == "drive" and lift["on"]:                      # 들린 동안: 균형 끔, 바퀴만 멈춤, 다리 IDLE, 적분 비움
+                wv = d.joint_vel[0, wheel_ids] * wsign
+                act[0, 2:] = (-args.lift_wheel_kd * wv / args.wheel_tau_max).clamp(-1.0, 1.0)
+                act[0, 0] = act[0, 1] = (args.idle_h - h_ref) / 0.12
+                legs_act.stiffness[:] = args.vmc_kp; legs_act.damping[:] = args.vmc_kd
+                roll_pi.reset(0.0); x_err = 0.0; gov.update(i=0.0, ref=0.0, vf=0.0)
+            elif phase == "drive":
                 rl = math.asin(max(-1.0, min(1.0, float(d.projected_gravity_b[0, 1]))))
-                dlt = roll_pi(rl, dt, args.roll_kp, args.roll_ki, args.level_max)
+                airborne = float(tau.abs().min()) < args.contact_tau_min
+                dlt = roll_pi(rl, dt, args.roll_kp, args.roll_ki, args.level_max,
+                              freeze=airborne or abs(math.degrees(rl)) > args.roll_freeze_deg, leak=args.roll_leak)
                 tl = min(H_MAX, max(H_MIN, args.idle_h + 0.5 * dlt)); tr = min(H_MAX, max(H_MIN, args.idle_h - 0.5 * dlt))
                 act[0, 0], act[0, 1] = (tl - h_ref) / 0.12, (tr - h_ref) / 0.12
                 legs_act.stiffness[:] = args.vmc_kp; legs_act.damping[:] = args.vmc_kd
@@ -799,6 +858,15 @@ def episode():
             if phase == "lift":
                 hl = H_MIN                                         # 왼쪽 다리를 최대로 접어 바퀴를 든다
             act[0, 0], act[0, 1] = (hl - h_ref) / 0.12, (hr - h_ref) / 0.12
+        if args.hand:                                              # 손 들기 시험
+            if args.hand[0] <= t < args.hand[1]:
+                if "grab" not in stats:
+                    p0 = robot.data.root_pos_w[0]
+                    stats["grab"] = dict(t0=t, x=float(p0[0]), y=float(p0[1]), z=float(p0[2]))
+                hand_wrench(t, stats["grab"])
+            elif t >= args.hand[1] and stats.get("grab") is not None:
+                robot.set_external_force_and_torque(torch.zeros(1, 1, 3, device=dev), torch.zeros(1, 1, 3, device=dev), body_ids=[0])
+                stats["grab"] = None
         _t1 = time.perf_counter()
         obs, _, term, _, _ = env.step(act)
         _t2 = time.perf_counter()
