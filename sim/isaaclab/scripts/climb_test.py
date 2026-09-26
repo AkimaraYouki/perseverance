@@ -64,11 +64,16 @@ TUNE = dict(
     contact_tau=2.0,     # 접지 판정 고관절 토크 [N·m] (descend 0.04 s 뒤부터)
     t_fly_max=0.45,      # 이륙 뒤 이 시간 안에 접지를 못 느끼면 강제로 land [s]
     # --- 장애물 ---
-    obstacle="plateau",  # plateau (평대) | stairs2 (ㅗ 모양 2 단: 아래 단 | 윗단 | 아래 단)
+    obstacle="plateau",  # plateau (평대) | stairs2 (ㅗ 모양 2 단: 아래 단 | 윗단 | 아래 단) | ridges (ㅅㅅㅅ 삼각형길)
     step_h=0.08,         # 턱(한 단) 높이 [m]
     length=0.35,         # 평대 윗면 길이 [m]
     tread=1.0,           # stairs2 한 칸 길이 [m] (대회: 1 m | 1 m | 1 m)
-    edge=1.0,            # 첫 모서리 x [m]
+    edge=1.0,            # 첫 모서리 x [m] (ridges: 평지 도움닫기 길이)
+    ridge_h=0.05,        # ridges 삼각 턱 높이 [m] (대회 약 5 cm)
+    ridge_base=0.35,     # ridges 밑변 [m] (길게)
+    ridge_period=0.60,   # ridges 반복 주기 [m]
+    ridge_lane=0.20,     # ridges 차선 폭 [m]. 차선마다 반 주기 엇갈림 -> 좌우 바퀴(간격 198 mm)가 번갈아 탄다
+    ridge_len=5.0,       # ridges 길이 [m]
     # --- 기타 ---
     hip="dc",            # dc (토크-속도 모델) | ideal
     hip_w0=None,         # 고관절 무부하 속도 [rad/s] (24 V 33.5, 6S 처짐 21 V 29.3). None = 33.5
@@ -77,7 +82,7 @@ TUNE = dict(
 POLICY = "logs/rsl_rl/wheeled_biped_balance/2026-09-25_18-24-20_rough_v3/model_7099.pt"   # 관측 25 균형 정책 (r3)
 # ==========================================================================================
 
-CHOICES = dict(extract_wheels=("pd", "policy", "free"), obstacle=("plateau", "stairs2"), pd_from=("extract", "fly"), hip=("dc", "ideal"))
+CHOICES = dict(obstacle=("plateau", "stairs2", "ridges"), extract_wheels=("pd", "policy", "free"), pd_from=("extract", "fly"), hip=("dc", "ideal"))
 ap = argparse.ArgumentParser()
 ap.add_argument("--policy", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", POLICY))
 ap.add_argument("--mode", choices=("jump", "stance", "none"), default="jump")
@@ -108,6 +113,7 @@ import wheeled_biped_isaaclab.tasks  # noqa: F401,E402
 from isaaclab.assets import AssetBaseCfg  # noqa: E402
 from isaaclab.terrains import TerrainImporterCfg  # noqa: E402
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
+from isaaclab.utils import configclass  # noqa: E402
 from wheeled_biped_isaaclab.tasks.balance import cad  # noqa: E402
 
 TASK = "Isaac-WheeledBiped-CAD-Rough-Play-v0"
@@ -150,11 +156,54 @@ if args.mode in ("jump", "none"):
     if args.obstacle == "plateau":
         cfg.scene.obstacle = box("obstacle", args.edge, args.edge + args.length, args.step_h)
         edges, top = [args.edge], args.step_h
-    else:
+    elif args.obstacle == "stairs2":
         # ㅗ 모양 (대회): 아래 단 tread | 윗단 tread | 아래 단 tread. 오르는 모서리 둘만 점프 대상
         cfg.scene.obstacle = box("tier1", args.edge, args.edge + 3 * args.tread, args.step_h)
         cfg.scene.obstacle2 = box("tier2", args.edge + args.tread, args.edge + 2 * args.tread, 2 * args.step_h)
         edges, top = [args.edge, args.edge + args.tread], 2 * args.step_h
+if args.obstacle == "ridges" and args.mode in ("jump", "none"):
+    # 학습 지형과 같은 함수 (terrain.staggered_ridges_terrain) 에 평지 도움닫기만 붙인다. 타일 가운데 = 로봇 출발점
+    from isaaclab.terrains import TerrainGeneratorCfg
+    from isaaclab.terrains.height_field.utils import height_field_to_mesh
+    from wheeled_biped_isaaclab.tasks.balance import terrain as T
+
+    SX, SY = 2 * (args.edge + args.ridge_len), 4.0                   # 출발점 x = SX/2, 차선 경계 y = SY/2 = 2.0 (0.2 의 배수)
+
+    @height_field_to_mesh
+    def ridges_runup(difficulty, c):
+        z = T.staggered_ridges_terrain.__wrapped__(difficulty, c)
+        i0 = int((SX / 2 + args.edge) / c.horizontal_scale)          # 출발점 앞 edge 까지 평지.
+        for j in range(z.shape[1]):                                    # 차선마다 삼각형이 0 인 곳부터 시작 (한 x 로 자르면
+            i = i0                                                     #  엇갈린 차선에 수직 턱이 생긴다 — 2.1 cm, 2026-09-26)
+            while i < z.shape[0] and z[i, j] != 0:
+                i += 1
+            z[:i, j] = 0
+        return z
+
+    @configclass
+    class RidgesRunupCfg(T.StaggeredRidgesTerrainCfg):
+        function = ridges_runup
+
+    cfg.scene.terrain = TerrainImporterCfg(
+        prim_path="/World/ground", terrain_type="generator", collision_group=-1, max_init_terrain_level=None,
+        terrain_generator=TerrainGeneratorCfg(
+            size=(SX, SY), num_rows=1, num_cols=1, horizontal_scale=0.02, vertical_scale=0.001, slope_threshold=None,
+            curriculum=False, use_cache=False,
+            sub_terrains={"ridges": RidgesRunupCfg(proportion=1.0, height_range=(args.ridge_h, args.ridge_h), base=args.ridge_base,
+                                                   period=args.ridge_period, lane_w=args.ridge_lane, border_width=0.0)}),
+        physics_material=sim_utils.RigidBodyMaterialCfg(friction_combine_mode="multiply", restitution_combine_mode="multiply",
+                                                        static_friction=1.0, dynamic_friction=1.0))
+    cfg.scene.floor = AssetBaseCfg(                                    # 타일 밖으로 나가도 허공에 떨어지지 않게 바닥판 (윗면 z = 0)
+        prim_path="/World/floor",
+        spawn=sim_utils.CuboidCfg(size=(60.0, 60.0, 0.1), collision_props=sim_utils.CollisionPropertiesCfg(),
+                                  physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0),
+                                  visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.25, 0.25, 0.27))),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -0.0505)))
+    # 두 바퀴 가운데 = 루트 y - 0.08 (스캐너 오프셋과 같음) -> 루트를 +0.08 에 두면 바퀴 가운데가 차선 경계에 온다
+    _p = cfg.scene.robot.init_state.pos
+    cfg.scene.robot.init_state.pos = (_p[0], _p[1] + 0.08, _p[2])
+if not args.headless and not args.record:
+    cfg.sim.render_interval = cfg.decimation * 4                      # 창: 렌더 50 Hz (200 Hz 마다 그리면 실시간의 0.17 배)
 if True:                                                              # 옆에서 로봇을 따라가는 카메라 (창·녹화 공통)
     cfg.viewer.origin_type = "asset_root"; cfg.viewer.asset_name = "robot"; cfg.viewer.env_index = 0
     cfg.viewer.eye = (0.2, -1.4, 0.35); cfg.viewer.lookat = (0.0, 0.0, 0.1); cfg.viewer.resolution = (1280, 720)
@@ -337,7 +386,8 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
     for kk, pl in plots.items():
         pl.set_data(*hist[kk])
 
-RESTART = ("obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0")   # 장면을 다시 만들어야 해서 재시작 필요
+RESTART = ("obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
+           "ridge_lane", "ridge_len")   # 장면을 다시 만들어야 해서 재시작 필요
 CLI_KEYS = {k for k in TUNE if f"--{k}" in sys.argv}                        # 명령줄로 준 값은 파일보다 우선
 
 
@@ -378,6 +428,8 @@ def episode():
     soft_legs(False)
     wheel_term.cfg.torque_scale = scale0
     obs, _ = env.reset()
+    global wheel_y0
+    wheel_y0 = [round(float(v), 3) for v in robot.data.body_pos_w[0, wheel_bodies, 1]]
     cmd.cfg.auto_height = cmd.cfg.default_height = args.idle_h
     phase, t_phase, next_edge, h0 = "drive", 0.0, 0, args.idle_h
     tipped = False
@@ -443,6 +495,7 @@ def episode():
                 rel = (lambda x: f"{1000*(x-e):+.0f} mm") if e is not None else (lambda x: f"x {x:.3f} m")
                 stats["last"] = f"edge {next_edge+1 if e is not None else '-'}: takeoff {rel(j['x_takeoff'])} land {rel(j['x_land'])}"
                 if pad is not None:
+                    print(f"[창 속도] 실시간 대비 {stats['rtf']:.2f} 배", flush=True)
                     print(f"[점프 {len(jumps)}] 모서리 {next_edge+1 if e is not None else '-'}  이륙 {rel(j['x_takeoff'])}  "
                           f"착지 {rel(j['x_land'])} ({j['contact']})  착지 때 바퀴 바닥 {j['wheel_bottom_mm']} mm", flush=True)
             elif phase == "land" and tp >= args.land_s:
@@ -494,6 +547,8 @@ def episode():
                 return "restart"
             if LOOP:
                 break                                              # 창 모드: 넘어지면 바로 다음 시도
+        if k % int(10.0 / dt) == 0 and k > 0 and not args.headless:
+            print(f"[창 속도] 실시간 대비 {stats['rtf']:.2f} 배 (시뮬 {t:.0f} s)", flush=True)
         if pad is not None:                                        # 리셋 없이 넘어짐만 센다 (60 deg 넘게 기울면 1 회)
             gg = robot.data.projected_gravity_b[0]
             tilt = math.degrees(math.acos(max(-1.0, min(1.0, -float(gg[2])))))
@@ -527,7 +582,15 @@ def judge(L, jumps, fell, fell_t):
     res = dict(mode=args.mode, tune={k: getattr(args, k) for k in TUNE}, wsign=wsign.tolist(),
                fell=fell, fell_t=fell_t, tau_hip_max_nm=tau_max, hip_speed_max_rad_s=w_max,
                current_max_a_kt060=tau_max / 0.5994, current_max_a_kt081=tau_max / 0.81, jumps=jumps)
-    if args.mode in ("jump", "none"):
+    if args.obstacle == "ridges" and args.mode in ("jump", "none"):
+        res["success"] = not fell
+        res["roll_range_deg"] = [float(min(r["roll"] for r in L)), float(max(r["roll"] for r in L))]
+        res["pitch_range_deg"] = [float(min(r["pitch"] for r in L)), float(max(r["pitch"] for r in L))]
+        res["leg_h_range_mm"] = [float(min(min(r["hl"], r["hr"]) for r in L) * 1000), float(max(max(r["hl"], r["hr"]) for r in L) * 1000)]
+        res["body_z_range_mm"] = [float(min(r["bz"] for r in L) * 1000), float(max(r["bz"] for r in L) * 1000)]
+        res["wheel_y"] = wheel_y0
+        res["final_x"] = L[-1]["wx"]
+    elif args.mode in ("jump", "none"):
         last = L[-int(1.0 / dt):]
         res["wheel_bottom_max_mm"] = float(max(min(r["wz_l"], r["wz_r"]) - R for r in L) * 1000)
         res["final_wheel_bottom_mm"] = float(np.mean([min(r["wz_l"], r["wz_r"]) - R for r in last]) * 1000)
