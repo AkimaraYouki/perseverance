@@ -36,7 +36,7 @@ def load_tune():
 
 
 TUNE = load_tune()
-SCEN = ("flat_stop", "turn", "ridges", "ramp", "jump", "hand10", "hand20")
+SCEN = ("flat_stop", "turn", "ridges", "ramp", "jump", "hand10", "hand20", "stones8", "oneside8")
 ap = argparse.ArgumentParser()
 ap.add_argument("--scenario", choices=SCEN, required=True)
 ap.add_argument("--n", type=int, default=8)
@@ -82,6 +82,8 @@ spec = dict(
     jump=dict(sec=8.0, v=P.v, box=(1.0, 2.0, 0.08), edges=[1.0]),
     hand10=dict(sec=9.0, v=0.3, hand=(3.0, 5.0, 10.0)),
     hand20=dict(sec=9.0, v=0.3, hand=(3.0, 5.0, 20.0)),
+    stones8=dict(sec=14.0, v=0.4, gen=("stones", 0.08)),              # 둥근 돌 8 cm 자갈길 (terrain_gen)
+    oneside8=dict(sec=14.0, v=0.4, gen=("oneside_stones", 0.08)),     # 왼쪽 바퀴 차선만 둥근 돌 8 cm (두 바퀴 높이 다름)
 )[SC]
 
 # --- 장면 -------------------------------------------------------------------------------------------
@@ -94,6 +96,33 @@ cfg.scene.terrain = TerrainImporterCfg(
     prim_path="/World/ground", terrain_type="plane", collision_group=-1,
     physics_material=sim_utils.RigidBodyMaterialCfg(friction_combine_mode="multiply", restitution_combine_mode="multiply",
                                                     static_friction=1.0, dynamic_friction=1.0))
+if "gen" in spec:                                                     # 로봇마다 16 x 16 m 타일, 가운데 출발, 앞 1 m 평지 뒤 요철
+    from isaaclab.terrains import TerrainGeneratorCfg
+    from isaaclab.terrains.height_field.hf_terrains_cfg import HfTerrainBaseCfg
+    from isaaclab.terrains.height_field.utils import height_field_to_mesh
+    from isaaclab.utils import configclass
+    import terrain_gen
+    _cnt = [0]
+
+    @height_field_to_mesh
+    def _gen_field(difficulty, c):
+        nx, ny = int(c.size[0] / c.horizontal_scale), int(c.size[1] / c.horizontal_scale)
+        _cnt[0] += 1
+        z = terrain_gen.make_heights(spec["gen"][0], nx, ny, c.horizontal_scale, spec["gen"][1],
+                                     int((c.size[0] / 2 + 1.0) / c.horizontal_scale), seed=args.seed + _cnt[0])
+        return np.rint(z / c.vertical_scale).astype(np.int16)
+
+    @configclass
+    class _GenCfg(HfTerrainBaseCfg):
+        function = _gen_field
+
+    cfg.scene.terrain = TerrainImporterCfg(
+        prim_path="/World/ground", terrain_type="generator", collision_group=-1, max_init_terrain_level=None,
+        terrain_generator=TerrainGeneratorCfg(size=(16.0, 6.0), num_rows=1, num_cols=N, horizontal_scale=0.02, vertical_scale=0.001,
+                                              slope_threshold=None, curriculum=False, use_cache=False, border_width=0.0,
+                                              sub_terrains={"g": _GenCfg(proportion=1.0, border_width=0.0)}),
+        physics_material=sim_utils.RigidBodyMaterialCfg(friction_combine_mode="multiply", restitution_combine_mode="multiply",
+                                                        static_friction=1.0, dynamic_friction=1.0))
 cfg.scene.robot = cad.CAD_ROBOT_CFG_DCHIP.replace(prim_path="{ENV_REGEX_NS}/Robot")
 _p = cfg.scene.robot.init_state.pos
 cfg.scene.robot.init_state.pos = (_p[0], _p[1] + 0.08, _p[2] + P.spawn_z)   # 바퀴 가운데 = 환경 원점 y, 공중 스폰
@@ -312,6 +341,8 @@ for i in range(N):
         ok = ok and xmax[i] >= 5.0
     elif SC == "jump":
         ok = ok and wzmin_end[i] >= 0.07
+    elif SC in ("stones8", "oneside8"):
+        ok = ok and xmax[i] >= 4.0                                   # 요철 3 m 넘게 들어감
     pr = np.abs(rec[i]["pitch"][200:]) if len(rec[i]["pitch"]) > 200 else np.abs(rec[i]["pitch"])
     rr = np.abs(rec[i]["roll"][200:]) if len(rec[i]["roll"]) > 200 else np.abs(rec[i]["roll"])
     rows.append(dict(i=i, ok=bool(ok), fell_t=fell_t[i], xmax=round(float(xmax[i]), 2), dr=dr[i],

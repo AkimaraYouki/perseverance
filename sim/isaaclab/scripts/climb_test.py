@@ -108,7 +108,15 @@ TUNE = dict(
     contact_tau=2.0,     # 접지 판정 고관절 토크 [N·m] (descend 0.04 s 뒤부터)
     t_fly_max=0.45,      # 이륙 뒤 이 시간 안에 접지를 못 느끼면 강제로 land [s]
     # --- 장애물 ---
-    obstacle="plateau",  # plateau (평대) | stairs2 (ㅗ 모양 2 단: 아래 단 | 윗단 | 아래 단) | ridges (ㅅㅅㅅ 삼각형길) | cad (아래 cad_file)
+    obstacle="plateau",  # plateau (평대) | stairs2 (ㅗ 모양 2 단) | ridges (ㅅㅅㅅ 삼각형길) | cad (아래 cad_file)
+                         #   | gen (지형 생성기 요철: gen_type) | env (Isaac 기본 환경: env_name)
+    gen_type="stones",   # obstacle="gen": stones (둥근 돌 자갈길) | gravel (10 cm 격자 블록, 수직 턱) | bumps (흩어진 턱) | waves
+                         #   | oneside_stones / oneside (왼쪽 바퀴 차선만 -> 두 바퀴가 늘 다른 높이)
+    gen_h=0.06,          # 요철 최대 높이 [m] (5~8 cm 시험)
+    gen_len=8.0,         # 요철 길이 [m] (출발 앞 edge 만큼 평지)
+    gen_seed=0,
+    env_name="rough_plane",  # obstacle="env": rough_plane | slope | stairs | warehouse | warehouse_full | warehouse_shelves |
+                         #   hospital | office | grid | rivermark (야외) | twin_warehouse  (Isaac 클라우드 에셋, 처음엔 내려받음)
     cad_file="~/perseverance/sim/obstacles/obstacle.stl",   # obstacle="cad": STL/OBJ/FBX. 좌표 규약 (CAD 에서 그대로):
                          #   원점 = 출발할 때 두 바퀴 축 가운데 바로 아래 바닥, +X = 달리는 방향, +Z = 위, 바닥면 Z = 0.
                          #   바퀴는 Y = +-99 mm 를 지난다. 파일을 고쳐 저장하면 다음 실행 때 다시 변환한다
@@ -155,7 +163,8 @@ TUNE = dict(
 POLICY = "logs/rsl_rl/wheeled_biped_balance/2026-09-25_18-24-20_rough_v3/model_7099.pt"   # 관측 25 균형 정책 (r3)
 # ==========================================================================================
 
-CHOICES = dict(est=("truth", "sensors"), ctrl=("policy", "lqr"), obstacle=("flat", "plateau", "stairs2", "ridges", "cad"), extract_wheels=("pd", "policy", "free"), pd_from=("extract", "fly"), hip=("dc", "ideal"))
+CHOICES = dict(est=("truth", "sensors"), ctrl=("policy", "lqr"), obstacle=("flat", "plateau", "stairs2", "ridges", "cad", "gen", "env"),
+               gen_type=("stones", "gravel", "bumps", "waves", "oneside", "oneside_stones"), extract_wheels=("pd", "policy", "free"), pd_from=("extract", "fly"), hip=("dc", "ideal"))
 ap = argparse.ArgumentParser()
 ap.add_argument("--policy", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", POLICY))
 ap.add_argument("--mode", choices=("jump", "stance", "none"), default="jump")
@@ -251,6 +260,62 @@ if args.mode in ("jump", "none"):
         cfg.scene.obstacle = box("tier1", args.edge, args.edge + 3 * args.tread, args.step_h)
         cfg.scene.obstacle2 = box("tier2", args.edge + args.tread, args.edge + 2 * args.tread, 2 * args.step_h)
         edges, top = [args.edge, args.edge + args.tread], 2 * args.step_h
+if args.obstacle == "gen" and args.mode in ("jump", "none"):
+    # 지형 생성기 요철 (terrain_gen.py). 타일 가운데 = 출발점, 앞 edge 까지 평지, 그 뒤 gen_len 동안 요철
+    from isaaclab.terrains import TerrainGeneratorCfg
+    from isaaclab.terrains.height_field.hf_terrains_cfg import HfTerrainBaseCfg
+    from isaaclab.terrains.height_field.utils import height_field_to_mesh
+    import terrain_gen
+
+    GX, GY = 2 * (args.edge + args.gen_len), 6.0
+
+    @height_field_to_mesh
+    def gen_field(difficulty, c):
+        nx, ny = int(c.size[0] / c.horizontal_scale), int(c.size[1] / c.horizontal_scale)
+        z = terrain_gen.make_heights(args.gen_type, nx, ny, c.horizontal_scale, args.gen_h,
+                                     int((GX / 2 + args.edge) / c.horizontal_scale), seed=int(args.gen_seed))
+        return np.rint(z / c.vertical_scale).astype(np.int16)
+
+    @configclass
+    class GenCfg(HfTerrainBaseCfg):
+        function = gen_field
+
+    cfg.scene.terrain = TerrainImporterCfg(
+        prim_path="/World/ground", terrain_type="generator", collision_group=-1, max_init_terrain_level=None,
+        terrain_generator=TerrainGeneratorCfg(
+            size=(GX, GY), num_rows=1, num_cols=1, horizontal_scale=0.02, vertical_scale=0.001, slope_threshold=None,
+            curriculum=False, use_cache=False, sub_terrains={"gen": GenCfg(proportion=1.0, border_width=0.0)}),
+        physics_material=sim_utils.RigidBodyMaterialCfg(friction_combine_mode="multiply", restitution_combine_mode="multiply",
+                                                        static_friction=1.0, dynamic_friction=1.0))
+    cfg.scene.floor = AssetBaseCfg(
+        prim_path="/World/floor",
+        spawn=sim_utils.CuboidCfg(size=(60.0, 60.0, 0.1), collision_props=sim_utils.CollisionPropertiesCfg(),
+                                  physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0),
+                                  visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.25, 0.25, 0.27))),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -0.0505)))
+    _p = cfg.scene.robot.init_state.pos
+    cfg.scene.robot.init_state.pos = (_p[0], _p[1] + 0.08, _p[2])     # 바퀴 가운데 = 타일 가운데 (oneside 차선 경계)
+if args.obstacle == "env":
+    # Isaac 기본 환경 (클라우드 USD). 레이 스캐너는 메시 하나만 받아서 끈다 (종료 판정도 같이)
+    from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
+    ENVS = dict(rough_plane="Terrains/rough_plane.usd", slope="Terrains/slope.usd", stairs="Terrains/stairs.usd",
+                warehouse="Simple_Warehouse/warehouse.usd", warehouse_full="Simple_Warehouse/full_warehouse.usd",
+                warehouse_shelves="Simple_Warehouse/warehouse_multiple_shelves.usd", hospital="Hospital/hospital.usd",
+                office="Office/office.usd", grid="Grid/default_environment.usd", rivermark="Outdoor/Rivermark/rivermark.usd",
+                twin_warehouse="Digital_Twin_Warehouse/small_warehouse_digital_twin.usd")
+    if args.env_name not in ENVS:
+        raise SystemExit(f"env_name 은 {list(ENVS)} 중 하나")
+    cfg.scene.terrain = TerrainImporterCfg(
+        prim_path="/World/ground", terrain_type="usd", usd_path=f"{ISAAC_NUCLEUS_DIR}/Environments/{ENVS[args.env_name]}",
+        collision_group=-1,
+        physics_material=sim_utils.RigidBodyMaterialCfg(friction_combine_mode="multiply", restitution_combine_mode="multiply",
+                                                        static_friction=1.0, dynamic_friction=1.0))
+    if hasattr(cfg.scene, "height_scanner"):
+        cfg.scene.height_scanner = None
+    if hasattr(cfg.terminations, "too_low"):
+        cfg.terminations.too_low = None
+    _p = cfg.scene.robot.init_state.pos
+    cfg.scene.robot.init_state.pos = (_p[0], _p[1], _p[2] + 0.3)     # 지면 높이를 몰라 조금 더 위에서
 if args.obstacle == "ridges" and args.mode in ("jump", "none"):
     # 학습 지형과 같은 함수 (terrain.staggered_ridges_terrain) 에 평지 도움닫기만 붙인다. 타일 가운데 = 로봇 출발점
     from isaaclab.terrains import TerrainGeneratorCfg
@@ -649,7 +714,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
         pl.set_data(*hist[kk])
 
 RESTART = ("dr_mass", "dr_com_cm", "dr_motor", "dr_seed", "imu_tilt_bias_deg", "render_hz", "physics_hz", "color_body", "color_legs", "color_wheels", "spawn_z", "obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
-           "ridge_lane", "ridge_len", "cad_file", "cad_unit")   # 장면을 다시 만들어야 해서 재시작 필요
+           "ridge_lane", "ridge_len", "cad_file", "cad_unit", "gen_type", "gen_h", "gen_len", "gen_seed", "env_name")   # 장면을 다시 만들어야 해서 재시작 필요
 CLI_KEYS = {k for k in TUNE if f"--{k}" in sys.argv}                        # 명령줄로 준 값은 파일보다 우선
 
 
@@ -1034,6 +1099,7 @@ def episode():
             if tilt > 60 and not tipped:
                 tipped = True; stats["falls"] += 1
                 print(f"[넘어짐] 단계 {phase} (리셋 안 함, START = 처음으로)", flush=True)
+                dump_ring("fall")                                  # 넘어지기 직전 10 s 자동 저장 (원인 분석용)
             elif tilt < 20:
                 tipped = False
         if pad is not None:                                        # 최근 기록 + 진동 감지 + X = 수동 저장
