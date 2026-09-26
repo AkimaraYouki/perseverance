@@ -350,7 +350,7 @@ robust)
   # pv robust [N] [--only flat_stop,ridges,...] [TUNE 덮어쓰기 --키 값 ...]
   #   강인성 시험 세트: 시나리오마다 로봇 N 대 (대마다 다른 모델 오차·잡음·지연) -> 통과율 표. 게인은 climb_test.py TUNE
   n=8; if [[ "${1:-}" =~ ^[0-9]+$ ]]; then n="$1"; shift; fi
-  only="flat_stop,turn,ridges,ramp,jump,hand10,hand20"; args=()
+  only="flat_stop,turn,ridges,ramp,jump,hand10,hand20,stones8,oneside8,stones_turn"; args=()
   while [ $# -gt 0 ]; do if [ "$1" = "--only" ]; then only="$2"; shift 2; else args+=("$1"); shift; fi; done
   require_free_gpu
   cd "$PROJ"; mkdir -p "$OUT/robust"; stamp=$(date +%H%M%S)

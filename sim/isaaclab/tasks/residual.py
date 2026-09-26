@@ -189,6 +189,12 @@ class ResidualCtrlAction(ActionTerm):
         self.gov_ref += (tgt - self.gov_ref).clamp(-c.accel_max * dt, c.accel_max * dt)
         v_ref = self.gov_ref
         self.x_err = torch.where(vx_c.abs() > v_lim + 1e-3, torch.zeros_like(self.x_err), self.x_err)
+        # 바퀴 속도 푸시백: 모터 한계의 speed_guard 를 넘으면 목표를 지금 속도보다 낮춰 뒤로 젖히며 감속 (climb_test 와 같음)
+        ww = wj.abs().max(1).values / w_max
+        push = (ww > c.speed_guard) & (c.speed_guard < 1.0)
+        cut = ((ww - c.speed_guard) / max(1e-6, 1.0 - c.speed_guard)).clamp(0.0, 1.0)
+        v_ref = torch.where(push, torch.where(v * vx_c >= 0, v * (1.0 - 0.6 * cut), vx_c), v_ref)
+        self.x_err = torch.where(push, torch.zeros_like(self.x_err), self.x_err)
         self.x_err = (self.x_err + (v - v_ref) * dt).clamp(-0.3, 0.3)
         # --- LQR + 회전 ---
         K = self._interp_K(l_p)
@@ -281,7 +287,8 @@ class ResidualCtrlActionCfg(ActionTermCfg):
     lqr_qx: float = 2.0; lqr_qv: float = 5.0; lqr_qth: float = 100.0; lqr_qthd: float = 5.0; lqr_r: float = 1.0  # noqa: E702
     wheel_tau_max: float = 7.0
     yaw_kd: float = 0.5
-    wheel_margin: float = 0.85
+    wheel_margin: float = 0.7
+    speed_guard: float = 0.8
     vmax_kmh: float = 3.0
     vmax_motor_frac: float = 0.75
     brake_kp: float = 1.0; brake_ki: float = 4.0; speed_lpf_hz: float = 3.0; accel_max: float = 1.5  # noqa: E702
@@ -291,7 +298,7 @@ class ResidualCtrlActionCfg(ActionTermCfg):
     roll_leak: float = 0.5; roll_freeze_deg: float = 20.0; level_max: float = 0.10  # noqa: E702
     contact_tau_min: float = 0.8
     turn_lean: float = 1.0             # 회전 중 안쪽 기울기 비율 (1 = 원심력과 중력 합력 방향)
-    lift_detect_s: float = 0.05; land_detect_s: float = 0.02; land_sf_min: float = 0.4; lift_wheel_kd: float = 0.05  # noqa: E702
+    lift_detect_s: float = 0.3; land_detect_s: float = 0.02; land_sf_min: float = 0.4; lift_wheel_kd: float = 0.05  # noqa: E702
     v_lpf_hz: float = 10.0
     wheel_lpf_hz: float = 20.0
     # --- 실기 조건 무작위 ---

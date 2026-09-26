@@ -36,7 +36,7 @@ def load_tune():
 
 
 TUNE = load_tune()
-SCEN = ("flat_stop", "turn", "ridges", "ramp", "jump", "hand10", "hand20", "stones8", "oneside8")
+SCEN = ("flat_stop", "turn", "ridges", "ramp", "jump", "hand10", "hand20", "stones8", "oneside8", "stones_turn")
 ap = argparse.ArgumentParser()
 ap.add_argument("--scenario", choices=SCEN, required=True)
 ap.add_argument("--n", type=int, default=8)
@@ -84,6 +84,7 @@ spec = dict(
     hand20=dict(sec=9.0, v=0.3, hand=(3.0, 5.0, 20.0)),
     stones8=dict(sec=14.0, v=0.4, gen=("stones", 0.08)),              # 둥근 돌 8 cm 자갈길 (terrain_gen)
     oneside8=dict(sec=14.0, v=0.4, gen=("oneside_stones", 0.08)),     # 왼쪽 바퀴 차선만 둥근 돌 8 cm (두 바퀴 높이 다름)
+    stones_turn=dict(sec=12.0, v=P.vmax_kmh / 3.6, gen=("stones", 0.08), wz_const=2.5),   # 자갈길 최고 속도 급회전 (패드에서 넘어진 상황)
 )[SC]
 
 # --- 장면 -------------------------------------------------------------------------------------------
@@ -268,6 +269,8 @@ with torch.inference_mode():
             vxs = torch.tensor([0.0 if ("stop_x" in spec and wx[i] >= spec["stop_x"]) else vx for i in range(N)], device=dev)
             if "slalom" in spec:
                 wzs = torch.full((N,), spec["slalom"] * (1.0 if int(t // 2.0) % 2 == 0 else -1.0), device=dev)
+            elif "wz_const" in spec:
+                wzs = torch.full((N,), float(spec["wz_const"]), device=dev)
             else:
                 wzs = torch.clamp(-P.heading_kp * psi, -1.0, 1.0)
             cmd.set(vxs, wzs, torch.full((N,), P.idle_h, device=dev), mode=torch.ones(N, device=dev))
@@ -284,6 +287,8 @@ with torch.inference_mode():
             vx_i = 0.0 if ("stop_x" in spec and wx[i] >= spec["stop_x"]) else vx
             if "slalom" in spec:
                 wz = spec["slalom"] * (1.0 if int(t // 2.0) % 2 == 0 else -1.0)
+            elif "wz_const" in spec:
+                wz = spec["wz_const"]
             else:
                 wz = max(-1.0, min(1.0, -P.heading_kp * float(psi_[i])))
             f = wbctrl.Frame(t=t, g_b=g_b[i], w_b=w_b[i], h=h_[i], tau_hip=tau_[i], w_wheel_joint=wj_[i], w_wheel_abs=wabs_[i],
