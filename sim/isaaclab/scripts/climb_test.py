@@ -30,6 +30,12 @@ from isaaclab.app import AppLauncher
 # ================================ 튜닝 — 여기 값만 바꾸고 실행 ================================
 # `pv jump` 로 창을 띄워 본다. 한 번만 바꿔 보려면 명령줄 `--이름 값` (예: pv jump --trigger 0.35)
 TUNE = dict(
+    # --- 다리 높이: 항상 자동 모드 (정책이 외란·지형에 맞춰 정한다). idle_h 는 자동 모드 공칭 = IDLE ---
+    idle_h=0.20,         # [m, 다리 관절값, 바퀴 반지름 제외 — 바퀴 포함 0.26]. 사용자 지정 0.20 (압축 77.5 mm ≈ 8.9 J, 신장 42.5 mm). 행정 가운데는 0.1825 (2026-09-26 계산, leg_map + URDF 4.03 kg):
+                         #   정하중 토크는 행정 전체 2.1~2.3 N·m (정격 3 아래) 라 제약이 아니다.
+                         #   9 N·m 로 바닥까지 눌리며 흡수 가능한 에너지 = 약 1.15 J / 압축 10 mm.
+                         #   착지 2.9 J (1.2 m/s), 8 cm 낙하 3.2 J -> 0.1365(CAD 자세) 는 1.6 J 라 바닥을 친다.
+                         #   0.1825 = 6.8 J (2.2 배 여유) + 신장 60 mm (구덩이). ※ r3 정책은 자동 공칭 0.1365 로 학습됐다
     # --- 접근·발동 ---
     v=0.8,               # 접근 속도 [m/s]. 바퀴 한계 18.85 rad/s x R 0.06 = 1.13 m/s 라 0.8 이 여유 있는 최대
     trigger=0.38,        # 바퀴 중심이 모서리 앞 이 거리에 오면 발동 [m]. 발동~이륙 사이 v 0.8 에서 약 0.24 m 간다
@@ -46,7 +52,7 @@ TUNE = dict(
     air_kd=3.0,          # [N·m·s/rad, 바퀴 하나]
     air_tau=7.0,         # PD 구간 바퀴 토크 한계 [N·m] (AK45-10 피크. 평소 정책은 1.5)
     # --- 5 land: 착지 ---
-    h_land=0.16,         # 착지 다리 길이 [m] (행정 0.1225 ~ 0.2425)
+    h_land=0.20,         # 착지 다리 길이 [m] (행정 0.1225 ~ 0.2425). idle_h 와 같게 = 압축 행정 최대
     land_kp=20.0,        # 착지 스프링 [N·m/rad] (평소 60)
     land_kd=1.0,         # 착지 댐퍼 [N·m·s/rad] (평소 1.5)
     land_s=0.30,         # 부드러운 게인 유지 시간 [s]
@@ -78,7 +84,7 @@ for k, v in TUNE.items():
     else:
         ap.add_argument(f"--{k}", type=float, default=v)
 ap.add_argument("--joystick", nargs="?", const="/dev/input/js0", default=None, metavar="DEV",
-                help="패드로 조종: 왼스틱 세로 전후, 오른스틱 가로 회전, RT/LT 높이, Y 점프, A 정지, START 처음으로, 십자키/LB/RB/BACK 카메라")
+                help="패드로 조종: 왼스틱 세로 전후, 오른스틱 가로 회전, Y 점프, A 정지, START 처음으로, 십자키/LB/RB/BACK 카메라")
 ap.add_argument("--pad", choices=("auto", "classic", "modern"), default="classic")
 ap.add_argument("--record", default=None, metavar="DIR")
 ap.add_argument("--out", default=None)
@@ -118,6 +124,10 @@ cfg.events.reset_base.params["velocity_range"] = {}
 cfg.events.base_mass = None
 cfg.events.base_com = None
 cfg.terminations.time_out = None
+if args.joystick:                                                     # 패드: 부딪히거나 기울어도 리셋하지 않고 계속 균형 (START 로만 처음으로)
+    for _n in list(vars(cfg.terminations)):
+        if not _n.startswith("_"):
+            setattr(cfg.terminations, _n, None)
 
 
 def box(name, x0, x1, h):
@@ -199,7 +209,7 @@ if args.joystick:
     if args.pad != "auto":
         pad.axis_right_x = J.AXIS_RIGHT_X_CLASSIC if args.pad == "classic" else J.AXIS_RIGHT_X_MODERN
         pad.layout, pad._layout_done = args.pad, True
-    print(f"[패드] {args.joystick} ({pad.layout}) — 왼스틱 세로 전후 / 오른스틱 가로 회전 / RT·LT 높이 / "
+    print(f"[패드] {args.joystick} ({pad.layout}) — 왼스틱 세로 전후 / 오른스틱 가로 회전 / 높이 자동 / "
           f"Y 점프 / A 정지 / START 처음으로 / 십자키·LB·RB·BACK 카메라.  모서리: " + ", ".join(f"x {e:.2f} m" for e in edges), flush=True)
 rng = cmd.cfg.ranges
 
@@ -298,7 +308,8 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
     hud.text = "\n".join([
         f"PHASE     {phase.upper()}" + ("   [Y] = JUMP" if phase == "drive" and pad is not None else ""),
         f"EDGE      {dist}",
-        f"CMD       vx {vx:+.2f}  wz {wz:+.2f}  h {(h_cmd+R)*1000:5.1f} mm",
+        f"CMD       vx {vx:+.2f}  wz {wz:+.2f}   HEIGHT AUTO (idle {args.idle_h*1000:.1f})",
+        f"LEGS      L {float(cad.leg_state(robot)[0][0][0])*1000:5.1f}  R {float(cad.leg_state(robot)[0][0][1])*1000:5.1f} mm  (stroke 122.5~242.5)",
         f"ACTUAL    vx {v_now:+.2f} m/s",
         f"TILT      pitch {pitch:+6.1f}  roll {roll:+6.1f} deg",
         f"WHEEL z   L {wb[0]:5.0f}  R {wb[1]:5.0f} mm (bottom)",
@@ -313,7 +324,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
         f"      air_kp {args.air_kp:.0f}  kd {args.air_kd:.1f}  land_kp {args.land_kp:.0f}  h_land {args.h_land:.3f}",
         "",
         (f"SIM SPEED {rtf:4.2f}x real-time" if rtf == rtf else "SIM SPEED measuring..."),
-        ("PAD  LStick fwd/back  RStick turn  RT/LT height  Y jump  A stop  START restart  DPad/LB/RB/BACK cam"
+        ("PAD  LStick fwd/back  RStick turn  Y jump  A stop  START restart  DPad/LB/RB/BACK cam"
          if pad is not None else "file save -> next try uses new TUNE"),
     ])
     for kk, pl in plots.items():
@@ -341,6 +352,7 @@ def reload_tune():
             continue
         print(f"[튜닝] {k}: {getattr(args, k)} -> {v}", flush=True)
         setattr(args, k, v)
+    cmd.cfg.auto_height = cmd.cfg.default_height = args.idle_h
 
 
 dt = env.step_dt
@@ -359,10 +371,12 @@ def episode():
     soft_legs(False)
     wheel_term.cfg.torque_scale = scale0
     obs, _ = env.reset()
-    phase, t_phase, next_edge, h0 = "drive", 0.0, 0, H_CRUISE
+    cmd.cfg.auto_height = cmd.cfg.default_height = args.idle_h
+    phase, t_phase, next_edge, h0 = "drive", 0.0, 0, args.idle_h
+    tipped = False
     log, jumps = [], []
     fell, fell_t = False, None
-    y_prev, back_prev, h_cmd, wall0 = True, True, H_CRUISE, None
+    y_prev, back_prev, h_cmd, wall0 = True, True, args.idle_h, None
     for k in (itertools.count() if pad is not None else range(int(args.seconds / dt))):
         if not app.is_running():
             return None
@@ -378,7 +392,6 @@ def episode():
         if pad is not None:                                        # 패드: 속도·회전·높이는 사람이, 점프는 Y
             pad.poll()
             vx, wz, dh, estop, reset_h = J.command_from_gamepad(pad, rng.lin_vel_x, rng.ang_vel_z)
-            h_cmd = H_CRUISE if reset_h else min(rng.height[1], max(rng.height[0], h_cmd + dh * 0.1 * dt))
             y, back = pad.button(BTN_Y), pad.button(BTN_START)
             y_edge, y_prev = y and not y_prev, y
             if back and not back_prev:
@@ -434,7 +447,7 @@ def episode():
             vx = 0.0
             phase = "stand" if t < 1.0 else ("lean" if t < 2.0 else "lift")
         cmd.set(torch.tensor([vx], device=dev), torch.tensor([wz], device=dev), torch.tensor([h_cmd], device=dev),
-                mode=torch.tensor([0.0], device=dev))
+                mode=torch.tensor([1.0], device=dev))                  # 항상 자동 (h 는 무시되고 idle_h)
         act = policy(obs["policy"]).clone()
         h_ref = float(cmd.command[0, 2])
         if args.mode == "jump" and phase in LEG_TARGET:
@@ -466,6 +479,14 @@ def episode():
                 return "restart"
             if LOOP:
                 break                                              # 창 모드: 넘어지면 바로 다음 시도
+        if pad is not None:                                        # 리셋 없이 넘어짐만 센다 (60 deg 넘게 기울면 1 회)
+            gg = robot.data.projected_gravity_b[0]
+            tilt = math.degrees(math.acos(max(-1.0, min(1.0, -float(gg[2])))))
+            if tilt > 60 and not tipped:
+                tipped = True; stats["falls"] += 1
+                print(f"[넘어짐] 단계 {phase} (리셋 안 함, START = 처음으로)", flush=True)
+            elif tilt < 20:
+                tipped = False
         if hud is not None and k % 5 == 0:
             hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge)
         # --- 기록 ------------------------------------------------------------------------------------
