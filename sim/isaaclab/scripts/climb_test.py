@@ -468,7 +468,7 @@ import lqr_vmc  # noqa: E402
 _nonwheel = [i for i in range(robot.num_bodies) if i not in wheel_bodies]
 _mass = robot.root_physx_view.get_masses()[0].clone().to(dev)    # 명목 질량 (복사! 모델 오차가 바꾸지 않게)
 _m_pend = float(_mass[_nonwheel].sum()); _m_w = float(_mass[wheel_bodies].sum())
-_I_w = 2 * 1.755e-3                                                   # URDF l_wheel izz (회전자 반사관성 포함) x 2
+_I_w = 2 * cad.WHEEL_IZZ                                              # URDF l_wheel izz (회전자 반사관성 포함) x 2
 lqr = None
 
 

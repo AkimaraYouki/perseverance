@@ -11,6 +11,7 @@ climb_test.py 의 ctrl="lqr" 경로를 로봇마다 따로 돌 수 있게 떼어
 """
 import collections
 import math
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -18,7 +19,7 @@ import numpy as np
 import lqr_vmc
 
 H_MIN, H_MAX = 0.1225, 0.2425
-R_WHEEL = 0.06
+R_WHEEL = float(os.environ.get("WB_WHEEL_R", "0.060"))   # leg_map 과 같은 환경변수
 W_WHEEL_MAX = 18.85                    # 바퀴 모터 한계 (명목, 제어기가 믿는 값)
 HALF_TRACK = 0.094
 DT = 0.005

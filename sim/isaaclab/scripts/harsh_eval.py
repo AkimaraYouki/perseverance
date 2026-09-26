@@ -32,11 +32,16 @@ ap.add_argument("--level", type=int, default=None, help="난이도 행 고정 (�
 ap.add_argument("--cmd", choices=("random", "course"), default="course",
                 help="course = 칸 가운데서 바깥으로 --vx 직진 (대회처럼 앞으로 달림), random = 무작위 명령 (후진·회전·정지)")
 ap.add_argument("--vx", type=float, default=0.4)
+ap.add_argument("--vx_slow", type=float, default=0.4, help="불연속 지형 (--slow) 에서의 속도 [m/s] (course)")
+ap.add_argument("--slow", default="bumps,blocks,step_down", help="천천히 달릴 불연속 지형 (쉼표, 빈 문자열 = 없음)")
 ap.add_argument("--yaw0", action="store_true", help="모두 +x 로 출발 (삼각형 길을 정면으로). 없으면 방향 무작위 (비스듬히)")
 ap.add_argument("--no_push", action="store_true")
 ap.add_argument("--policy", default=None)
 ap.add_argument("--tag", default="")
 ap.add_argument("--seed", type=int, default=1, help="로봇 무작위 (전후 비교는 같은 시드로)")
+ap.add_argument("--hw", choices=("none", "now", "plan"), default="none",
+                help="실기 통신·센서 추정 (docs/lab-meeting 하드웨어·통신 문서 기준): now = 모터 피드백 500 Hz·IMU 200 Hz·일반 커널, "
+                     "plan = 피드백 500 Hz·IMU 500 Hz·실시간 스레드. 명령·손실 값도 바뀜 (--ctrl 로 덮어쓰기 가능)")
 ap.add_argument("--terrains", default=None, help="이 지형만 (쉼표), 예: oneside")
 ap.add_argument("--suite", choices=("all", "rough"), default="all", help="rough = 자동 주행 험지 11 종 (돌·자갈·파도·요철·경사)")
 ap.add_argument("--trace", type=int, default=0, help="넘어진 로봇 N 대의 넘어지기 전 2 s 기록을 npz 로")
@@ -73,7 +78,7 @@ def _stones(difficulty, c):
     _cnt[0] += 1
     # oneside: 0.2 m 차선 (바퀴 간격) 하나 건너 하나에만 돌 -> 한쪽 바퀴만 돌 위. 돌은 자르지 않음
     #   (차선 가장자리를 깎으면 12 cm 돌에서 옆면이 62 deg 가 되어 비스듬히 지나면 못 넘는 벽이 됨)
-    z = terrain_gen.make_heights("lane_stones" if c.kind == "oneside" else "stones", nx, ny, c.horizontal_scale, h, 0,
+    z = terrain_gen.make_heights("lane_stones" if c.kind == "oneside" else c.kind, nx, ny, c.horizontal_scale, h, 0,
                                  seed=1000 + _cnt[0])
     return np.rint(z / c.vertical_scale).astype(np.int16)
 
@@ -104,7 +109,7 @@ EVAL_TERRAINS = T.ROUGH_TERRAINS_CFG.replace(
 )
 
 if args.suite == "rough":                # 자동 주행 험지 (사용자: 삼각형길은 조종으로, 자갈·파도길은 자동으로 -> 험지 주행 안정성 우선)
-    EVAL_TERRAINS = EVAL_TERRAINS.replace(num_cols=11, sub_terrains={
+    EVAL_TERRAINS = EVAL_TERRAINS.replace(num_cols=12, sub_terrains={
         "flat": MeshPlaneTerrainCfg(proportion=1.0),
         "stones": StonesCfg(proportion=1.0, kind="stones", h_range=(0.03, 0.12), **T._HF),
         "oneside": StonesCfg(proportion=1.0, kind="oneside", h_range=(0.03, 0.12), **T._HF),
@@ -114,6 +119,7 @@ if args.suite == "rough":                # 자동 주행 험지 (사용자: 삼�
         "wave_long": R["wave_long"].replace(proportion=1.0),            # 파도 0~10 cm, 4 개
         "wave_short": R["wave_short"].replace(proportion=1.0),          # 파도 0~6 cm, 8 개
         "bumps": R["bumps"].replace(proportion=1.0),                    # 1~4 cm 턱 0.3~1 m
+        "blocks": StonesCfg(proportion=1.0, kind="gravel", h_range=(0.01, 0.04), **T._HF),   # 10 cm 블록 0~1~4 cm, 수직 모서리 (영상에서 넘어진 지형)
         "slope_up": R["slope_up"].replace(proportion=1.0, slope_range=(0.0, 0.30)),
         "slope_down": R["slope_down"].replace(proportion=1.0, slope_range=(0.0, 0.30)),
     })
@@ -131,6 +137,19 @@ H = args.harsh
 c = cfg.actions.ctrl
 c.imu_tilt_noise_deg *= H; c.imu_tilt_bias_deg *= H; c.imu_gyro_noise *= H; c.enc_vel_noise *= H
 c.dr_motor = min(0.6, c.dr_motor * H); c.delay_ms = args.delay_ms; c.delay_extra_prob = args.jitter_prob
+c.delay_asym_ms *= H; c.loss_frame_prob *= H; c.loss_burst_prob *= H; c.imu_delay_ms *= H; c.fb_delay_ms *= H
+HW = {   # 추정 근거: CAN 1 Mbit/s 부하 22 % [계산], CubeMars 업로드 50 Hz [측정] (1~500 Hz 설정 가능, 매뉴얼 5.2.1),
+         # iAHRS 자이로 LPF 51.2 Hz (지연 약 3 ms) + USB 직렬 약 1 ms, 출력 sp 5 ms / 2 ms, 젯슨 일반 커널 제어 스레드 지연
+    "now": dict(delay_ms=2.5, delay_asym_ms=0.5, delay_extra_prob=0.1, jitter_ms=2.5, loss_frame_prob=1e-4,
+                loss_burst_prob=5e-4, loss_burst_steps=3.0, imu_latency_ms=4.0, imu_period_ms=5.0, imu_delay_ms=2.0,
+                fb_latency_ms=1.0, fb_period_ms=2.0, fb_delay_ms=0.5),       # 업로드 50 Hz -> 500 Hz 로 바꿈 (사용자, 2026-09-27)
+    "plan": dict(delay_ms=2.5, delay_asym_ms=0.5, delay_extra_prob=0.05, jitter_ms=2.5, loss_frame_prob=1e-5,
+                 loss_burst_prob=1e-4, loss_burst_steps=2.0, imu_latency_ms=4.0, imu_period_ms=2.0, imu_delay_ms=1.0,
+                 fb_latency_ms=1.0, fb_period_ms=2.0, fb_delay_ms=0.5),
+}
+if args.hw != "none":
+    for k_, v_ in HW[args.hw].items():
+        setattr(c, k_, v_)
 for kv in args.ctrl:
     k_, v_ = kv.split("=")
     setattr(c, k_, type(getattr(c, k_))(float(v_)) if not isinstance(getattr(c, k_), bool) else v_.lower() in ("1", "true"))
@@ -162,6 +181,21 @@ if args.level is not None:
     t_.env_origins[:] = t_.terrain_origins[t_.terrain_levels, t_.terrain_types]
 obs, _ = env.reset()
 types, levels = t_.terrain_types.clone(), t_.terrain_levels.clone()
+names = list(EVAL_TERRAINS.sub_terrains.keys())
+props = np.array([s.proportion for s in EVAL_TERRAINS.sub_terrains.values()])
+cum = np.cumsum(props / props.sum())
+col_name = [names[int(np.searchsorted(cum, cidx / EVAL_TERRAINS.num_cols + 0.001, side="right"))] for cidx in range(EVAL_TERRAINS.num_cols)]
+slow_set = [x for x in args.slow.split(",") if x] if args.cmd == "course" else []
+slow_mask = torch.tensor([col_name[int(ty)] in slow_set for ty in types.tolist()], device=dev)
+cmd_term = env.command_manager.get_term("base_velocity")
+
+
+def set_slow():
+    if slow_set:
+        cmd_term._cmd[slow_mask, 0] = args.vx_slow
+
+
+set_slow()
 robot0 = env.scene["robot"]
 # 바퀴 정지 마찰 (로봇별). 재질은 몸체가 아니라 충돌 모양(shape) 마다 -> 바퀴 몸체의 모양 번호를 찾는다 (randomize_rigid_body_material 과 같은 방법)
 try:
@@ -219,6 +253,7 @@ with torch.inference_mode():
             ], 1)
         a = pol(obs["policy"]) if pol else torch.zeros(env.num_envs, 4, device=dev)
         obs, _, term, trunc, _ = env.step(a)
+        set_slow()
         live = ~done
         expo += torch.bincount(here[live], minlength=nc).float() * env.step_dt
         if hasattr(term_, "t_bump"):
@@ -242,10 +277,6 @@ with torch.inference_mode():
         if k % 100 == 99 and bool(done.all()):
             break
 
-names = list(EVAL_TERRAINS.sub_terrains.keys())
-props = np.array([s.proportion for s in EVAL_TERRAINS.sub_terrains.values()])
-cum = np.cumsum(props / props.sum())
-col_name = [names[int(np.searchsorted(cum, cidx / EVAL_TERRAINS.num_cols + 0.001, side="right"))] for cidx in range(EVAL_TERRAINS.num_cols)]
 
 
 def wilson(s, n, z=1.96):
@@ -264,8 +295,8 @@ for i in range(env.num_envs):
     n_ = col_name[int(types[i])]
     rows.setdefault(n_, [0, 0]); rows[n_][0] += int(not fell[i]); rows[n_][1] += 1
 title = (f"[가혹 평가] {'정책 ' + os.path.basename(args.policy) if args.policy else '기본 LQR+VMC'} | {env.num_envs} 대 x {args.seconds:.0f} s | "
-         f"강도 x{H} 마찰 {mu_r[0]:.2f}~{mu_r[1]:.2f} 지연 {args.delay_ms:.0f} ms + 지터 {args.jitter_prob:.0%} | 난이도 {args.level if args.level is not None else '0~9'} | "
-         f"명령 {args.cmd}{f' {args.vx} m/s' if args.cmd == 'course' else ''}{' 정면' if args.yaw0 else ''}{' | 밀기 없음' if args.no_push else ''} {args.tag}")
+         f"{'실기 추정 ' + args.hw + ' | ' if args.hw != 'none' else ''}강도 x{H} 마찰 {mu_r[0]:.2f}~{mu_r[1]:.2f} 지연 {args.delay_ms:.0f} ms + 지터 {args.jitter_prob:.0%} | 난이도 {args.level if args.level is not None else '0~9'} | "
+         f"명령 {args.cmd}{f' {args.vx} m/s' if args.cmd == 'course' else ''}{f' (불연속 {args.vx_slow} m/s)' if slow_set else ''}{' 정면' if args.yaw0 else ''}{' | 밀기 없음' if args.no_push else ''} {args.tag}")
 print("\n" + title)
 print(f"  {'지형':14s} {'성공':>11s}   {'성공률':>7s}  95% 신뢰구간")
 out = {}

@@ -65,7 +65,7 @@ class ResidualCtrlAction(ActionTerm):
         rel = d.body_com_pos_w[0, self.nonwheel] - c0
         I = float((iyy[self.nonwheel] + m[self.nonwheel] * (rel[:, 0] ** 2 + rel[:, 2] ** 2)).sum())
         self.l_grid = torch.linspace(0.12, 0.40, 15, device=dev)
-        K = _lqr_table(self.m_pend, I, float(m[self.wheel_bodies].sum()), 2 * 1.755e-3, cad.R_WHEEL,
+        K = _lqr_table(self.m_pend, I, float(m[self.wheel_bodies].sum()), 2 * cad.WHEEL_IZZ, cad.R_WHEEL,
                        (cfg.lqr_qx, cfg.lqr_qv, cfg.lqr_qth, cfg.lqr_qthd), cfg.lqr_r, self.l_grid.cpu().numpy())
         self.K = torch.tensor(np.asarray(K), device=dev, dtype=torch.float32)          # (15, 4)
         z = lambda: torch.zeros(N, device=dev)  # noqa: E731
@@ -77,14 +77,31 @@ class ResidualCtrlAction(ActionTerm):
         self.bias = torch.zeros(N, 2, device=dev)
         self.motor_true = torch.ones(N, device=dev)
         self.motor_est = torch.ones(N, device=dev)
-        self.delay = torch.zeros(N, dtype=torch.long, device=dev)
-        self.Q = 8
+        # 명령 전달 (CAN 흉내): 스텝마다 명령을 큐에 넣고, 모터마다 도착 시각을 따로 정한다 (기본 지연 + 모터별 편차 +
+        #   지터 + 프레임 손실 + 버스 정지). 물리 주기(2.5 ms)마다 모터별로 '도착한 것 중 가장 최근에 보낸 명령' 을 적용,
+        #   아무것도 안 왔으면 직전 명령을 쥐고 있는다. 시각은 float64 (학습이 몇 시간 돌아도 2.5 ms 해상도 유지)
+        self.Q = 16
         self.queue = torch.zeros(N, self.Q, 5, device=dev)
+        self.arrive = torch.full((N, self.Q, 4), -1e9, device=dev, dtype=torch.float64)   # 모터 [바퀴L, 바퀴R, 고관절L, 고관절R]
+        self.send_t = torch.full((self.Q,), -1e9, device=dev, dtype=torch.float64)
         self.head = 0
+        self.t_ctrl, self.sub = 0.0, 0
+        self.dt_phys = env.physics_dt
+        self.d_base = torch.zeros(N, 4, device=dev, dtype=torch.float64)                 # 모터별 기본 지연 [s]
+        self.bus_down = torch.zeros(N, dtype=torch.bool, device=dev)                      # 버스 정지 (버스트 손실) 중
+        # 센서 지연: IMU (pitch, roll, 자이로 3, 비력) 와 모터 피드백 (바퀴 절대·관절 속도, 고관절 토크) 을 따로 늦춘다
+        self.SR = 12                                                                     # 5 ms x 12 = 60 ms 기록
+        self.sring = torch.zeros(N, self.SR, 12, device=dev)
+        self.s_head = 0
+        self.s_fresh = torch.ones(N, dtype=torch.bool, device=dev)
+        self.d_imu = torch.zeros(N, device=dev)
+        self.d_fb = torch.zeros(N, device=dev)
+        self.ph_imu = torch.zeros(N, device=dev)                                          # 센서 샘플 위상 [s] (주기 샘플링)
+        self.ph_fb = torch.zeros(N, device=dev)
         self.tau_f = torch.zeros(N, 2, device=dev)                # 바퀴 토크 LPF 상태
         self._raw = torch.zeros(N, 4, device=dev)
         self._prev_raw = torch.zeros(N, 4, device=dev)
-        self.out = torch.zeros(N, 5, device=dev)                   # 적용할 [τL, τR, hL, hR, ff]
+        self.out = torch.zeros(N, 6, device=dev)                   # 모터에 걸린 명령 [τL, τR, hL, hR, ffL, ffR]
         self.base = torch.zeros(N, 4, device=dev)                  # 기본 제어기 출력 (관측용) [τL, τR, hL, hR]
         self.est = torch.zeros(N, 8, device=dev)                   # 관측용 내부값
         vl = r.actuators["wheels"].velocity_limit
@@ -114,7 +131,12 @@ class ResidualCtrlAction(ActionTerm):
         self.lift[env_ids] = False
         self.t_bump[env_ids] = 0.0
         self.tau_f[env_ids] = 0.0
-        self.queue[env_ids] = 0.0
+        ff0 = 0.5 * self.m_pend * 9.81                              # 첫 명령이 도착하기 전: 바퀴 0, 다리 IDLE, 자중 보상
+        self.queue[env_ids] = torch.tensor([0.0, 0.0, c.idle_h, c.idle_h, ff0], device=self.device)
+        self.out[env_ids] = torch.tensor([0.0, 0.0, c.idle_h, c.idle_h, ff0, ff0], device=self.device)
+        self.arrive[env_ids] = -1e9
+        self.bus_down[env_ids] = False
+        self.s_fresh[env_ids] = True
         self._raw[env_ids] = 0.0
         self._prev_raw[env_ids] = 0.0
         n = self.bias[env_ids].shape[0]
@@ -129,7 +151,29 @@ class ResidualCtrlAction(ActionTerm):
             wa.velocity_limit[env_ids] = self.vlim0[env_ids] * kv[:, None]
             if hasattr(wa, "_vel_at_effort_lim") and torch.is_tensor(wa._vel_at_effort_lim):
                 wa._vel_at_effort_lim[env_ids] = wa.velocity_limit[env_ids] * (1 + wa.effort_limit[env_ids] / wa._saturation_effort)
-        self.delay[env_ids] = int(round(c.delay_ms / 5.0))
+        self.d_base[env_ids] = ((c.delay_ms + (torch.rand(n, 4, device=dev) * 2 - 1) * c.delay_asym_ms) * 1e-3).clamp(min=0.0).double()
+        self.d_imu[env_ids] = torch.rand(n, device=dev) * c.imu_delay_ms * 1e-3
+        self.d_fb[env_ids] = torch.rand(n, device=dev) * c.fb_delay_ms * 1e-3
+        self.ph_imu[env_ids] = torch.rand(n, device=dev) * c.imu_period_ms * 1e-3
+        self.ph_fb[env_ids] = torch.rand(n, device=dev) * c.fb_period_ms * 1e-3
+
+    @staticmethod
+    def _age(t_now, lat_ms, d_rand, period_ms, phase):
+        base = lat_ms * 1e-3 + d_rand
+        if period_ms <= 0:
+            return base
+        P = period_ms * 1e-3
+        return base + torch.remainder(t_now - base - phase, P)
+
+    def _delayed(self, d_s, c0, c1):
+        """센서 기록에서 로봇마다 d_s [s] 전 값 (스텝 사이 선형 보간)."""
+        st = d_s / self.dt
+        i0 = st.floor().long().clamp(max=self.SR - 2)
+        f = (st - i0.float()).clamp(0.0, 1.0)[:, None]
+        n_ = torch.arange(self.num_envs, device=self.device)
+        a = self.sring[n_, (self.s_head - i0) % self.SR, c0:c1]
+        b = self.sring[n_, (self.s_head - i0 - 1) % self.SR, c0:c1]
+        return a * (1 - f) + b * f
 
     # ------------------------------------------------------------------------------------------------
     def _interp_K(self, l):
@@ -150,17 +194,31 @@ class ResidualCtrlAction(ActionTerm):
         vx_c, wz_c = cmd[:, 0], cmd[:, 1]
         # --- 센서 (실기: IMU 자세·자이로, 관절·바퀴 엔코더, 고관절 전류) ---
         g = d.projected_gravity_b
-        tn = math.radians(c.imu_tilt_noise_deg)
-        pitch = torch.asin(g[:, 0].clamp(-1, 1)) + self.bias[:, 0] + tn * torch.randn_like(g[:, 0])
-        roll = torch.asin(g[:, 1].clamp(-1, 1)) + self.bias[:, 1] + tn * torch.randn_like(g[:, 0])
-        gyro = d.root_ang_vel_b + c.imu_gyro_noise * torch.randn_like(d.root_ang_vel_b)
         q = d.root_quat_w
         psi = torch.atan2(2 * (q[:, 0] * q[:, 3] + q[:, 1] * q[:, 2]), 1 - 2 * (q[:, 2] ** 2 + q[:, 3] ** 2))
         lat = torch.stack([-torch.sin(psi), torch.cos(psi), torch.zeros_like(psi)], 1)
-        wabs = (d.body_ang_vel_w[:, self.wheel_bodies] * lat[:, None]).sum(-1) + c.enc_vel_noise * torch.randn(self.num_envs, 2, device=dev)
-        wj = d.joint_vel[:, self.wheel_ids] * self.wsign
-        tau_hip = d.applied_torque[:, self.leg_ids] * self.hip_sign          # + = 다리를 펴며 몸을 받침
-        sf = (d.body_lin_acc_w[:, 0] + torch.tensor([0.0, 0.0, 9.81], device=dev)).norm(dim=1) / 9.81
+        raw = torch.cat([torch.asin(g[:, 0:2].clamp(-1, 1)), d.root_ang_vel_b,
+                         ((d.body_lin_acc_w[:, 0] + torch.tensor([0.0, 0.0, 9.81], device=dev)).norm(dim=1) / 9.81)[:, None],
+                         (d.body_ang_vel_w[:, self.wheel_bodies] * lat[:, None]).sum(-1),
+                         d.joint_vel[:, self.wheel_ids] * self.wsign,
+                         d.applied_torque[:, self.leg_ids] * self.hip_sign], 1)             # (N, 12) 참값
+        self.s_head = (self.s_head + 1) % self.SR
+        self.sring[:, self.s_head] = raw
+        if bool(self.s_fresh.any()):                                         # 에피소드 첫 스텝: 과거를 지금 값으로 채움
+            self.sring[self.s_fresh] = raw[self.s_fresh][:, None, :].expand(-1, self.SR, -1)
+            self.s_fresh[:] = False
+        # 센서 나이 = 고정 지연 + 로봇별 추가 지연 + (주기 샘플링이면) 마지막 샘플 뒤 지난 시간. 샘플 사이엔 같은 값을 쥔다
+        t_now = self.t_ctrl + dt
+        imu = self._delayed(self._age(t_now, c.imu_latency_ms, self.d_imu, c.imu_period_ms, self.ph_imu), 0, 6)
+        fb = self._delayed(self._age(t_now, c.fb_latency_ms, self.d_fb, c.fb_period_ms, self.ph_fb), 6, 12)
+        tn = math.radians(c.imu_tilt_noise_deg)
+        pitch = imu[:, 0] + self.bias[:, 0] + tn * torch.randn_like(imu[:, 0])
+        roll = imu[:, 1] + self.bias[:, 1] + tn * torch.randn_like(imu[:, 0])
+        gyro = imu[:, 2:5] + c.imu_gyro_noise * torch.randn_like(imu[:, 2:5])
+        sf = imu[:, 5]
+        wabs = fb[:, 0:2] + c.enc_vel_noise * torch.randn(self.num_envs, 2, device=dev)
+        wj = fb[:, 2:4]
+        tau_hip = fb[:, 4:6]                                                 # + = 다리를 펴며 몸을 받침
         # --- 상태 추정 ---
         ax = d.body_pos_w[:, self.wheel_bodies].mean(1)
         c_nom = (d.body_com_pos_w[:, self.nonwheel] * self.m_nom[None, self.nonwheel, None]).sum(1) / self.m_pend
@@ -256,24 +314,41 @@ class ResidualCtrlAction(ActionTerm):
         on = (~L).float()[:, None]
         tau = (tau + on * res[:, :2] * c.res_wheel_nm).clamp(-c.wheel_tau_max, c.wheel_tau_max)
         h = (h + on * res[:, 2:] * c.res_leg_m).clamp(H_MIN, H_MAX)
-        # --- 지연 ---
+        # --- 명령 전달 (위 __init__ 설명) ---
+        N = self.num_envs
+        self.t_ctrl += dt
         self.head = (self.head + 1) % self.Q
         self.queue[:, self.head] = torch.cat([tau, h, ff[:, None]], 1)
-        # 지연: 기본 + 매 스텝 확률로 한 주기 더 (시험 세트 jitter 와 같음). 에피소드 내내 10 ms 고정은 기본 제어기가 못 버틴다
-        extra = (torch.rand(self.num_envs, device=dev) < c.delay_extra_prob).long()
-        idx = (self.head - self.delay - extra) % self.Q
-        self.out[:] = self.queue[torch.arange(self.num_envs, device=dev), idx]
+        self.send_t[self.head] = self.t_ctrl
+        jit = (torch.rand(N, 4, device=dev) < c.delay_extra_prob).double() * (c.jitter_ms * 1e-3)
+        rec = torch.rand(N, device=dev) < 1.0 / max(1.0, c.loss_burst_steps)               # 버스 정지는 평균 loss_burst_steps 스텝
+        self.bus_down = torch.where(self.bus_down, ~rec, torch.rand(N, device=dev) < c.loss_burst_prob)
+        drop = (torch.rand(N, 4, device=dev) < c.loss_frame_prob) | self.bus_down[:, None]
+        arr = self.t_ctrl + self.d_base + jit
+        self.arrive[:, self.head] = torch.where(drop, torch.full_like(arr, float("inf")), arr)
+        self.sub = 0
         # 관측용 내부값
         self.est[:] = torch.stack([th, v, v_ref, self.x_err, dlt, L.float(), self.motor_est, self.th_bias], 1)
 
     def apply_actions(self):
         r, c = self._asset, self.cfg
+        # 이 물리 스텝 시각까지 도착한 명령 중 가장 최근에 보낸 것 (모터별). 없으면 쥐고 있던 명령 그대로
+        now = self.t_ctrl + self.sub * self.dt_phys + 1e-7
+        self.sub += 1
+        ok = self.arrive <= now                                                          # (N, Q, 4)
+        best = torch.where(ok, self.send_t[None, :, None], torch.full_like(self.arrive, -1e18)).argmax(1)   # (N, 4)
+        n_ = torch.arange(self.num_envs, device=self.device)
+        qq = self.queue
+        new = torch.stack([qq[n_, best[:, 0], 0], qq[n_, best[:, 1], 1], qq[n_, best[:, 2], 2], qq[n_, best[:, 3], 3],
+                           qq[n_, best[:, 2], 4], qq[n_, best[:, 3], 4]], 1)
+        has = ok.any(1)[:, [0, 1, 2, 3, 2, 3]]
+        self.out[:] = torch.where(has, new, self.out)
         a = 1.0 - math.exp(-2 * math.pi * c.wheel_lpf_hz * self._env.physics_dt)
         self.tau_f += a * (self.out[:, :2] - self.tau_f)
         M = cad.M_from_hj(self.out[:, 2:4])
         r.set_joint_position_target(M, joint_ids=self.leg_ids)
         Mc = r.data.joint_pos[:, self.leg_ids]
-        leg_ff = self.hip_sign * self.out[:, 4:5] * cad.dh_from_M(Mc).to(torch.float32)
+        leg_ff = self.hip_sign * self.out[:, 4:6] * cad.dh_from_M(Mc).to(torch.float32)
         r.set_joint_effort_target(leg_ff, joint_ids=self.leg_ids)
         r.set_joint_effort_target(self.tau_f * self.wsign, joint_ids=self.wheel_ids)
 
@@ -329,8 +404,19 @@ class ResidualCtrlActionCfg(ActionTermCfg):
     imu_tilt_bias_deg: float = 0.5
     imu_gyro_noise: float = 0.01
     enc_vel_noise: float = 0.05
-    delay_ms: float = 5.0
-    delay_extra_prob: float = 0.4      # 매 스텝 한 주기 더 늦을 확률 (= climb_test jitter_ms 2 / 5 ms)
+    delay_ms: float = 5.0              # 명령 기본 지연 [ms] (센서 -> 모터). 2.5 ms (물리 주기) 해상도
+    delay_extra_prob: float = 0.4      # 모터·스텝마다 jitter_ms 만큼 더 늦을 확률 (= climb_test jitter_ms 2 / 5 ms)
+    jitter_ms: float = 5.0
+    delay_asym_ms: float = 1.0         # 모터별 기본 지연 편차 ± [ms] (에피소드마다)
+    loss_frame_prob: float = 0.01      # 모터·스텝마다 명령 프레임이 빠질 확률 (모터는 직전 명령을 쥔다)
+    loss_burst_prob: float = 0.002     # 스텝마다 버스가 멈출 확률 (네 모터 모두 명령이 안 감, 약 0.4 번/s)
+    loss_burst_steps: float = 4.0      # 버스 정지 평균 길이 [스텝] (4 = 20 ms)
+    imu_delay_ms: float = 5.0          # IMU 추가 지연 0 ~ 이 값 [ms] (로봇마다, 스텝 사이는 선형 보간)
+    fb_delay_ms: float = 2.5           # 모터 피드백 (엔코더·토크) 추가 지연 0 ~ 이 값 [ms]
+    imu_latency_ms: float = 0.0        # IMU 고정 지연 [ms] (iAHRS 내장 LPF 51.2 Hz 약 3 ms + USB 직렬)
+    imu_period_ms: float = 0.0         # IMU 출력 주기 [ms] (0 = 매 스텝 새 값). iAHRS sp
+    fb_latency_ms: float = 0.0         # 모터 피드백 고정 지연 [ms] (CAN 프레임 + 드라이버)
+    fb_period_ms: float = 0.0          # 모터 피드백 업로드 주기 [ms] (0 = 매 스텝). CubeMars 서보 모드 1~500 Hz, 지금 50 Hz [측정]
     dr_motor: float = 0.15
 
 
@@ -353,7 +439,7 @@ def privileged_obs(env: "ManagerBasedRLEnv", action_name: str = "ctrl") -> torch
     v, t = _true_v_th(env, action_name)
     d = t._asset.data
     return torch.cat([v[:, None], d.root_lin_vel_b, d.projected_gravity_b, d.root_ang_vel_b,
-                      t.motor_true[:, None] - 1.0, t.bias * 10.0, t.delay[:, None].float()], 1)
+                      t.motor_true[:, None] - 1.0, t.bias * 10.0, (t.d_base.mean(1, keepdim=True) / t.dt).float()], 1)   # 명령 지연 [스텝]
 
 
 def track_v_exp(env, std: float = 0.2, action_name: str = "ctrl"):

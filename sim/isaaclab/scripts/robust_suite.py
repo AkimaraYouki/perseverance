@@ -199,7 +199,7 @@ c0 = (d.body_com_pos_w[0, nonwheel] * m_nom[nonwheel, None]).sum(0) / m_pend
 iyy = robot.root_physx_view.get_inertias()[0][:, 4].to(dev)
 rel = d.body_com_pos_w[0, nonwheel] - c0
 I_pend = float((iyy[nonwheel] + m_nom[nonwheel] * (rel[:, 0] ** 2 + rel[:, 2] ** 2)).sum())
-lqr = lqr_vmc.WheelLQR(m_pend, I_pend, float(m_nom[wheel_bodies].sum()), 2 * 1.755e-3, R,
+lqr = lqr_vmc.WheelLQR(m_pend, I_pend, float(m_nom[wheel_bodies].sum()), 2 * cad.WHEEL_IZZ, R,
                        q=(P.lqr_qx, P.lqr_qv, P.lqr_qth, P.lqr_qthd), r=P.lqr_r)
 
 # --- 모델 오차 (로봇마다) ------------------------------------------------------------------------------
