@@ -49,6 +49,7 @@ TUNE = dict(
     vmc_kd=1.0,          # 다리 가상 댐퍼 [N·m·s/rad]
     roll_kp=3.0,         # roll 수평 P: 좌우 다리 길이 차 += roll_kp x 0.198 x sin(roll)
     roll_ki=30.0,        # roll 수평 I [1/s]
+    roll_rate_lpf_hz=8.0,  # roll D 항에 넣는 roll 각속도 저역통과 [Hz]. 필터 없이 D 0.6 + 지연 5 ms 면 다리가 발진 (3 mm/스텝 떨림 -> 넘어짐)
     roll_kd=0.6,         # roll 각속도 D [s]: 좌우 다리 길이 차 += roll_kd x 0.198 x roll rate (흔들림 감쇠)
     land_sf_min=0.4,     # 접지 판정에 IMU 비력 > 이 값 [g] 도 요구 (0 = 안 봄). 자유낙하 중 다리 토크 오판 방지용
     roll_leak=0.5,       # roll 적분 누설 [1/s] (약 2 s 에 걸쳐 0 쪽으로 — 한계에 붙어 있지 않게)
@@ -114,6 +115,20 @@ TUNE = dict(
     ridge_period=0.60,   # ridges 반복 주기 [m]
     ridge_lane=0.20,     # ridges 차선 폭 [m]. 차선마다 반 주기 엇갈림 -> 좌우 바퀴(간격 198 mm)가 번갈아 탄다
     ridge_len=5.0,       # ridges 길이 [m]
+    # --- 현실화 (시뮬을 실기 조건으로) ---
+    est="sensors",       # truth: 시뮬 정답 상태 | sensors: 실기처럼 IMU(잡음·바이어스) + 관절·바퀴 엔코더 + 명목 질량 모델로 추정
+    imu_tilt_noise_deg=0.3,   # 기울기 추정 잡음 σ [deg]
+    imu_tilt_bias_deg=0.5,    # 기울기 바이어스 (시작 때 ± 무작위) [deg]
+    imu_gyro_noise=0.01,      # 자이로 잡음 σ [rad/s]
+    enc_vel_noise=0.05,       # 바퀴 엔코더 속도 잡음 σ [rad/s]
+    v_lpf_hz=10.0,       # 속도 추정 저역통과 [Hz]: 바퀴 엔코더 속도는 바퀴 자체의 빠른 요동을 담는다 -> 걸러야 지연과 겹쳐 발진 안 함
+                         #   (필터 없이 센서 + 지연 5 ms 면 바퀴 속도 +-18 rad/s 발진 -> 넘어짐, 2026-09-26)
+    delay_ms=5.0,        # 제어 지연: 센서 -> 명령 적용 [ms] (200 Hz 한 주기 = 5 ms)
+    jitter_ms=2.0,       # 지연 흔들림: 가끔 한 주기 더 늦음 (확률 = jitter/5)
+    dr_mass=0.15,        # 몸통 질량 ± 비율 (제어기는 명목값을 믿음)
+    dr_com_cm=2.0,       # 몸통 무게중심 ± [cm] (x, z)
+    dr_motor=0.15,       # 바퀴 모터 토크·속도 한계 - 0~비율 (배터리 처짐)
+    dr_seed=0,           # 0 = 실행마다 무작위, 그 외 = 고정 시드
     # --- 화면 ---
     render_hz=50.0,      # 창 렌더 주기 [Hz]. 낮출수록 창이 빨라진다 (재시작)
     physics_hz=400.0,    # 물리 주기 [Hz] (제어 200 Hz 의 배수, 재시작). 400 에서도 점프 착지 +17 mm, 삼각형길 통과 (800 과 같음)
@@ -129,7 +144,7 @@ TUNE = dict(
 POLICY = "logs/rsl_rl/wheeled_biped_balance/2026-09-25_18-24-20_rough_v3/model_7099.pt"   # 관측 25 균형 정책 (r3)
 # ==========================================================================================
 
-CHOICES = dict(ctrl=("policy", "lqr"), obstacle=("flat", "plateau", "stairs2", "ridges", "cad"), extract_wheels=("pd", "policy", "free"), pd_from=("extract", "fly"), hip=("dc", "ideal"))
+CHOICES = dict(est=("truth", "sensors"), ctrl=("policy", "lqr"), obstacle=("flat", "plateau", "stairs2", "ridges", "cad"), extract_wheels=("pd", "policy", "free"), pd_from=("extract", "fly"), hip=("dc", "ideal"))
 ap = argparse.ArgumentParser()
 ap.add_argument("--policy", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", POLICY))
 ap.add_argument("--mode", choices=("jump", "stance", "none"), default="jump")
@@ -364,7 +379,7 @@ legs_act = robot.actuators["legs"]
 import numpy as _np  # noqa: E402
 import lqr_vmc  # noqa: E402
 _nonwheel = [i for i in range(robot.num_bodies) if i not in wheel_bodies]
-_mass = robot.root_physx_view.get_masses()[0].to(dev)
+_mass = robot.root_physx_view.get_masses()[0].clone().to(dev)    # 명목 질량 (복사! 모델 오차가 바꾸지 않게)
 _m_pend = float(_mass[_nonwheel].sum()); _m_w = float(_mass[wheel_bodies].sum())
 _I_w = 2 * 1.755e-3                                                   # URDF l_wheel izz (회전자 반사관성 포함) x 2
 lqr = None
@@ -381,9 +396,46 @@ def build_lqr():
     return I
 
 
+SENSE = dict(pitch=0.0, roll=0.0, gx=0.0, gy=0.0, gz=0.0, wl=0.0, wr=0.0)
+VF = dict(v=0.0)                                                      # 속도 추정 필터 상태
+RF = dict(r=0.0)                                                      # roll 각속도 필터 상태 (roll D 항용)
+_rng = np.random.default_rng(int(args.dr_seed) if args.dr_seed else None)
+_bias = _rng.uniform(-1, 1, 2) * math.radians(args.imu_tilt_bias_deg)      # (pitch, roll) 바이어스
+
+
+def sense():
+    """실기 센서: IMU 기울기(잡음+바이어스), 자이로(잡음), 바퀴 엔코더 속도(+y 규약, 잡음). truth 면 잡음 없이."""
+    d = robot.data
+    g = d.projected_gravity_b[0]
+    p_, r_ = math.asin(max(-1.0, min(1.0, float(g[0])))), math.asin(max(-1.0, min(1.0, float(g[1]))))
+    w = d.root_ang_vel_b[0]
+    wv = (d.joint_vel[0, wheel_ids] * wsign).tolist()
+    if args.est == "sensors":
+        n = _rng.normal
+        tn, gn, en = math.radians(args.imu_tilt_noise_deg), args.imu_gyro_noise, args.enc_vel_noise
+        SENSE.update(pitch=p_ + _bias[0] + n(0, tn), roll=r_ + _bias[1] + n(0, tn), gx=float(w[0]) + n(0, gn),
+                     gy=float(w[1]) + n(0, gn), gz=float(w[2]) + n(0, gn), wl=wv[0] + n(0, en), wr=wv[1] + n(0, en))
+    else:
+        SENSE.update(pitch=p_, roll=r_, gx=float(w[0]), gy=float(w[1]), gz=float(w[2]), wl=wv[0], wr=wv[1])
+
+
 def lqr_state():
     """(진자각 θ, 각속도, 진자 길이 l, 바퀴 진행 속도 v, yaw rate). 실기: IMU + 다리 기구학 + 바퀴 엔코더."""
     d = robot.data
+    if args.est == "sensors":
+        # 무게중심의 몸체 좌표 위치 = 관절각으로 정해지는 기구학 (실기: URDF 순기구학) + 명목 질량. 기울기는 IMU.
+        from isaaclab.utils.math import quat_apply_inverse
+        c = (d.body_com_pos_w[0, _nonwheel] * _mass[_nonwheel, None]).sum(0) / _m_pend
+        ax = d.body_pos_w[0, wheel_bodies].mean(0)
+        rb = quat_apply_inverse(d.root_quat_w[0:1], (c - ax)[None])[0].tolist()
+        th = SENSE["pitch"] + math.atan2(rb[0], rb[2])
+        thd = SENSE["gy"]
+        v_raw = R * (0.5 * (SENSE["wl"] + SENSE["wr"]) + thd)      # 바퀴 절대 회전 = 관절 + 몸체 pitch 회전
+        if args.v_lpf_hz > 0:
+            VF["v"] += (1.0 - math.exp(-2 * math.pi * args.v_lpf_hz * dt)) * (v_raw - VF["v"])
+        else:
+            VF["v"] = v_raw
+        return th, thd, math.sqrt(sum(x * x for x in rb)), VF["v"], SENSE["gz"]
     c = (d.body_com_pos_w[0, _nonwheel] * _mass[_nonwheel, None]).sum(0) / _m_pend
     ax = d.body_pos_w[0, wheel_bodies].mean(0)
     psi = yaw_of(d.root_quat_w[0]); f = (math.cos(psi), math.sin(psi))
@@ -396,6 +448,31 @@ def lqr_state():
 
 
 roll_pi = lqr_vmc.RollPI()
+
+
+def apply_dr():
+    """실제 로봇이 명목 모델과 다름: 몸통 질량·무게중심, 바퀴 모터 한계. 제어기(_mass, 18.85)는 명목값 그대로."""
+    msg = []
+    view = robot.root_physx_view
+    idx = torch.arange(1, device="cpu")
+    if args.dr_mass > 0:
+        m = view.get_masses().clone(); k = 1.0 + _rng.uniform(-1, 1) * args.dr_mass
+        m[0, 0] *= k; view.set_masses(m, idx); msg.append(f"몸통 질량 x{k:.2f}")
+    if args.dr_com_cm > 0:
+        c = view.get_coms().clone(); dx, dz = _rng.uniform(-1, 1, 2) * args.dr_com_cm / 100.0
+        c[0, 0, 0] += dx; c[0, 0, 2] += dz; view.set_coms(c, idx); msg.append(f"무게중심 x{dx*100:+.1f} z{dz*100:+.1f} cm")
+    if args.dr_motor > 0:
+        wa = robot.actuators["wheels"]; k = 1.0 - _rng.uniform(0, 1) * args.dr_motor
+        wa.velocity_limit = wa.velocity_limit * k if torch.is_tensor(wa.velocity_limit) else wa.velocity_limit * k
+        if hasattr(wa, "_saturation_effort"):
+            wa._saturation_effort = wa._saturation_effort * k
+        msg.append(f"바퀴 모터 한계 x{k:.2f}")
+    print("[모델 오차] " + (", ".join(msg) if msg else "없음") + f" | 추정 {args.est}, 지연 {args.delay_ms:.0f}+{args.jitter_ms:.0f} ms", flush=True)
+    return msg
+
+
+DR_MSG = apply_dr()
+
 kp0, kd0 = legs_act.stiffness.clone(), legs_act.damping.clone()
 kp0[:], kd0[:] = args.leg_kp, args.leg_kd
 
@@ -540,7 +617,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
     for kk, pl in plots.items():
         pl.set_data(*hist[kk])
 
-RESTART = ("render_hz", "physics_hz", "color_body", "color_legs", "color_wheels", "spawn_z", "obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
+RESTART = ("dr_mass", "dr_com_cm", "dr_motor", "dr_seed", "imu_tilt_bias_deg", "render_hz", "physics_hz", "color_body", "color_legs", "color_wheels", "spawn_z", "obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
            "ridge_lane", "ridge_len", "cad_file", "cad_unit")   # 장면을 다시 만들어야 해서 재시작 필요
 CLI_KEYS = {k for k in TUNE if f"--{k}" in sys.argv}                        # 명령줄로 준 값은 파일보다 우선
 
@@ -635,6 +712,23 @@ def check_leg_osc(t):
         dump_ring("leg_osc")
 
 
+ACTQ = collections.deque(maxlen=16)
+EST = dict(th=0.0, thd=0.0, v=0.0)
+
+
+def true_v():
+    d = robot.data
+    psi = yaw_of(d.root_quat_w[0]); vw = d.body_lin_vel_w[0, wheel_bodies].mean(0).tolist()
+    return vw[0] * math.cos(psi) + vw[1] * math.sin(psi)
+
+
+def true_th():
+    """실제 질량으로 구한 진자각 (모델 오차 포함 실제값)."""
+    d = robot.data
+    mt = robot.root_physx_view.get_masses()[0].to(dev)
+    c = (d.body_com_pos_w[0, _nonwheel] * mt[_nonwheel, None]).sum(0) / mt[_nonwheel].sum()
+    r = (c - d.body_pos_w[0, wheel_bodies].mean(0)).tolist(); psi = yaw_of(d.root_quat_w[0])
+    return math.atan2(r[0] * math.cos(psi) + r[1] * math.sin(psi), r[2])
 PROF = dict(ctrl=0.0, step=0.0, hud=0.0, sleep=0.0, n=0)
 
 
@@ -758,7 +852,10 @@ def episode():
         h_ref = float(cmd.command[0, 2])
         if args.ctrl == "lqr":                                     # 정책 대신 LQR (바퀴) + VMC (다리)
             act = torch.zeros_like(act)
+            sense()
             th, thd, l_p, v_now, wz_now = lqr_state()
+            RF["r"] += (1.0 - math.exp(-2 * math.pi * args.roll_rate_lpf_hz * dt)) * (-SENSE["gx"] - RF["r"]) if args.roll_rate_lpf_hz > 0 else (-SENSE["gx"] - RF["r"])
+            EST.update(th=th, thd=thd, v=v_now)
             ffF = 0.0
             if phase in ("drive", "retract", "extract", "land"):
                 th_ref = math.radians(args.retract_lean) if phase == "retract" else 0.0
@@ -812,11 +909,11 @@ def episode():
                 legs_act.stiffness[:] = args.vmc_kp; legs_act.damping[:] = args.vmc_kd
                 roll_pi.reset(0.0); x_err = 0.0; gov.update(i=0.0, ref=0.0, vf=0.0)
             elif phase == "drive":
-                rl = math.asin(max(-1.0, min(1.0, float(d.projected_gravity_b[0, 1]))))
+                rl = SENSE["roll"]
                 airborne = float(tau.abs().min()) < args.contact_tau_min
                 dlt = roll_pi(rl, dt, args.roll_kp, args.roll_ki, args.level_max,
                               freeze=airborne or abs(math.degrees(rl)) > args.roll_freeze_deg, leak=args.roll_leak,
-                              rate=-float(d.root_ang_vel_b[0, 0]), kd=args.roll_kd)
+                              rate=RF["r"], kd=args.roll_kd)
                 tl = min(H_MAX, max(H_MIN, args.idle_h + 0.5 * dlt)); tr = min(H_MAX, max(H_MIN, args.idle_h - 0.5 * dlt))
                 act[0, 0], act[0, 1] = (tl - h_ref) / 0.12, (tr - h_ref) / 0.12
                 legs_act.stiffness[:] = args.vmc_kp; legs_act.damping[:] = args.vmc_kd
@@ -844,9 +941,12 @@ def episode():
                 if not args.air_ctrl:
                     act[0, 2:] = 0.0
                 else:                                              # 바퀴 +y 토크 u -> 몸통에 -u. 뒤로 젖혀지면(pitch<0) 바퀴를 감속
-                    pitch = math.asin(max(-1.0, min(1.0, float(d.projected_gravity_b[0, 0]))))
+                    if args.ctrl == "lqr":                         # 센서 추정값 (sense() 는 LQR 블록에서 이번 스텝에 불림)
+                        pitch, gy = SENSE["pitch"], SENSE["gy"]
+                    else:
+                        pitch, gy = math.asin(max(-1.0, min(1.0, float(d.projected_gravity_b[0, 0])))), float(d.root_ang_vel_b[0, 1])
                     ref = args.extract_pitch if phase == "extract" else args.air_pitch
-                    u = args.air_kp * (pitch - math.radians(ref)) + args.air_kd * float(d.root_ang_vel_b[0, 1])
+                    u = args.air_kp * (pitch - math.radians(ref)) + args.air_kd * gy
                     act[0, 2:] = max(-1.0, min(1.0, u / args.air_tau))   # 두 바퀴 같은 값 (+y 규약, 좌우 부호는 액션 항이 처리)
         if args.level_rate > 0 and phase == "drive" and args.mode != "stance" and args.ctrl == "policy":
             # 로그의 roll = asin(g_y) > 0 이면 왼쪽(+y)이 낮다 -> 왼다리를 늘린다
@@ -872,6 +972,10 @@ def episode():
             elif t >= args.hand[1] and stats.get("grab") is not None:
                 robot.set_external_force_and_torque(torch.zeros(1, 1, 3, device=dev), torch.zeros(1, 1, 3, device=dev), body_ids=[0])
                 stats["grab"] = None
+        if args.delay_ms > 0 or args.jitter_ms > 0:                 # 제어 지연 (+ 가끔 한 주기 더)
+            ACTQ.append(act.clone())
+            dly = int(round(args.delay_ms / 5.0)) + (1 if _rng.random() < args.jitter_ms / 5.0 else 0)
+            act = ACTQ[max(0, len(ACTQ) - 1 - dly)]
         _t1 = time.perf_counter()
         obs, _, term, _, _ = env.step(act)
         _t2 = time.perf_counter()
@@ -927,7 +1031,8 @@ def episode():
                         roll=math.degrees(math.asin(max(-1, min(1, float(g[1]))))),
                         hl=float(h_now[0]), hr=float(h_now[1]), tau_l=float(tau[0]), tau_r=float(tau[1]),
                         w_l=float(mvel[0]), w_r=float(mvel[1]),
-                        tw_l=float(d.applied_torque[0, wheel_ids[0]] * wsign[0]), vw_l=float(d.joint_vel[0, wheel_ids[0]] * wsign[0])))
+                        tw_l=float(d.applied_torque[0, wheel_ids[0]] * wsign[0]), vw_l=float(d.joint_vel[0, wheel_ids[0]] * wsign[0]),
+                        th_est=EST["th"], thd_est=EST["thd"], v_est=EST["v"], v_true=true_v(), th_true=true_th()))
         if rec is not None and k % rec_every == 0:
             rec.append_data(np.asarray(env.render())[..., :3])
     return judge(log, jumps, fell, fell_t)
