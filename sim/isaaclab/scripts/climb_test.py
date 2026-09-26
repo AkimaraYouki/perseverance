@@ -95,6 +95,7 @@ TUNE = dict(
     ridge_lane=0.20,     # ridges 차선 폭 [m]. 차선마다 반 주기 엇갈림 -> 좌우 바퀴(간격 198 mm)가 번갈아 탄다
     ridge_len=5.0,       # ridges 길이 [m]
     # --- 기타 ---
+    spawn_z=0.30,        # 출발할 때 바퀴 바닥 높이 [m] — 공중에서 떨어뜨려 시작 (사용자 2026-09-26). 0 = 바닥에 닿게
     hip="dc",            # dc (토크-속도 모델) | ideal
     hip_w0=None,         # 고관절 무부하 속도 [rad/s] (24 V 33.5, 6S 처짐 21 V 29.3). None = 33.5
     seconds=8.0,
@@ -240,6 +241,8 @@ if args.obstacle == "cad" and args.mode in ("jump", "none"):
                                           init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, 0.0)))
     _p = cfg.scene.robot.init_state.pos                                  # 바퀴 가운데 = 루트 y - 0.08 -> CAD Y 0 에 맞춘다
     cfg.scene.robot.init_state.pos = (_p[0], _p[1] + 0.08, _p[2])
+_p = cfg.scene.robot.init_state.pos                                   # 공중 스폰: 바퀴 바닥이 spawn_z 에 오게
+cfg.scene.robot.init_state.pos = (_p[0], _p[1], _p[2] + args.spawn_z)
 if not args.headless and not args.record:
     cfg.sim.render_interval = cfg.decimation * 4                      # 창: 렌더 50 Hz (200 Hz 마다 그리면 실시간의 0.17 배)
 if True:                                                              # 옆에서 로봇을 따라가는 카메라 (창·녹화 공통)
@@ -465,7 +468,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
     for kk, pl in plots.items():
         pl.set_data(*hist[kk])
 
-RESTART = ("obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
+RESTART = ("spawn_z", "obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
            "ridge_lane", "ridge_len", "cad_file", "cad_unit")   # 장면을 다시 만들어야 해서 재시작 필요
 CLI_KEYS = {k for k in TUNE if f"--{k}" in sys.argv}                        # 명령줄로 준 값은 파일보다 우선
 
