@@ -111,9 +111,11 @@ TUNE = dict(
     t_tuck=0.12,         # 이륙 뒤 다리를 최대로 접어 두는 시간 [s]. 그 뒤 착지 길이로 부드럽게 편다
     air_ctrl=True,       # False = Ascento 원형 (공중 바퀴 토크 0) -> 뒤로 -190 deg/s 로 넘어갔다
     pd_from="extract",   # 바퀴 pitch PD 를 켜는 단계: extract | fly
-    air_pitch=-10.0,     # 공중 pitch 목표 [deg]. 음수 = 뒤로 젖힘 -> 몸 아래 바퀴가 앞으로 나간다
+    air_pitch=-5.0,      # 공중 pitch 목표 [deg]. 음수 = 뒤로 젖힘 -> 몸 아래 바퀴가 앞으로 나간다 (-10 -> -5, land_pitch 0, air_kd 5: 상자 8 cm 39/48 -> 45/48, 2026-09-27)
+    land_pitch=0.0,      # 하강(다리 펴며 착지 준비) 중 pitch 목표 [deg]. -10 (air_pitch 와 같게) 이면 뒤로 기운 채 착지해 턱에서 굴러떨어짐
+                         #   턱에서 굴러떨어짐 (2단 턱 녹화 3 번 중 2 번, 착지 pitch -24 / -39 deg, 2026-09-27)
     air_kp=30.0,         # [N·m/rad, 바퀴 하나]
-    air_kd=3.0,          # [N·m·s/rad, 바퀴 하나]
+    air_kd=5.0,          # [N·m·s/rad, 바퀴 하나] (3 -> 5: 이륙 때 뒤로 도는 걸 더 잘 잡음. 뒤로 떨어지는 점프는 착지 pitch -23 deg)
     air_tau=7.0,         # PD 구간 바퀴 토크 한계 [N·m] (AK45-10 피크. 평소 정책은 1.5)
     # --- 5 land: 착지 ---
     h_land=0.1825,       # 착지 다리 길이 [m] (행정 0.1225 ~ 0.2425). idle_h 와 같게 = 압축 행정 최대
@@ -1132,7 +1134,7 @@ def episode():
                         pitch, gy = SENSE["pitch"], SENSE["gy"]
                     else:
                         pitch, gy = math.asin(max(-1.0, min(1.0, float(d.projected_gravity_b[0, 0])))), float(d.root_ang_vel_b[0, 1])
-                    ref = args.extract_pitch if phase == "extract" else args.air_pitch
+                    ref = args.extract_pitch if phase == "extract" else (args.land_pitch if phase == "descend" else args.air_pitch)
                     u = args.air_kp * (pitch - math.radians(ref)) + args.air_kd * gy
                     act[0, 2:] = max(-1.0, min(1.0, u / args.air_tau))   # 두 바퀴 같은 값 (+y 규약, 좌우 부호는 액션 항이 처리)
         if args.level_rate > 0 and phase == "drive" and args.mode != "stance" and args.ctrl == "policy":

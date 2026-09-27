@@ -129,13 +129,17 @@ class WBController:
                 self.phase, self.t_phase = "extract", t
             elif self.phase == "extract" and (float(np.min(f.h)) >= H_MAX - 0.008 or tp >= 0.25):
                 self.phase, self.t_phase = "fly", t
-                self.jumps[-1].update(t_takeoff=t, x_takeoff=f.wx)
+                self.jumps[-1].update(t_takeoff=t, x_takeoff=f.wx, pitch_takeoff=round(math.degrees(S["pitch"]), 1))
+                self.air_pmin = 99.0
             elif self.phase == "fly" and tp >= P.t_tuck:
                 self.phase, self.t_phase = "descend", t
                 self.soft = True
             elif self.phase == "descend" and ((tp > 0.04 and float(np.max(np.abs(f.tau_hip))) > P.contact_tau)
                                               or t - self.jumps[-1]["t_takeoff"] >= P.t_fly_max):
-                self.jumps[-1].update(t_land=t, x_land=f.wx, wheel_bottom=f.wheel_z_min)
+                self.jumps[-1].update(t_land=t, x_land=f.wx, wheel_bottom=f.wheel_z_min,
+                                      pitch_land=round(math.degrees(S["pitch"]), 1), pitch_min_air=round(self.air_pmin, 1),
+                                      v_land=round(float(f.truth_v), 2),                        # 몸(바퀴축) 전진 속도
+                                      wheel_v_land=round(float(np.mean(f.w_wheel_abs)) * R_WHEEL, 2))   # 바퀴 둘레 속도 (같으면 미끄럼 없음)
                 self.phase, self.t_phase = "land", t
             elif self.phase == "land" and tp >= P.land_s:
                 self.soft = False
@@ -145,6 +149,8 @@ class WBController:
             if self.next_edge >= len(self.edges) and f.wx >= self.edges[-1] + 0.25:
                 vx = 0.0                                        # 마지막 모서리 넘어 0.25 m 더 들어간 뒤 멈춘다 (모서리에 서면 굴러 내려옴, 0.4 면 1 m 평대를 지나침)
 
+        if self.phase in ("fly", "descend"):
+            self.air_pmin = min(getattr(self, "air_pmin", 99.0), math.degrees(S["pitch"]))
         ffF = 0.0
         if self.phase in ("drive", "retract", "extract", "land"):
             th_ref = math.radians(P.retract_lean) if self.phase == "retract" else 0.0
@@ -225,7 +231,7 @@ class WBController:
             act[0] = act[1] = (tgt - h_ref) / 0.12
             pd = ("fly", "descend") if P.pd_from == "fly" or P.extract_wheels != "pd" else ("extract", "fly", "descend")
             if self.phase in pd and P.air_ctrl:
-                ref = P.extract_pitch if self.phase == "extract" else P.air_pitch
+                ref = P.extract_pitch if self.phase == "extract" else (getattr(P, "land_pitch", P.air_pitch) if self.phase == "descend" else P.air_pitch)
                 u = P.air_kp * (S["pitch"] - math.radians(ref)) + P.air_kd * S["gy"]
                 act[2] = act[3] = max(-1.0, min(1.0, u / P.air_tau))
             elif self.phase in pd:
