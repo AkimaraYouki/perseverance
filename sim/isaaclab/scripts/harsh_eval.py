@@ -43,7 +43,9 @@ ap.add_argument("--hw", choices=("none", "now", "plan"), default="none",
                 help="실기 통신·센서 추정 (docs/lab-meeting 하드웨어·통신 문서 기준): now = 모터 피드백 500 Hz·IMU 200 Hz·일반 커널, "
                      "plan = 피드백 500 Hz·IMU 500 Hz·실시간 스레드. 명령·손실 값도 바뀜 (--ctrl 로 덮어쓰기 가능)")
 ap.add_argument("--terrains", default=None, help="이 지형만 (쉼표), 예: oneside")
-ap.add_argument("--suite", choices=("all", "rough"), default="all", help="rough = 자동 주행 험지 11 종 (돌·자갈·파도·요철·경사)")
+ap.add_argument("--suite", choices=("all", "rough", "slope"), default="all",
+                help="rough = 자동 주행 험지 (돌·자갈·파도·요철·경사), slope = 경사 한계 (오르막·내리막, 기울기 0 ~ --slope_max)")
+ap.add_argument("--slope_max", type=float, default=1.0, help="--suite slope: 난이도 9 의 기울기 (1.0 = 45 deg)")
 ap.add_argument("--trace", type=int, default=0, help="넘어진 로봇 N 대의 넘어지기 전 2 s 기록을 npz 로")
 ap.add_argument("--trace_min_t", type=float, default=2.5, help="이 시각 뒤 넘어짐만 추적 (앞은 출발 착지)")
 ap.add_argument("--ctrl", nargs="*", default=[], metavar="KEY=VAL", help="기본 제어기 설정 덮어쓰기")
@@ -83,6 +85,23 @@ def _stones(difficulty, c):
     return np.rint(z / c.vertical_scale).astype(np.int16)
 
 
+@height_field_to_mesh
+def _ramp(difficulty, c):
+    """평평한 직선 경사로: 칸 가운데(출발) 앞 1 m 부터 +x 로 기울기 slope 인 평면 (y 방향 기울기 0). down 이면 내리막."""
+    nx, ny = int(c.size[0] / c.horizontal_scale), int(c.size[1] / c.horizontal_scale)
+    slope = c.slope_range[0] + difficulty * (c.slope_range[1] - c.slope_range[0])
+    x = np.arange(nx) * c.horizontal_scale
+    z = slope * np.clip(x - (c.size[0] / 2 + 1.0), 0.0, None) * (-1.0 if c.down else 1.0)
+    return np.rint(np.repeat(z[:, None], ny, 1) / c.vertical_scale).astype(np.int16)
+
+
+@configclass
+class RampCfg(HfTerrainBaseCfg):
+    function = _ramp
+    slope_range: tuple = (0.0, 1.0)
+    down: bool = False
+
+
 @configclass
 class StonesCfg(HfTerrainBaseCfg):
     function = _stones
@@ -99,8 +118,9 @@ EVAL_TERRAINS = T.ROUGH_TERRAINS_CFG.replace(
         "oneside": StonesCfg(proportion=0.1, kind="oneside", h_range=(0.03, 0.12), **T._HF),
         "ridges_cad": T.StaggeredRidgesTerrainCfg(proportion=0.1, height_range=(0.02, 0.09), base=0.5, period=0.5, lane_w=0.5, **T._HF),
         "ridges_narrow": T.StaggeredRidgesTerrainCfg(proportion=0.1, height_range=(0.02, 0.09), base=0.35, period=0.6, lane_w=0.2, **T._HF),
-        "slope_up": R["slope_up"].replace(proportion=0.1, slope_range=(0.0, 0.30)),
-        "slope_down": R["slope_down"].replace(proportion=0.1, slope_range=(0.0, 0.30)),
+        # 가운데에서 바깥으로 달리므로: 역피라미드(R["slope_down"]) = 오르막, 피라미드(R["slope_up"]) = 내리막 (2026-09-27 전엔 이름이 반대였음)
+        "slope_up": R["slope_down"].replace(proportion=0.1, slope_range=(0.0, 0.30)),
+        "slope_down": R["slope_up"].replace(proportion=0.1, slope_range=(0.0, 0.30)),
         "step_down": T.MeshPyramidStairsTerrainCfg(proportion=0.1, step_height_range=(0.02, 0.09), step_width=1.0,
                                                    platform_width=2.0, border_width=0.0),
         "bumps": R["bumps"].replace(proportion=0.1),
@@ -120,8 +140,16 @@ if args.suite == "rough":                # 자동 주행 험지 (사용자: 삼�
         "wave_short": R["wave_short"].replace(proportion=1.0),          # 파도 0~6 cm, 8 개
         "bumps": R["bumps"].replace(proportion=1.0),                    # 1~4 cm 턱 0.3~1 m
         "blocks": StonesCfg(proportion=1.0, kind="gravel", h_range=(0.01, 0.04), **T._HF),   # 10 cm 블록 0~1~4 cm, 수직 모서리 (영상에서 넘어진 지형)
-        "slope_up": R["slope_up"].replace(proportion=1.0, slope_range=(0.0, 0.30)),
-        "slope_down": R["slope_down"].replace(proportion=1.0, slope_range=(0.0, 0.30)),
+        # 가운데에서 바깥으로 달리므로: 역피라미드(R["slope_down"]) = 오르막, 피라미드(R["slope_up"]) = 내리막 (2026-09-27 전엔 이름이 반대였음)
+        "slope_up": R["slope_down"].replace(proportion=1.0, slope_range=(0.0, 0.30)),
+        "slope_down": R["slope_up"].replace(proportion=1.0, slope_range=(0.0, 0.30)),
+    })
+if args.suite == "slope":               # 가운데 평대(2 m)에서 바깥으로 달린다. 역피라미드 = 오르막, 피라미드 = 내리막
+    # 평평한 직선 경사로 (+x). 피라미드 경사는 축에서 조금만 벗어나도 옆 기울기가 커서 로봇이 경사 아래로 돌아 옆으로 달림
+    #   (0.4 m/s 10~15 deg 에서 꼭대기 도달 35 %, 방향 틀어짐 중앙 36 deg) -> --yaw0 과 함께 쓴다
+    EVAL_TERRAINS = EVAL_TERRAINS.replace(num_cols=2, sub_terrains={
+        "uphill": RampCfg(proportion=1.0, slope_range=(0.0, args.slope_max), down=False, border_width=0.0),
+        "downhill": RampCfg(proportion=1.0, slope_range=(0.0, args.slope_max), down=True, border_width=0.0),
     })
 if args.terrains:
     keep = args.terrains.split(",")
@@ -169,6 +197,9 @@ if args.cmd == "course":
     cc.zero_vel_prob = cc.fast_turn_prob = cc.pure_axis_prob = 0.0
 if args.yaw0:
     e.reset_base.params["pose_range"]["yaw"] = (0.0, 0.0)
+if args.suite == "slope":
+    e.reset_base.params["pose_range"]["yaw"] = (0.0, 0.0)          # 경사로 방향 (+x) 정면
+    e.reset_base.params["pose_range"]["x"] = (0.0, 0.0)
 env = gym.make(TASK, cfg=cfg).unwrapped
 dev = env.device
 pol = None
@@ -224,6 +255,7 @@ RB = 200                                                                    # 1 
 ring = torch.zeros(env.num_envs, RB, 5, device=dev)
 home = t_.env_origins[:, :2].clone()
 out_n = 0
+left_any = torch.zeros(env.num_envs, dtype=torch.bool, device=dev)       # 자기 칸을 벗어남 = 완주 (경사: 꼭대기·바닥까지 감)
 TR = 400                                                                    # 추적 2 s
 TRN = ["wjL", "wjR", "wabsL", "wabsR", "hipL", "hipR", "tauL", "tauR", "hL", "hR", "pitch", "roll", "wz",
        "th_est", "v_est", "v_ref", "v_true", "lift", "hjL", "hjR", "wheel_zL", "wheel_zR"]
@@ -278,6 +310,7 @@ with torch.inference_mode():
                                     b[:, 40, 4]], 1)
         left = ~done & ((robot.data.root_pos_w[:, :2] - home).abs().max(1).values > 3.7) & ~f_
         out_n += int(left.sum())
+        left_any |= left
         done |= left                        # 자기 칸을 벗어남 = 그 칸 완주 (이웃 칸 벽에 부딪히는 것은 세지 않음)
         fell |= f_
         done |= term | trunc
@@ -319,6 +352,19 @@ p, lo, hi = wilson(S, N)
 print(f"  {'합계':14s} {S:5d}/{N:<5d}   {100*p:6.1f} %  [{100*lo:5.1f}, {100*hi:5.1f}]", flush=True)
 print("  난이도별: " + "  ".join(
     f"{lv}:{100*float((~fell[levels == lv]).float().mean()):.0f}%" for lv in range(nr) if int((levels == lv).sum()) > 0))
+if args.suite == "slope":
+    print("  지형 x 난이도 (난이도 L = 기울기 %.2f x [L/10, (L+1)/10) ):" % args.slope_max)
+    for j, n_ in enumerate(col_name):
+        cells = []
+        for lv in range(nr):
+            m_ = (types.cpu() == j) & (levels == lv)
+            if int(m_.sum()):
+                lo_a = math.degrees(math.atan(args.slope_max * lv / nr)); hi_a = math.degrees(math.atan(args.slope_max * (lv + 1) / nr))
+                la = left_any.cpu()[m_]
+                cells.append(f"{lo_a:4.1f}~{hi_a:4.1f}deg 안넘어짐 {100*float((~fell[m_]).float().mean()):5.1f}% 완주 {100*float(la.float().mean()):5.1f}%")
+        print(f"    {n_}")
+        for c_ in cells:
+            print(f"       {c_}")
 bins = [0.0, 0.35, 0.5, 0.65, 0.8, 1.01]
 if mu is not None:
     print("  바퀴 마찰별: " + "  ".join(

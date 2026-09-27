@@ -73,6 +73,7 @@ class ResidualCtrlAction(ActionTerm):
         self.gov_vf, self.gov_i, self.gov_ref, self.roll_i = z(), z(), z(), z()
         self.t_un, self.t_ld = z(), z()
         self.t_bump = torch.zeros(N, device=dev)                   # 턱 감속 남은 시간 [s]
+        self.tau_ff = torch.zeros(N, device=dev)                   # 경사 보상 바퀴 토크 [N·m] (속도 오차 적분)
         self.psi_ref = torch.zeros(N, device=dev)                  # 방향 유지 목표 yaw [rad] (명령 회전 속도를 적분)
         self.psi_fresh = torch.ones(N, dtype=torch.bool, device=dev)
         self.lift = torch.zeros(N, dtype=torch.bool, device=dev)
@@ -133,6 +134,7 @@ class ResidualCtrlAction(ActionTerm):
         self.lift[env_ids] = False
         self.t_bump[env_ids] = 0.0
         self.psi_fresh[env_ids] = True
+        self.tau_ff[env_ids] = 0.0
         self.tau_f[env_ids] = 0.0
         ff0 = 0.5 * self.m_pend * 9.81                              # 첫 명령이 도착하기 전: 바퀴 0, 다리 IDLE, 자중 보상
         self.queue[env_ids] = torch.tensor([0.0, 0.0, c.idle_h, c.idle_h, ff0], device=self.device)
@@ -264,17 +266,26 @@ class ResidualCtrlAction(ActionTerm):
         tgt = torch.maximum(torch.minimum(vx_c, v_lim), -v_lim)
         self.gov_ref += (tgt - self.gov_ref).clamp(-c.accel_max * dt, c.accel_max * dt)
         v_ref = self.gov_ref
-        self.x_err = torch.where(vx_c.abs() > v_lim + 1e-3, torch.zeros_like(self.x_err), self.x_err)
+        if c.xerr_reset:                   # 제한 중에는 거리 오차를 비움 (풀릴 때 튀지 않게). 끄면 긴 내리막에서 적분이 브레이크 토크를 쌓는다
+            self.x_err = torch.where(vx_c.abs() > v_lim + 1e-3, torch.zeros_like(self.x_err), self.x_err)
         # 바퀴 속도 푸시백: 모터 한계의 speed_guard 를 넘으면 목표를 지금 속도보다 낮춰 뒤로 젖히며 감속 (climb_test 와 같음)
         ww = wj.abs().max(1).values / w_max
         push = (ww > c.speed_guard) & (c.speed_guard < 1.0)
         cut = ((ww - c.speed_guard) / max(1e-6, 1.0 - c.speed_guard)).clamp(0.0, 1.0)
         v_ref = torch.where(push, torch.where(v * vx_c >= 0, v * (1.0 - 0.6 * cut), vx_c), v_ref)
-        self.x_err = torch.where(push, torch.zeros_like(self.x_err), self.x_err)
-        self.x_err = (self.x_err + (v - v_ref) * dt).clamp(-0.3, 0.3)
+        if c.xerr_reset:
+            self.x_err = torch.where(push, torch.zeros_like(self.x_err), self.x_err)
+        self.x_err = (self.x_err + (v - v_ref) * dt).clamp(-c.xerr_max, c.xerr_max)
         # --- LQR + 회전 ---
         K = self._interp_K(l_p)
         tau_w = -(K[:, 0] * self.x_err + K[:, 1] * (v - v_ref) + K[:, 2] * th + K[:, 3] * thd)
+        # 경사 보상 (slope_ff_k > 0): 경사에서 계속 필요한 바퀴 토크 (m g R sin(경사)) 를 속도 오차 적분으로 찾는다.
+        #   LQR 은 평지 모델이라 긴 내리막에서 속도가 붙어 바퀴가 모터 최고 속도에 닿으면 브레이크가 안 걸림
+        #   (평평한 내리막 13~17 deg 0.8 m/s 58 %). 들린 동안은 멈춤, 평지에선 0 근처
+        if c.slope_ff_k > 0:
+            ok_ff = (~self.lift) & (nl >= 1)
+            self.tau_ff = torch.where(ok_ff, (self.tau_ff + c.slope_ff_k * (v_ref - v) * dt).clamp(-c.slope_ff_max, c.slope_ff_max), self.tau_ff)
+            tau_w = tau_w + self.tau_ff
         if c.turn_limit:                   # 달릴 때 회전 한계 (창은 끔: 사람이 조심)
             wz_lim = torch.clamp((c.wheel_margin * w_max * cad.R_WHEEL - v.abs()) / HALF_TRACK, min=0.5)
             wz = torch.maximum(torch.minimum(wz_c, wz_lim), -wz_lim)
@@ -390,6 +401,10 @@ class ResidualCtrlActionCfg(ActionTermCfg):
     lqr_qx: float = 2.0; lqr_qv: float = 5.0; lqr_qth: float = 100.0; lqr_qthd: float = 5.0; lqr_r: float = 1.0  # noqa: E702
     wheel_tau_max: float = 7.0
     yaw_kd: float = 0.5
+    slope_ff_k: float = 0.0            # 경사 보상 적분 [N·m/(m/s)/s] (0 = 끔). 6 이면 안 넘어지지만 제자리에 서거나 돎 (평지 완주 30 %) -> 쓰지 말 것
+    xerr_max: float = 0.3              # LQR 거리 오차(속도 오차 적분) 한계 [m]
+    xerr_reset: bool = True            # 속도 제한·푸시백 때 거리 오차를 비울지
+    slope_ff_max: float = 3.0          # 경사 보상 한계 [N·m] (두 바퀴 합)
     yaw_kp: float = 0.0                # 방향 유지 [N·m/rad] (0 = 회전 속도만). 수직 모서리(블록·턱 3 km/h)에서 kp 3 이면 94 -> 84 %,
                                        #   조향을 세게 할수록 더 넘어진다 (kd 1.0: 78 %, 2.0: 21 %). 걸린 바퀴를 따라 도는 게 충격을 흘린다
     yaw_err_max: float = 0.5           # 방향 오차 한계 [rad]
