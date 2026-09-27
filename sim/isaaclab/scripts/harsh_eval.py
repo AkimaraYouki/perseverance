@@ -208,6 +208,8 @@ except Exception as ex_:                # 마찰 기록은 부가 정보 — 실
     mu = None
 fell = torch.zeros(env.num_envs, dtype=torch.bool, device=dev)
 fall_t = torch.full((env.num_envs,), float("nan"), device=dev)
+yaw0 = None
+yaw_dev = torch.zeros(env.num_envs, device=dev)                            # 첫 에피소드 동안 출발 방향에서 벗어난 최대 각 [rad]
 done = torch.zeros(env.num_envs, dtype=torch.bool, device=dev)             # 첫 에피소드가 끝났나
 nr, nc = t_.terrain_origins.shape[:2]
 org = t_.terrain_origins.reshape(-1, 3)[:, :2]
@@ -230,6 +232,11 @@ traces = []
 with torch.inference_mode():
     for k in range(int(args.seconds / env.step_dt)):
         here = torch.cdist(robot.data.root_pos_w[:, :2], org).argmin(1) % nc  # 지금 서 있는 칸의 종류 (열)
+        q_ = robot.data.root_quat_w
+        yw = torch.atan2(2 * (q_[:, 0] * q_[:, 3] + q_[:, 1] * q_[:, 2]), 1 - 2 * (q_[:, 2] ** 2 + q_[:, 3] ** 2))
+        if yaw0 is None:
+            yaw0 = yw.clone()
+        yaw_dev = torch.where(done, yaw_dev, torch.maximum(yaw_dev, torch.atan2(torch.sin(yw - yaw0), torch.cos(yw - yaw0)).abs()))
         cm = env.command_manager.get_command("base_velocity")
         wfr = robot.data.joint_vel[:, term_.wheel_ids].abs().max(1).values / (W_MAX0 * term_.motor_true)
         tilt = torch.rad2deg(torch.acos((-robot.data.projected_gravity_b[:, 2]).clamp(-1, 1)))
@@ -317,6 +324,8 @@ if mu is not None:
     print("  바퀴 마찰별: " + "  ".join(
     f"{lo_:.2f}~{min(hi_, 1.0):.2f}: {100*float((~fell[(mu >= lo_) & (mu < hi_)]).float().mean()):.1f}% ({int(((mu >= lo_) & (mu < hi_)).sum())})"
     for lo_, hi_ in zip(bins[:-1], bins[1:]) if int(((mu >= lo_) & (mu < hi_)).sum()) > 0))
+yd = np.degrees(yaw_dev.cpu().numpy())
+print(f"  출발 방향에서 벗어난 최대 각: 중앙 {np.median(yd):.0f} deg, 90 % {np.percentile(yd, 90):.0f} deg, 45 deg 넘음 {100*np.mean(yd > 45):.1f} %")
 ft = fall_t.cpu().numpy(); ft = ft[~np.isnan(ft)]
 if len(ft):
     print(f"  넘어진 시각: 2 s 안 {int((ft < 2).sum())}, 2~5 s {int(((ft >= 2) & (ft < 5)).sum())}, 5 s 뒤 {int((ft >= 5).sum())}")

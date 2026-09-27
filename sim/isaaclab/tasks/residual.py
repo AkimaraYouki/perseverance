@@ -73,6 +73,8 @@ class ResidualCtrlAction(ActionTerm):
         self.gov_vf, self.gov_i, self.gov_ref, self.roll_i = z(), z(), z(), z()
         self.t_un, self.t_ld = z(), z()
         self.t_bump = torch.zeros(N, device=dev)                   # 턱 감속 남은 시간 [s]
+        self.psi_ref = torch.zeros(N, device=dev)                  # 방향 유지 목표 yaw [rad] (명령 회전 속도를 적분)
+        self.psi_fresh = torch.ones(N, dtype=torch.bool, device=dev)
         self.lift = torch.zeros(N, dtype=torch.bool, device=dev)
         self.bias = torch.zeros(N, 2, device=dev)
         self.motor_true = torch.ones(N, device=dev)
@@ -130,6 +132,7 @@ class ResidualCtrlAction(ActionTerm):
             t_[env_ids] = 0.0
         self.lift[env_ids] = False
         self.t_bump[env_ids] = 0.0
+        self.psi_fresh[env_ids] = True
         self.tau_f[env_ids] = 0.0
         ff0 = 0.5 * self.m_pend * 9.81                              # 첫 명령이 도착하기 전: 바퀴 0, 다리 IDLE, 자중 보상
         self.queue[env_ids] = torch.tensor([0.0, 0.0, c.idle_h, c.idle_h, ff0], device=self.device)
@@ -275,7 +278,14 @@ class ResidualCtrlAction(ActionTerm):
             wz = torch.maximum(torch.minimum(wz_c, wz_lim), -wz_lim)
         else:
             wz = wz_c
-        tau_y = c.yaw_kd * (wz - gyro[:, 2])
+        # 방향 유지 (yaw_kp > 0): 목표 방향 = 명령 회전 속도의 적분. 한쪽 바퀴가 모서리에 걸려 몸이 돌면 되돌린다
+        #   (회전 속도만 맞추면 돌아간 방향 그대로 달린다). 오차는 yaw_err_max 로 자르고 목표를 끌어와 되감기 방지
+        self.psi_ref = torch.where(self.psi_fresh, psi, self.psi_ref + wz * dt)
+        self.psi_fresh[:] = False
+        e_psi = torch.atan2(torch.sin(self.psi_ref - psi), torch.cos(self.psi_ref - psi))
+        e_c = e_psi.clamp(-c.yaw_err_max, c.yaw_err_max)
+        self.psi_ref = psi + e_c
+        tau_y = c.yaw_kd * (wz - gyro[:, 2]) + c.yaw_kp * e_c
         tau = torch.stack([0.5 * tau_w - tau_y, 0.5 * tau_w + tau_y], 1)
         # --- 들림 / 착지 ---
         unl = tau_hip.max(1).values < c.contact_tau_min
@@ -378,6 +388,9 @@ class ResidualCtrlActionCfg(ActionTermCfg):
     lqr_qx: float = 2.0; lqr_qv: float = 5.0; lqr_qth: float = 100.0; lqr_qthd: float = 5.0; lqr_r: float = 1.0  # noqa: E702
     wheel_tau_max: float = 7.0
     yaw_kd: float = 0.5
+    yaw_kp: float = 0.0                # 방향 유지 [N·m/rad] (0 = 회전 속도만). 수직 모서리(블록·턱 3 km/h)에서 kp 3 이면 94 -> 84 %,
+                                       #   조향을 세게 할수록 더 넘어진다 (kd 1.0: 78 %, 2.0: 21 %). 걸린 바퀴를 따라 도는 게 충격을 흘린다
+    yaw_err_max: float = 0.5           # 방향 오차 한계 [rad]
     wheel_margin: float = 0.7
     turn_limit: bool = False
     speed_guard: float = 0.8
