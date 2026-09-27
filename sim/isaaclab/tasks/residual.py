@@ -259,6 +259,8 @@ class ResidualCtrlAction(ActionTerm):
         self.gov_i = torch.minimum(torch.clamp(self.gov_i + c.brake_ki * e * dt, min=0.0), vm)
         v_lim = torch.clamp(vm - (c.brake_kp * e.clamp(min=0.0) + self.gov_i), min=0.0)
         v_lim = torch.minimum(v_lim, vb)
+        if c.turn_slow:                    # 돌 때 안쪽 바퀴를 느리게: 바깥 바퀴 속도 = 가운데 + HALF_TRACK |wz| <= 최고 속도 vm
+            v_lim = torch.minimum(v_lim, (vm - HALF_TRACK * wz_c.abs()).clamp(min=0.0))
         tgt = torch.maximum(torch.minimum(vx_c, v_lim), -v_lim)
         self.gov_ref += (tgt - self.gov_ref).clamp(-c.accel_max * dt, c.accel_max * dt)
         v_ref = self.gov_ref
@@ -393,6 +395,7 @@ class ResidualCtrlActionCfg(ActionTermCfg):
     yaw_err_max: float = 0.5           # 방향 오차 한계 [rad]
     wheel_margin: float = 0.7
     turn_limit: bool = False
+    turn_slow: bool = True             # 돌 때 안쪽 바퀴를 느리게 (창 TUNE turn_slow 와 같음)
     speed_guard: float = 0.8
     vmax_kmh: float = 3.0
     vmax_motor_frac: float = 0.75

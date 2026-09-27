@@ -35,6 +35,9 @@ TUNE = dict(
     lqr_qx=2.0, lqr_qv=5.0, lqr_qth=100.0, lqr_qthd=5.0,   # LQR 상태 가중 [진행거리 m, 속도 m/s, 진자각 rad, 각속도 rad/s]
     lqr_r=1.0,           # LQR 입력 가중 (두 바퀴 토크 합 N·m)
     wheel_tau_max=7.0,   # 바퀴 토크 한계 [N·m] (AK45-10 피크)
+    turn_slow=True,      # 돌 때 안쪽 바퀴를 느리게 (사용자 제안 2026-09-27): 바깥 바퀴 = 가운데 속도 + 0.094 x 회전 속도 가 최고 속도를 넘지 않게
+                         #   가운데 속도를 낮춘다. 회전 명령은 그대로. 3 km/h + 2.5 rad/s 대각선에서 바깥 바퀴가 모터 한계 81~90 % -> 토크가 없어
+                         #   회전도 멈추고 속도가 1.75 m/s 까지 올라 고꾸라짐 (창 기록 8 번). 이제 바깥 3 km/h, 가운데 2.2, 안쪽 1.3 km/h
     wz_max=2.5,          # 제자리 회전 최대 [rad/s] (143 deg/s). 5 는 사용자가 너무 빠르다고 함 (4 / 6 rad/s 도 추종·안정은 됨)
     turn_limit=False,    # 달릴 때 회전 한계 (wheel_margin) 켜기. 사용자: 조향은 사람이 조심 -> 끔 (자갈길 3 km/h 급회전은 넘어질 수 있음)
     rl_on=False,         # 잔차 RL 보정 섞기 (패드 B 로 켜기/끄기). 끔 기본: rl2 는 옛 기본 제어기(조향 제한·푸시백 없음)로 학습해 창에서 더 나쁨 (사용자, 2026-09-27)
@@ -1027,6 +1030,8 @@ def episode():
                 if bump["t"] > 0.0:
                     v_lim = min(v_lim, args.bump_vmax)
                 stats["bump"] = bump["t"] > 0.0
+                if args.turn_slow:                                 # 돌 때 안쪽 바퀴를 느리게: 바깥 바퀴 속도 <= 최고 속도
+                    v_lim = min(v_lim, max(0.0, vm - 0.094 * abs(wz)))
                 tgt = max(-v_lim, min(v_lim, vx))
                 gov["ref"] += max(-args.accel_max * dt, min(args.accel_max * dt, tgt - gov["ref"]))
                 v_ref = gov["ref"]

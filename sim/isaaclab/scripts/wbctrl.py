@@ -163,6 +163,8 @@ class WBController:
                 self.bump_t = 0.0
             if self.bump_t > 0.0:
                 v_lim = min(v_lim, P.bump_vmax)
+            if getattr(P, "turn_slow", False):                  # 돌 때 안쪽 바퀴를 느리게 (climb_test TUNE turn_slow)
+                v_lim = min(v_lim, max(0.0, vm - HALF_TRACK * abs(wz)))
             tgt = max(-v_lim, min(v_lim, vx))
             g["ref"] += max(-P.accel_max * DT, min(P.accel_max * DT, tgt - g["ref"]))
             v_ref = g["ref"]
