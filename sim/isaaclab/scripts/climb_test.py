@@ -41,9 +41,13 @@ TUNE = dict(
     wz_max=2.5,          # 제자리 회전 최대 [rad/s] (143 deg/s). 5 는 사용자가 너무 빠르다고 함 (4 / 6 rad/s 도 추종·안정은 됨)
     turn_limit=False,    # 달릴 때 회전 한계 (wheel_margin) 켜기. 사용자: 조향은 사람이 조심 -> 끔 (자갈길 3 km/h 급회전은 넘어질 수 있음)
     rl_on=False,         # 잔차 RL 보정 섞기 (패드 B 로 켜기/끄기). 끔 기본: rl2 는 옛 기본 제어기(조향 제한·푸시백 없음)로 학습해 창에서 더 나쁨 (사용자, 2026-09-27)
-    rec_policy="logs/rsl_rl/wheeled_biped_recovery/2026-09-28_14-20-55_pv_up1/model_1100.pt",   # 넘어짐 복구 (메뉴 버튼).
+    rec_policy="",       # 넘어짐 복구 정책 (메뉴 버튼). "" = 끔 (2026-09-28 사용자: 일단 빼기 — 주행 중 넘어짐 3/3 실패).
+                         #   up1: logs/rsl_rl/wheeled_biped_recovery/2026-09-28_14-20-55_pv_up1/model_1100.pt
                          #   up1 1100: 넘어지는 중 받아내기 30 deg 미만 85~90 %, 30~60 deg 31~60 %, 완전히 누운 뒤는 1~8 % (구조상 못 일어섬)
     rec_timeout=5.0,     # 복구 정책 최대 시간 [s] (학습 에피소드 길이). 못 서면 누운 채 멈춤
+    rec_auto=False,      # 자동 복구: 주행 중 기울기가 rec_auto_deg 를 넘으며 더 기우는 중이면 복구 정책으로 (메뉴 버튼 없이)
+    rec_auto_deg=35.0,   # 자동 복구 기울기 [deg]. 받아내기 성공 (up1, 떨어뜨린 시작): 30 deg 미만 85~90 %, 30~60 deg 31~60 %.
+                         #   LQR 이 스스로 돌아오는 구간을 뺏지 않게 너무 낮추지 말 것 (LQR 과 같은 조건 비교는 아직 안 함)
     rl_policy="logs/rsl_rl/wheeled_biped_residual/2026-09-26_19-59-38_pv_rl2/model_2200.pt",   # 잔차 정책 (pv rl2 2200: 대회형 시험 세트 72/72)
     wheel_margin=0.7,    # (0.85 -> 0.7: 자갈길 최고 속도 급회전 6/8 -> 8/8. 3 km/h 에서는 회전 0.5 rad/s 로 제한됨) 달리며 돌 때 바깥 바퀴 속도 한계 = 모터 한계 x 이 비율 -> 속도가 빠를수록 회전 한계를 줄인다
     vmax_kmh=3.0,        # 최고 속도 [km/h] (사용자 2026-09-26). 스틱 끝 = 이 속도. 모터 한계는 4.1 km/h (18.85 rad/s x 0.06)
@@ -177,7 +181,7 @@ TUNE = dict(
     dr_motor=0.15,       # 바퀴 모터 토크·속도 한계 - 0~비율 (배터리 처짐)
     dr_seed=0,           # 0 = 실행마다 무작위, 그 외 = 고정 시드
     # --- 화면 ---
-    render_hz=50.0,      # 창 렌더 주기 [Hz]. 낮출수록 창이 빨라진다 (재시작)
+    render_hz=50.0,      # 창 렌더 주기 [Hz] (재시작). 25 Hz 로 낮춰도 실시간 0.54 -> 0.55 배, CPU 물리도 같음 (2026-09-28) -> 렌더가 병목이 아님
     physics_hz=400.0,    # 물리 주기 [Hz] (제어 200 Hz 의 배수, 재시작). 400 에서도 점프 착지 +17 mm, 삼각형길 통과 (800 과 같음)
     color_body="#1F3A5F",    # 몸통 색 (재시작)
     color_legs="#F2A541",    # 다리 링크 색
@@ -891,7 +895,7 @@ if args.ctrl == "lqr" and args.rl_policy:
     else:
         print(f"[RL] 정책 파일 없음: {_rp}", flush=True)
 # 넘어짐 복구 정책 (recovery.py 학습 환경과 같은 관측 18 -> 행동 4: 다리 절대 목표 + 바퀴 토크 x 7 N·m)
-REC = dict(pol=None, on=False, prev=torch.zeros(4, device=dev), up_t=0.0, t0=0.0)
+REC = dict(pol=None, on=False, prev=torch.zeros(4, device=dev), up_t=0.0, t0=0.0, tilt_prev=0.0)
 if args.ctrl == "lqr" and args.rec_policy:
     _rp = args.rec_policy if os.path.isabs(args.rec_policy) else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", args.rec_policy)
     if os.path.isfile(_rp):
@@ -1006,6 +1010,14 @@ def episode():
                     print("[처음으로]", flush=True)
                     return "restart"
             back_prev = back
+            _g = robot.data.projected_gravity_b[0]
+            _tilt = math.degrees(math.acos(max(-1.0, min(1.0, -float(_g[2])))))
+            if (args.rec_auto and REC["pol"] is not None and not REC["on"] and phase == "drive" and not lift["on"]
+                    and _tilt > args.rec_auto_deg and _tilt > REC["tilt_prev"]):     # 더 기우는 중일 때만 (돌아오는 중이면 LQR 에 맡김)
+                REC.update(on=True, prev=torch.zeros(4, device=dev), up_t=0.0, t0=t)
+                phase, t_phase = "recover", t
+                print(f"[자동 복구] 기울기 {_tilt:.0f} deg", flush=True)
+            REC["tilt_prev"] = _tilt
             pad_camera()
             if wall0 is None:
                 wall0 = time.time() - t
@@ -1282,9 +1294,9 @@ def episode():
             tilt = math.degrees(math.acos(max(-1.0, min(1.0, -float(gg[2])))))
             if tilt > 60 and not tipped:
                 tipped = True; stats["falls"] += 1
-                print(f"[넘어짐] 단계 {phase} (리셋 안 함, 메뉴 = 복구{'' if REC['pol'] is not None else ' 정책 없음'} / 한 번 더 = 처음으로)", flush=True)
-                if args.ctrl == "lqr" and phase == "drive":
-                    phase, t_phase = "down", t                     # 누운 채 LQR 이 바퀴를 돌리지 않게 멈춤
+                print(f"[넘어짐] 단계 {phase} (리셋 안 함, " + ("메뉴 = 복구 / 한 번 더 = 처음으로)" if REC["pol"] is not None else "START = 처음으로)"), flush=True)
+                if args.ctrl == "lqr" and phase == "drive" and REC["pol"] is not None:
+                    phase, t_phase = "down", t                     # 누운 채 LQR 이 바퀴를 돌리지 않게 멈춤 (복구 정책이 있을 때만)
                 dump_ring("fall")                                  # 넘어지기 직전 10 s 자동 저장 (원인 분석용)
             elif tilt < 20:
                 tipped = False
