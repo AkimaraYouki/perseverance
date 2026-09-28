@@ -6,13 +6,14 @@
   bumps    0.2~0.5 m 크기 턱을 m^2 당 약 1.2 개, 높이 0.5h~h
   waves    2D 파도 (파장 1.2 x 1.6 m), 최고 h
   oneside  gravel 을 왼쪽 차선 (y > 가운데) 에만 -> 왼쪽 바퀴만 요철, 두 바퀴가 늘 다른 높이
+  hill     언덕: 오르막 3 m -> 꼭대기 2 m -> 내리막 3 m, 높이 h (경사 atan(h/3), h 1.09 = 20 deg). 직선이라 옆 기울기 없음
   mix      험지 코스: stones 1 -> waves 1.3 -> lane_stones 1 -> bumps 0.6 -> gravel 0.5 배 높이를 차례로 (구간 사이 0.4 m 섞음)
   lane_stones  stones 를 0.2 m (바퀴 간격) 차선 하나 건너 하나에만 (돌 중심만 가름, 돌 모양은 그대로 -> 자른 벽 없음)
 출발 앞 i0 칸까지 평지, 그 뒤 0.5 m 에 걸쳐 높이를 0 -> 1 배로 (갑자기 h 높이 벽이 되지 않게).
 """
 import numpy as np
 
-KINDS = ("stones", "gravel", "bumps", "waves", "oneside", "oneside_stones", "lane_stones", "mix")
+KINDS = ("stones", "gravel", "bumps", "waves", "oneside", "oneside_stones", "lane_stones", "mix", "hill")
 # mix = 험지 코스: 출발 앞부터 끝까지를 같은 길이로 나눠 차례로 (종류, 높이 배율). 구간 사이는 0.4 m 에 걸쳐 섞는다
 MIX = (("stones", 1.0), ("waves", 1.3), ("lane_stones", 1.0), ("bumps", 0.6), ("gravel", 0.5))
 
@@ -53,6 +54,10 @@ def make_heights(kind: str, nx: int, ny: int, hs: float, h: float, i0: int, seed
             ix0, ix1 = max(0, int((cx - l_ / 2) / hs)), max(0, int((cx + l_ / 2) / hs))
             iy0, iy1 = max(0, int((cy - w_ / 2) / hs)), max(0, int((cy + w_ / 2) / hs))
             z[ix0:ix1, iy0:iy1] = np.maximum(z[ix0:ix1, iy0:iy1], hh)
+    elif kind == "hill":                   # 언덕: 오르막 3 m (높이 h) -> 꼭대기 2 m -> 내리막 3 m. 경사 = atan(h / 3)
+        xs = x[:, 0] - i0 * hs
+        prof = np.interp(xs, [0.0, 3.0, 5.0, 8.0], [0.0, h, h, 0.0], left=0.0, right=0.0)
+        return np.repeat(prof[:, None], ny, 1)
     elif kind == "mix":
         xs = x[:, 0] - i0 * hs
         L = max(1e-6, (nx - i0) * hs / len(MIX))
