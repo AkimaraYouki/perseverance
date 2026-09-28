@@ -104,3 +104,18 @@ class ResidualPPORunnerCfg(BalancePPORunnerCfg):
         self.algorithm.schedule = "fixed"
         self.algorithm.learning_rate = 5.0e-4
         self.algorithm.entropy_coef = 0.002
+
+
+@configclass
+class RecoveryPPORunnerCfg(BalancePPORunnerCfg):
+    """넘어짐 복구 (일어서기). 처음부터 학습 -> 탐색 잡음 1.0 (기본). 에피소드 5 s, 성공하면 끝."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "wheeled_biped_recovery"
+        self.num_steps_per_env = 48
+        self.max_iterations = 3000
+        self.save_interval = 100
+        self.policy.actor_hidden_dims = [256, 128, 64]
+        self.policy.critic_hidden_dims = [256, 256, 128]
+        self.algorithm.entropy_coef = 0.005

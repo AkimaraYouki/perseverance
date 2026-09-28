@@ -256,6 +256,7 @@ ring = torch.zeros(env.num_envs, RB, 5, device=dev)
 home = t_.env_origins[:, :2].clone()
 out_n = 0
 left_any = torch.zeros(env.num_envs, dtype=torch.bool, device=dev)       # 자기 칸을 벗어남 = 완주 (경사: 꼭대기·바닥까지 감)
+left_t = torch.zeros(env.num_envs, device=dev)                              # 벗어난 시각 -> 평균 속도 (출발 ~ 3.7 m 수평)
 TR = 400                                                                    # 추적 2 s
 TRN = ["wjL", "wjR", "wabsL", "wabsR", "hipL", "hipR", "tauL", "tauR", "hL", "hR", "pitch", "roll", "wz",
        "th_est", "v_est", "v_ref", "v_true", "lift", "hjL", "hjR", "wheel_zL", "wheel_zR"]
@@ -310,6 +311,7 @@ with torch.inference_mode():
                                     b[:, 40, 4]], 1)
         left = ~done & ((robot.data.root_pos_w[:, :2] - home).abs().max(1).values > 3.7) & ~f_
         out_n += int(left.sum())
+        left_t[left] = (k + 1) * env.step_dt
         left_any |= left
         done |= left                        # 자기 칸을 벗어남 = 그 칸 완주 (이웃 칸 벽에 부딪히는 것은 세지 않음)
         fell |= f_
@@ -361,7 +363,9 @@ if args.suite == "slope":
             if int(m_.sum()):
                 lo_a = math.degrees(math.atan(args.slope_max * lv / nr)); hi_a = math.degrees(math.atan(args.slope_max * (lv + 1) / nr))
                 la = left_any.cpu()[m_]
-                cells.append(f"{lo_a:4.1f}~{hi_a:4.1f}deg 안넘어짐 {100*float((~fell[m_]).float().mean()):5.1f}% 완주 {100*float(la.float().mean()):5.1f}%")
+                lt = left_t.cpu()[m_][la]
+                sp = f"  완주 평균 {3.6 * 3.7 / float(lt.median()):4.2f} km/h (수평, 중앙값)" if len(lt) else ""
+                cells.append(f"{lo_a:4.1f}~{hi_a:4.1f}deg 안넘어짐 {100*float((~fell[m_]).float().mean()):5.1f}% 완주 {100*float(la.float().mean()):5.1f}%{sp}")
         print(f"    {n_}")
         for c_ in cells:
             print(f"       {c_}")

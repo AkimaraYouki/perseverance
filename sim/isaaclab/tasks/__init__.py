@@ -106,3 +106,9 @@ for _id, _cfg in (("Isaac-WheeledBiped-CAD-Residual-v0", "WheeledBipedCADResidua
             "rsl_rl_cfg_entry_point": "wheeled_biped_isaaclab.agents.rsl_rl_ppo_cfg:ResidualPPORunnerCfg",
         },
     )
+
+for _id, _cfg in (("Isaac-WheeledBiped-CAD-Recovery-v0", "WheeledBipedCADRecoveryEnvCfg"),
+                  ("Isaac-WheeledBiped-CAD-Recovery-Play-v0", "WheeledBipedCADRecoveryEnvCfg_PLAY")):
+    gym.register(id=_id, entry_point="isaaclab.envs:ManagerBasedRLEnv", disable_env_checker=True,
+                 kwargs={"env_cfg_entry_point": f"{__name__}.env_cfg:{_cfg}",
+                         "rsl_rl_cfg_entry_point": "wheeled_biped_isaaclab.agents.rsl_rl_ppo_cfg:RecoveryPPORunnerCfg"})
