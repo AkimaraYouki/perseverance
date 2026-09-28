@@ -132,6 +132,11 @@ TUNE = dict(
     gen_h=0.06,          # 요철 최대 높이 [m] (5~8 cm 시험)
     gen_len=8.0,         # 요철 길이 [m] (출발 앞 edge 만큼 평지)
     gen_seed=0,
+    anymal_type="rough", # obstacle="anymal": ANYmal 험지 학습 지형 그대로 (Isaac Lab ROUGH_TERRAINS_CFG, 8 m 타일 10 x 20).
+                         #   행 = 난이도 10 단계 (+x 로 갈수록 어려움), 열 = 종류. 여기서 고른 종류의 열에서 출발:
+                         #   rough (요철 2~10 cm) | stairs (피라미드 계단, 가운데가 꼭대기, 단 5~23 cm) | stairs_inv (가운데가 바닥)
+                         #   | boxes (45 cm 격자 블록 5~20 cm) | slope (피라미드 경사 0~22 deg) | slope_inv
+    anymal_level=0,      # 출발 난이도 행 (0 = 가장 쉬움 ~ 9)
     env_name="rough_plane",  # obstacle="env": rough_plane | slope | stairs | warehouse | warehouse_full | warehouse_shelves |
                          #   hospital | office | grid | rivermark (야외) | twin_warehouse  (Isaac 클라우드 에셋, 처음엔 내려받음)
     cad_file="~/perseverance/sim/obstacles/obstacle.stl",   # obstacle="cad": STL/OBJ/FBX. 좌표 규약 (CAD 에서 그대로):
@@ -180,7 +185,8 @@ TUNE = dict(
 POLICY = "logs/rsl_rl/wheeled_biped_balance/2026-09-25_18-24-20_rough_v3/model_7099.pt"   # 관측 25 균형 정책 (r3)
 # ==========================================================================================
 
-CHOICES = dict(est=("truth", "sensors"), ctrl=("policy", "lqr"), obstacle=("flat", "plateau", "stairs2", "ridges", "cad", "gen", "env"),
+CHOICES = dict(est=("truth", "sensors"), ctrl=("policy", "lqr"), obstacle=("flat", "plateau", "stairs2", "ridges", "cad", "gen", "env", "anymal"),
+               anymal_type=("rough", "stairs", "stairs_inv", "boxes", "slope", "slope_inv"),
                gen_type=("stones", "gravel", "bumps", "waves", "oneside", "oneside_stones", "lane_stones", "mix", "hill"), extract_wheels=("pd", "policy", "free"), pd_from=("extract", "fly"), hip=("dc", "ideal"))
 ap = argparse.ArgumentParser()
 ap.add_argument("--policy", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", POLICY))
@@ -313,6 +319,21 @@ if args.obstacle == "gen" and args.mode in ("jump", "none"):
         init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -0.0505)))
     _p = cfg.scene.robot.init_state.pos
     cfg.scene.robot.init_state.pos = (_p[0], _p[1] + 0.08, _p[2])     # 바퀴 가운데 = 타일 가운데 (oneside 차선 경계)
+if args.obstacle == "anymal":
+    # ANYmal 험지 학습 지형 (Isaac Lab ROUGH_TERRAINS_CFG) 그대로. ANYmal 학습처럼 커리큘럼 배치 (행 = 난이도, 열 = 종류 비율대로)
+    import copy
+    from isaaclab.terrains.config.rough import ROUGH_TERRAINS_CFG
+    _ANY = dict(rough="random_rough", stairs="pyramid_stairs", stairs_inv="pyramid_stairs_inv", boxes="boxes",
+                slope="hf_pyramid_slope", slope_inv="hf_pyramid_slope_inv")
+    _tg = copy.deepcopy(ROUGH_TERRAINS_CFG)
+    _tg.curriculum = True
+    _k = _ANY[args.anymal_type]                                         # 고른 종류를 0 열(= 1 대 env 의 출발 열)로. 지형 자체는 그대로
+    _tg.sub_terrains = {_k: _tg.sub_terrains[_k], **{k: v for k, v in _tg.sub_terrains.items() if k != _k}}
+    cfg.scene.terrain = TerrainImporterCfg(
+        prim_path="/World/ground", terrain_type="generator", collision_group=-1, max_init_terrain_level=int(args.anymal_level),
+        terrain_generator=_tg,
+        physics_material=sim_utils.RigidBodyMaterialCfg(friction_combine_mode="multiply", restitution_combine_mode="multiply",
+                                                        static_friction=1.0, dynamic_friction=1.0))
 if args.obstacle == "env":
     # Isaac 기본 환경 (클라우드 USD). 레이 스캐너는 메시 하나만 받아서 끈다 (종료 판정도 같이)
     from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
@@ -732,7 +753,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
         pl.set_data(*hist[kk])
 
 RESTART = ("rl_policy", "dr_mass", "dr_com_cm", "dr_motor", "dr_seed", "imu_tilt_bias_deg", "render_hz", "physics_hz", "color_body", "color_legs", "color_wheels", "spawn_z", "obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
-           "ridge_lane", "ridge_len", "cad_file", "cad_unit", "gen_type", "gen_h", "gen_len", "gen_seed", "env_name")   # 장면을 다시 만들어야 해서 재시작 필요
+           "ridge_lane", "ridge_len", "cad_file", "cad_unit", "gen_type", "gen_h", "gen_len", "gen_seed", "env_name", "anymal_type", "anymal_level")   # 장면을 다시 만들어야 해서 재시작 필요
 CLI_KEYS = {k for k in TUNE if f"--{k}" in sys.argv}                        # 명령줄로 준 값은 파일보다 우선
 
 
