@@ -137,6 +137,9 @@ TUNE = dict(
                          #   rough (요철 2~10 cm) | stairs (피라미드 계단, 가운데가 꼭대기, 단 5~23 cm) | stairs_inv (가운데가 바닥)
                          #   | boxes (45 cm 격자 블록 5~20 cm) | slope (피라미드 경사 0~22 deg) | slope_inv
     anymal_level=0,      # 출발 난이도 행 (0 = 가장 쉬움 ~ 9)
+    anymal_h=0.35,       # 높이 배율. 1 = ANYmal 원본 (요철 2~10 cm, 계단 5~23 cm, 블록 5~20 cm — 50 kg 4족용, 바퀴 R 7 cm 로는 벽)
+                         #   0.35 = 우리 크기: 요철 0.7~3.5 cm, 계단 1.8~8 cm, 블록 1.8~7 cm. 경사는 그대로 (0~22 deg)
+    anymal_w=2.0,        # 가로 칸 배율 (요철 칸 10 -> 20 cm, 블록 45 -> 90 cm). 1 = 원본. 계단 디딤 폭 30 cm 는 그대로 (바퀴 14 cm)
     env_name="rough_plane",  # obstacle="env": rough_plane | slope | stairs | warehouse | warehouse_full | warehouse_shelves |
                          #   hospital | office | grid | rivermark (야외) | twin_warehouse  (Isaac 클라우드 에셋, 처음엔 내려받음)
     cad_file="~/perseverance/sim/obstacles/obstacle.stl",   # obstacle="cad": STL/OBJ/FBX. 좌표 규약 (CAD 에서 그대로):
@@ -327,6 +330,17 @@ if args.obstacle == "anymal":
                 slope="hf_pyramid_slope", slope_inv="hf_pyramid_slope_inv")
     _tg = copy.deepcopy(ROUGH_TERRAINS_CFG)
     _tg.curriculum = True
+    _h, _w = float(args.anymal_h), float(args.anymal_w)
+    if (_h, _w) != (1.0, 1.0):                                          # 우리 로봇 크기로 줄인 판
+        _st = _tg.sub_terrains
+        _tg.horizontal_scale *= _w                                      # 요철 칸 (downsampled = horizontal)
+        _tg.vertical_scale = 0.001                                      # 높이 양자화 5 mm -> 1 mm (요철 단위 7 mm)
+        _st["random_rough"].noise_range = tuple(v * _h for v in _st["random_rough"].noise_range)
+        _st["random_rough"].noise_step *= _h
+        for _n in ("pyramid_stairs", "pyramid_stairs_inv"):
+            _st[_n].step_height_range = tuple(v * _h for v in _st[_n].step_height_range)
+        _st["boxes"].grid_height_range = tuple(v * _h for v in _st["boxes"].grid_height_range)
+        _st["boxes"].grid_width *= _w
     _k = _ANY[args.anymal_type]                                         # 고른 종류를 0 열(= 1 대 env 의 출발 열)로. 지형 자체는 그대로
     _tg.sub_terrains = {_k: _tg.sub_terrains[_k], **{k: v for k, v in _tg.sub_terrains.items() if k != _k}}
     cfg.scene.terrain = TerrainImporterCfg(
@@ -753,7 +767,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
         pl.set_data(*hist[kk])
 
 RESTART = ("rl_policy", "dr_mass", "dr_com_cm", "dr_motor", "dr_seed", "imu_tilt_bias_deg", "render_hz", "physics_hz", "color_body", "color_legs", "color_wheels", "spawn_z", "obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
-           "ridge_lane", "ridge_len", "cad_file", "cad_unit", "gen_type", "gen_h", "gen_len", "gen_seed", "env_name", "anymal_type", "anymal_level")   # 장면을 다시 만들어야 해서 재시작 필요
+           "ridge_lane", "ridge_len", "cad_file", "cad_unit", "gen_type", "gen_h", "gen_len", "gen_seed", "env_name", "anymal_type", "anymal_level", "anymal_h", "anymal_w")   # 장면을 다시 만들어야 해서 재시작 필요
 CLI_KEYS = {k for k in TUNE if f"--{k}" in sys.argv}                        # 명령줄로 준 값은 파일보다 우선
 
 
