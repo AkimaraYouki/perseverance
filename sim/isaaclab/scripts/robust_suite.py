@@ -36,7 +36,7 @@ def load_tune():
 
 
 TUNE = load_tune()
-SCEN = ("flat_stop", "turn", "ridges", "ramp", "jump", "hand10", "hand20", "stones8", "oneside8", "stones_turn")
+SCEN = ("flat_stop", "turn", "ridges", "ramp", "jump", "hand10", "hand20", "stones8", "oneside8", "stones_turn", "fast_turn")
 ap = argparse.ArgumentParser()
 ap.add_argument("--scenario", choices=SCEN, required=True)
 ap.add_argument("--n", type=int, default=8)
@@ -86,7 +86,19 @@ spec = dict(
     stones8=dict(sec=14.0, v=0.4, gen=("stones", 0.08)),              # 둥근 돌 8 cm 자갈길 (terrain_gen)
     oneside8=dict(sec=14.0, v=0.4, gen=("oneside_stones", 0.08)),     # 왼쪽 바퀴 차선만 둥근 돌 8 cm (두 바퀴 높이 다름)
     stones_turn=dict(sec=12.0, v=P.vmax_kmh / 3.6, gen=("stones", 0.08), wz_const=2.5),   # 자갈길 최고 속도 급회전 (패드에서 넘어진 상황)
+    fast_turn=dict(sec=12.0, v=P.vmax_kmh / 3.6, turns=(2.0, 1.5, 1.5)),   # 평지 최고 속도: 2 s 직진 뒤 스틱 끝 회전 1.5 s / 직진 1.5 s 좌우 번갈아 (패드, 2026-09-28)
 )[SC]
+
+
+def turn_wz(t):
+    """turns=(직진 t0, 회전 t_on, 직진 t_off): t0 뒤로 스틱 끝 회전 (wz_max) 과 직진을 번갈아, 회전 방향도 번갈아."""
+    t0, on, off = spec["turns"]
+    if t < t0:
+        return 0.0
+    k, r = divmod(t - t0, on + off)
+    return (P.wz_max if int(k) % 2 == 0 else -P.wz_max) if r < on else 0.0
+
+
 if args.h is not None and "gen" in spec:
     spec["gen"] = (spec["gen"][0], args.h)
 
@@ -271,7 +283,9 @@ with torch.inference_mode():
         vx = 0.0 if ("stop_at" in spec and t >= spec["stop_at"]) else spec["v"]
         if pol is not None:                                           # 정책 모드: 명령만 주고 제어는 학습 환경 액션 항이
             vxs = torch.tensor([0.0 if ("stop_x" in spec and wx[i] >= spec["stop_x"]) else vx for i in range(N)], device=dev)
-            if "slalom" in spec:
+            if "turns" in spec:
+                wzs = torch.full((N,), turn_wz(t), device=dev)
+            elif "slalom" in spec:
                 wzs = torch.full((N,), spec["slalom"] * (1.0 if int(t // 2.0) % 2 == 0 else -1.0), device=dev)
             elif "wz_const" in spec:
                 wzs = torch.full((N,), float(spec["wz_const"]), device=dev)
@@ -289,7 +303,9 @@ with torch.inference_mode():
             if fell_t[i] is not None:
                 continue
             vx_i = 0.0 if ("stop_x" in spec and wx[i] >= spec["stop_x"]) else vx
-            if "slalom" in spec:
+            if "turns" in spec:
+                wz = turn_wz(t)
+            elif "slalom" in spec:
                 wz = spec["slalom"] * (1.0 if int(t // 2.0) % 2 == 0 else -1.0)
             elif "wz_const" in spec:
                 wz = spec["wz_const"]

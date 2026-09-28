@@ -169,6 +169,9 @@ class WBController:
                 self.bump_t = 0.0
             if self.bump_t > 0.0:
                 v_lim = min(v_lim, P.bump_vmax)
+            wz_fast = min(P.wz_max, getattr(P, "turn_wz_fast", P.wz_max))
+            wz_cap = P.wz_max - (P.wz_max - wz_fast) * min(1.0, abs(vx) / max(vm, 1e-3))   # 명령 속도 기준 (climb_test 설명)
+            wz = max(-wz_cap, min(wz_cap, wz))                  # 빠를수록 회전 상한을 낮춤 (climb_test TUNE turn_wz_fast)
             if getattr(P, "turn_slow", False):                  # 돌 때 안쪽 바퀴를 느리게 (climb_test TUNE turn_slow·turn_limit)
                 v_out = min(vm, P.wheel_margin * w_max * R_WHEEL) if getattr(P, "turn_limit", True) else vm
                 s_ = min(1.0, abs(wz) / max(1e-3, getattr(P, "turn_blend", 0.5)))

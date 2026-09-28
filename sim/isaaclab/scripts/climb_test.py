@@ -43,6 +43,8 @@ TUNE = dict(
                          #   "조향이 둔해짐 -> 다른쪽 바퀴를 더 느리게"). 예전엔 지금 속도로 회전을 잘라서 달리는 중엔 0.5 rad/s 로 둔했다
     turn_blend=0.5,      # 이 회전 속도 [rad/s] 부터 바깥 바퀴 한계를 다 적용 (그 아래는 비례. 살짝 틀 때 급감속 방지)
     turn_motor_frac=0.95,  # 감속하는 동안의 안전 한계: 바깥 바퀴가 모터 한계 x 이 비율을 넘지 않게만 회전을 자른다
+    turn_wz_fast=2.5,    # 최고 속도로 달릴 때 회전 상한 [rad/s]. 제자리 wz_max 에서 속도에 비례해 여기까지 내려감.
+                         #   평지 최고 속도 급회전 16 대 (pv robust fast_turn, 4 km/h): wz 5 그대로 2/16, 상한 2.5 13/16 (2026-09-28)
     rl_on=False,         # 잔차 RL 보정 섞기 (패드 B 로 켜기/끄기). 끔 기본: rl2 는 옛 기본 제어기(조향 제한·푸시백 없음)로 학습해 창에서 더 나쁨 (사용자, 2026-09-27)
     rec_policy="",       # 넘어짐 복구 정책 (메뉴 버튼). "" = 끔 (2026-09-28 사용자: 일단 빼기 — 주행 중 넘어짐 3/3 실패).
                          #   up1: logs/rsl_rl/wheeled_biped_recovery/2026-09-28_14-20-55_pv_up1/model_1100.pt
@@ -52,7 +54,7 @@ TUNE = dict(
     rec_auto_deg=35.0,   # 자동 복구 기울기 [deg]. 받아내기 성공 (up1, 떨어뜨린 시작): 30 deg 미만 85~90 %, 30~60 deg 31~60 %.
                          #   LQR 이 스스로 돌아오는 구간을 뺏지 않게 너무 낮추지 말 것 (LQR 과 같은 조건 비교는 아직 안 함)
     rl_policy="logs/rsl_rl/wheeled_biped_residual/2026-09-26_19-59-38_pv_rl2/model_2200.pt",   # 잔차 정책 (pv rl2 2200: 대회형 시험 세트 72/72)
-    wheel_margin=0.7,    # 돌 때 바깥 바퀴 속도 한계 = 모터 한계 x 이 비율 (140 mm: 0.7 = 3.33 km/h). 최대 회전 2.5 rad/s 면 가운데 = 이것 - 0.85 km/h
+    wheel_margin=0.3,    # 돌 때 바깥 바퀴 속도 한계 = 모터 한계 x 이 비율 (140 mm: 0.7 = 3.33 km/h). 최대 회전 2.5 rad/s 면 가운데 = 이것 - 0.85 km/h
                          #   (turn_limit 켬일 때. 옛 방식 0.85 -> 0.7: 자갈길 최고 속도 급회전 6/8 -> 8/8)
     vmax_kmh=4,        # 최고 속도 [km/h] (사용자 2026-09-26). 스틱 끝 = 이 속도. 모터 한계는 4.1 km/h (18.85 rad/s x 0.06)
     vmax_motor_frac=0.75,  # 최고 속도 <= 이 비율 x (배터리 전압으로 추정한 바퀴 모터 한계 x R). 모터가 약하면 자동으로 낮춘다
@@ -1113,6 +1115,8 @@ def episode():
                 if bump["t"] > 0.0:
                     v_lim = min(v_lim, args.bump_vmax)
                 stats["bump"] = bump["t"] > 0.0
+                wz_cap = args.wz_max - (args.wz_max - min(args.wz_max, args.turn_wz_fast)) * min(1.0, abs(vx) / max(vm, 1e-3))
+                wz = max(-wz_cap, min(wz_cap, wz))                 # 앞뒤 스틱을 밀수록 회전 상한을 낮춤 (제자리는 wz_max 그대로). 실제 속도로 하면 돌며 느려질수록 더 돌아서 넘어짐 (7/16)
                 if args.turn_slow:                                 # 돌 때 안쪽 바퀴를 느리게 (가운데 속도를 낮춤): 바깥 바퀴 <= v_out
                     v_out = min(vm, args.wheel_margin * 18.85 * R) if args.turn_limit else vm
                     s_ = min(1.0, abs(wz) / max(1e-3, args.turn_blend))
