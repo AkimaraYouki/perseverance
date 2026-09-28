@@ -38,8 +38,11 @@ TUNE = dict(
     turn_slow=True,      # 돌 때 안쪽 바퀴를 느리게 (사용자 제안 2026-09-27): 바깥 바퀴 = 가운데 속도 + 0.094 x 회전 속도 가 최고 속도를 넘지 않게
                          #   가운데 속도를 낮춘다. 회전 명령은 그대로. 3 km/h + 2.5 rad/s 대각선에서 바깥 바퀴가 모터 한계 81~90 % -> 토크가 없어
                          #   회전도 멈추고 속도가 1.75 m/s 까지 올라 고꾸라짐 (창 기록 8 번). 이제 바깥 3 km/h, 가운데 2.2, 안쪽 1.3 km/h
-    wz_max=2.5,          # 제자리 회전 최대 [rad/s] (143 deg/s). 5 는 사용자가 너무 빠르다고 함 (4 / 6 rad/s 도 추종·안정은 됨)
-    turn_limit=True,     # 달릴 때 회전 한계 (wheel_margin) 켜기. 꺼져 있으면 wheel_margin 이 안 먹는다 (2026-09-28 사용자 요청으로 다시 켬)
+    wz_max=5,          # 제자리 회전 최대 [rad/s] (143 deg/s). 5 는 사용자가 너무 빠르다고 함 (4 / 6 rad/s 도 추종·안정은 됨)
+    turn_limit=True,     # 돌 때 바깥 바퀴 한계 = 모터 한계 x wheel_margin. 회전은 안 줄이고 가운데 속도를 줄여 맞춘다 (회전 우선, 2026-09-28 사용자:
+                         #   "조향이 둔해짐 -> 다른쪽 바퀴를 더 느리게"). 예전엔 지금 속도로 회전을 잘라서 달리는 중엔 0.5 rad/s 로 둔했다
+    turn_blend=0.5,      # 이 회전 속도 [rad/s] 부터 바깥 바퀴 한계를 다 적용 (그 아래는 비례. 살짝 틀 때 급감속 방지)
+    turn_motor_frac=0.95,  # 감속하는 동안의 안전 한계: 바깥 바퀴가 모터 한계 x 이 비율을 넘지 않게만 회전을 자른다
     rl_on=False,         # 잔차 RL 보정 섞기 (패드 B 로 켜기/끄기). 끔 기본: rl2 는 옛 기본 제어기(조향 제한·푸시백 없음)로 학습해 창에서 더 나쁨 (사용자, 2026-09-27)
     rec_policy="",       # 넘어짐 복구 정책 (메뉴 버튼). "" = 끔 (2026-09-28 사용자: 일단 빼기 — 주행 중 넘어짐 3/3 실패).
                          #   up1: logs/rsl_rl/wheeled_biped_recovery/2026-09-28_14-20-55_pv_up1/model_1100.pt
@@ -49,7 +52,8 @@ TUNE = dict(
     rec_auto_deg=35.0,   # 자동 복구 기울기 [deg]. 받아내기 성공 (up1, 떨어뜨린 시작): 30 deg 미만 85~90 %, 30~60 deg 31~60 %.
                          #   LQR 이 스스로 돌아오는 구간을 뺏지 않게 너무 낮추지 말 것 (LQR 과 같은 조건 비교는 아직 안 함)
     rl_policy="logs/rsl_rl/wheeled_biped_residual/2026-09-26_19-59-38_pv_rl2/model_2200.pt",   # 잔차 정책 (pv rl2 2200: 대회형 시험 세트 72/72)
-    wheel_margin=0.3,    # (0.85 -> 0.7: 자갈길 최고 속도 급회전 6/8 -> 8/8. 3 km/h 에서는 회전 0.5 rad/s 로 제한됨) 달리며 돌 때 바깥 바퀴 속도 한계 = 모터 한계 x 이 비율 -> 속도가 빠를수록 회전 한계를 줄인다
+    wheel_margin=0.7,    # 돌 때 바깥 바퀴 속도 한계 = 모터 한계 x 이 비율 (140 mm: 0.7 = 3.33 km/h). 최대 회전 2.5 rad/s 면 가운데 = 이것 - 0.85 km/h
+                         #   (turn_limit 켬일 때. 옛 방식 0.85 -> 0.7: 자갈길 최고 속도 급회전 6/8 -> 8/8)
     vmax_kmh=4,        # 최고 속도 [km/h] (사용자 2026-09-26). 스틱 끝 = 이 속도. 모터 한계는 4.1 km/h (18.85 rad/s x 0.06)
     vmax_motor_frac=0.75,  # 최고 속도 <= 이 비율 x (배터리 전압으로 추정한 바퀴 모터 한계 x R). 모터가 약하면 자동으로 낮춘다
                          #   (만충 18.85 rad/s: 0.85 m/s = 3.05 km/h, 모터 -13 %: 2.66 km/h). 약한 모터가 경사로·삼각형길에서 넘어짐 (pv robust)
@@ -1109,8 +1113,10 @@ def episode():
                 if bump["t"] > 0.0:
                     v_lim = min(v_lim, args.bump_vmax)
                 stats["bump"] = bump["t"] > 0.0
-                if args.turn_slow:                                 # 돌 때 안쪽 바퀴를 느리게: 바깥 바퀴 속도 <= 최고 속도
-                    v_lim = min(v_lim, max(0.0, vm - 0.094 * abs(wz)))
+                if args.turn_slow:                                 # 돌 때 안쪽 바퀴를 느리게 (가운데 속도를 낮춤): 바깥 바퀴 <= v_out
+                    v_out = min(vm, args.wheel_margin * 18.85 * R) if args.turn_limit else vm
+                    s_ = min(1.0, abs(wz) / max(1e-3, args.turn_blend))
+                    v_lim = min(v_lim, max(0.0, vm - s_ * (vm - v_out) - 0.094 * abs(wz)))
                 tgt = max(-v_lim, min(v_lim, vx))
                 gov["ref"] += max(-args.accel_max * dt, min(args.accel_max * dt, tgt - gov["ref"]))
                 v_ref = gov["ref"]
@@ -1123,9 +1129,9 @@ def episode():
                     x_err = 0.0
                 x_err = max(-0.3, min(0.3, x_err + (v_now - v_ref) * dt))
                 tau_w = lqr.torque(l_p, x_err, v_now - v_ref, th - th_ref, thd)
-                # 바깥 바퀴 = (|v| + 0.094 |wz|) / R <= 한계 x wheel_margin -> 회전 한계
+                # 감속하는 동안 바깥 바퀴 = |v| + 0.094 |wz| 가 모터 한계 x turn_motor_frac 를 넘지 않게만 회전을 자른다
                 if args.turn_limit:
-                    wz_lim = max(0.5, (args.wheel_margin * 18.85 * R - abs(v_now)) / 0.094)
+                    wz_lim = max(0.5, (args.turn_motor_frac * 18.85 * R - abs(v_now)) / 0.094)
                     wz = max(-wz_lim, min(wz_lim, wz))
                 tau_y = args.yaw_kd * (wz - wz_now)
                 wheel_term.cfg.torque_scale = args.wheel_tau_max

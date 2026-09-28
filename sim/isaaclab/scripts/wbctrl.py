@@ -169,8 +169,10 @@ class WBController:
                 self.bump_t = 0.0
             if self.bump_t > 0.0:
                 v_lim = min(v_lim, P.bump_vmax)
-            if getattr(P, "turn_slow", False):                  # 돌 때 안쪽 바퀴를 느리게 (climb_test TUNE turn_slow)
-                v_lim = min(v_lim, max(0.0, vm - HALF_TRACK * abs(wz)))
+            if getattr(P, "turn_slow", False):                  # 돌 때 안쪽 바퀴를 느리게 (climb_test TUNE turn_slow·turn_limit)
+                v_out = min(vm, P.wheel_margin * w_max * R_WHEEL) if getattr(P, "turn_limit", True) else vm
+                s_ = min(1.0, abs(wz) / max(1e-3, getattr(P, "turn_blend", 0.5)))
+                v_lim = min(v_lim, max(0.0, vm - s_ * (vm - v_out) - HALF_TRACK * abs(wz)))
             tgt = max(-v_lim, min(v_lim, vx))
             g["ref"] += max(-P.accel_max * DT, min(P.accel_max * DT, tgt - g["ref"]))
             v_ref = g["ref"]
@@ -184,7 +186,7 @@ class WBController:
             self.x_err = max(-0.3, min(0.3, self.x_err + (v_now - v_ref) * DT))
             tau_w = self.lqr.torque(l_p, self.x_err, v_now - v_ref, th - th_ref, thd)
             if getattr(P, "turn_limit", True):
-                wz_lim = max(0.5, (P.wheel_margin * w_max * R_WHEEL - abs(v_now)) / HALF_TRACK)
+                wz_lim = max(0.5, (getattr(P, "turn_motor_frac", 0.95) * w_max * R_WHEEL - abs(v_now)) / HALF_TRACK)
                 wz = max(-wz_lim, min(wz_lim, wz))
             tau_y = P.yaw_kd * (wz - wz_now)
             act[2] = max(-1.0, min(1.0, (0.5 * tau_w - tau_y) / P.wheel_tau_max))
