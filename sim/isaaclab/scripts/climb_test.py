@@ -41,6 +41,9 @@ TUNE = dict(
     wz_max=2.5,          # 제자리 회전 최대 [rad/s] (143 deg/s). 5 는 사용자가 너무 빠르다고 함 (4 / 6 rad/s 도 추종·안정은 됨)
     turn_limit=False,    # 달릴 때 회전 한계 (wheel_margin) 켜기. 사용자: 조향은 사람이 조심 -> 끔 (자갈길 3 km/h 급회전은 넘어질 수 있음)
     rl_on=False,         # 잔차 RL 보정 섞기 (패드 B 로 켜기/끄기). 끔 기본: rl2 는 옛 기본 제어기(조향 제한·푸시백 없음)로 학습해 창에서 더 나쁨 (사용자, 2026-09-27)
+    rec_policy="logs/rsl_rl/wheeled_biped_recovery/2026-09-28_14-20-55_pv_up1/model_1100.pt",   # 넘어짐 복구 (메뉴 버튼).
+                         #   up1 1100: 넘어지는 중 받아내기 30 deg 미만 85~90 %, 30~60 deg 31~60 %, 완전히 누운 뒤는 1~8 % (구조상 못 일어섬)
+    rec_timeout=5.0,     # 복구 정책 최대 시간 [s] (학습 에피소드 길이). 못 서면 누운 채 멈춤
     rl_policy="logs/rsl_rl/wheeled_biped_residual/2026-09-26_19-59-38_pv_rl2/model_2200.pt",   # 잔차 정책 (pv rl2 2200: 대회형 시험 세트 72/72)
     wheel_margin=0.7,    # (0.85 -> 0.7: 자갈길 최고 속도 급회전 6/8 -> 8/8. 3 km/h 에서는 회전 0.5 rad/s 로 제한됨) 달리며 돌 때 바깥 바퀴 속도 한계 = 모터 한계 x 이 비율 -> 속도가 빠를수록 회전 한계를 줄인다
     vmax_kmh=3.0,        # 최고 속도 [km/h] (사용자 2026-09-26). 스틱 끝 = 이 속도. 모터 한계는 4.1 km/h (18.85 rad/s x 0.06)
@@ -202,7 +205,7 @@ for k, v in TUNE.items():
     else:
         ap.add_argument(f"--{k}", type=float, default=v)
 ap.add_argument("--joystick", nargs="?", const="/dev/input/js0", default=None, metavar="DEV",
-                help="패드로 조종: 왼스틱 세로 전후, 오른스틱 가로 회전, Y/LT/RT 점프, A 정지, START 처음으로, 십자키/LB/RB/BACK 카메라")
+                help="패드로 조종: 왼스틱 세로 전후, 오른스틱 가로 회전, Y/LT/RT 점프, A 다리 수동, 메뉴(START) = 넘어졌으면 복구 / 서 있으면 처음으로, 십자키/LB/RB/BACK 카메라")
 ap.add_argument("--pad", choices=("auto", "classic", "modern"), default="classic")
 ap.add_argument("--wz", type=float, default=None, help="자동 시험: 회전 명령 [rad/s] 고정 (방향 유지 대신)")
 ap.add_argument("--hand", type=float, nargs=2, default=None, metavar=("T_GRAB", "T_RELEASE"),
@@ -647,7 +650,7 @@ if args.joystick:
         pad.axis_right_x = J.AXIS_RIGHT_X_CLASSIC if args.pad == "classic" else J.AXIS_RIGHT_X_MODERN
         pad.layout, pad._layout_done = args.pad, True
     print(f"[패드] {args.joystick} ({pad.layout}) — 왼스틱 세로 전후 / 오른스틱 가로 회전 / 높이 자동 / "
-          f"Y 점프 / A 정지 / START 처음으로 / 십자키·LB·RB·BACK 카메라.  모서리: " + ", ".join(f"x {e:.2f} m" for e in edges), flush=True)
+          f"Y 점프 / A 다리 수동 / 메뉴(START) = 넘어졌으면 복구, 서 있으면 처음으로 / 십자키·LB·RB·BACK 카메라.  모서리: " + ", ".join(f"x {e:.2f} m" for e in edges), flush=True)
 rng = cmd.cfg.ranges
 
 
@@ -766,7 +769,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
     for kk, pl in plots.items():
         pl.set_data(*hist[kk])
 
-RESTART = ("rl_policy", "dr_mass", "dr_com_cm", "dr_motor", "dr_seed", "imu_tilt_bias_deg", "render_hz", "physics_hz", "color_body", "color_legs", "color_wheels", "spawn_z", "obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
+RESTART = ("rl_policy", "rec_policy", "dr_mass", "dr_com_cm", "dr_motor", "dr_seed", "imu_tilt_bias_deg", "render_hz", "physics_hz", "color_body", "color_legs", "color_wheels", "spawn_z", "obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
            "ridge_lane", "ridge_len", "cad_file", "cad_unit", "gen_type", "gen_h", "gen_len", "gen_seed", "env_name", "anymal_type", "anymal_level", "anymal_h", "anymal_w")   # 장면을 다시 만들어야 해서 재시작 필요
 CLI_KEYS = {k for k in TUNE if f"--{k}" in sys.argv}                        # 명령줄로 준 값은 파일보다 우선
 
@@ -887,6 +890,25 @@ if args.ctrl == "lqr" and args.rl_policy:
         print(f"[RL] 잔차 정책 {os.path.basename(os.path.dirname(_rp))}/{os.path.basename(_rp)} ({'켬' if args.rl_on else '끔'}, 패드 B 로 전환)", flush=True)
     else:
         print(f"[RL] 정책 파일 없음: {_rp}", flush=True)
+# 넘어짐 복구 정책 (recovery.py 학습 환경과 같은 관측 18 -> 행동 4: 다리 절대 목표 + 바퀴 토크 x 7 N·m)
+REC = dict(pol=None, on=False, prev=torch.zeros(4, device=dev), up_t=0.0, t0=0.0)
+if args.ctrl == "lqr" and args.rec_policy:
+    _rp = args.rec_policy if os.path.isabs(args.rec_policy) else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", args.rec_policy)
+    if os.path.isfile(_rp):
+        from policy_io import load_actor
+        REC["pol"] = load_actor(_rp, dev)
+        print(f"[복구] 정책 {os.path.basename(os.path.dirname(_rp))}/{os.path.basename(_rp)} (패드 메뉴 버튼: 넘어졌을 때)", flush=True)
+    else:
+        print(f"[복구] 정책 파일 없음: {_rp}", flush=True)
+
+
+def rec_obs():
+    """복구 정책 관측 (env_cfg RecoveryObservationsCfg.PolicyCfg 순서): 중력 3, 자이로 3, 다리 길이 2, 다리 속도 2, 바퀴 속도 2, 고관절 토크 2, 직전 행동 4."""
+    d_ = robot.data
+    return torch.cat([d_.projected_gravity_b[0], d_.root_ang_vel_b[0], cad.leg_pos_rel(env, 0.1825)[0], cad.leg_vel(env)[0],
+                      cad.wheel_vel(env)[0], cad.leg_torque(env)[0], REC["prev"]]).float()[None]
+
+
 EST = dict(th=0.0, thd=0.0, v=0.0)
 
 
@@ -920,6 +942,7 @@ def episode():
     lift.update(on=False, t_un=0.0, t_ld=0.0)
     gov.update(vf=0.0, i=0.0, ref=0.0)                         # 속도 제한·브레이크 상태
     LEG["h"] = args.idle_h                                      # 처음으로: 다리 높이 가운데는 IDLE 에서 (수동/자동 선택은 유지)
+    REC.update(on=False, prev=torch.zeros(4, device=dev), up_t=0.0)
     bump.update(t=0.0, quiet=0.0)
     roll_pi.reset()
     if args.ctrl == "lqr":
@@ -973,8 +996,15 @@ def episode():
                 reload_tune()                                      # 패드: 2 s 마다 파일 TUNE 반영 (점프 중엔 안 함)
                 soft_legs(False)
             if back and not back_prev:
-                print("[처음으로]", flush=True)
-                return "restart"
+                _g = robot.data.projected_gravity_b[0]
+                _tilt = math.degrees(math.acos(max(-1.0, min(1.0, -float(_g[2])))))
+                if REC["pol"] is not None and not REC["on"] and (phase == "down" or _tilt > 30.0):
+                    REC.update(on=True, prev=torch.zeros(4, device=dev), up_t=0.0, t0=t)
+                    phase, t_phase = "recover", t
+                    print(f"[복구 시작] 기울기 {_tilt:.0f} deg", flush=True)
+                else:
+                    print("[처음으로]", flush=True)
+                    return "restart"
             back_prev = back
             pad_camera()
             if wall0 is None:
@@ -1196,6 +1226,34 @@ def episode():
             elif t >= args.hand[1] and stats.get("grab") is not None:
                 robot.set_external_force_and_torque(torch.zeros(1, 1, 3, device=dev), torch.zeros(1, 1, 3, device=dev), body_ids=[0])
                 stats["grab"] = None
+        if phase == "down":                                         # 넘어져 누움: 바퀴 멈춤, 다리 IDLE, 자중 보상 끔
+            wv = d.joint_vel[0, wheel_ids] * wsign
+            act[0, 2:] = (-args.lift_wheel_kd * wv / args.wheel_tau_max).clamp(-1.0, 1.0)
+            act[0, 0] = act[0, 1] = (args.idle_h - h_ref) / 0.12
+        elif phase == "recover":                                    # 넘어짐 복구 정책 (메뉴 버튼)
+            with torch.inference_mode():
+                ra = REC["pol"](rec_obs())[0]
+            REC["prev"] = ra.clone()
+            ra = ra.clamp(-1.0, 1.0)
+            hj = 0.1825 + ra[:2] * 0.06                            # 학습과 같음: 행정 가운데 ± 반행정
+            act[0, :2] = (hj - h_ref) / 0.12
+            act[0, 2:4] = ra[2:4]
+            wheel_term.cfg.torque_scale = 7.0
+            legs_act.stiffness[:] = 60.0; legs_act.damping[:] = 1.5
+            _g = d.projected_gravity_b[0]
+            ok_ = math.acos(max(-1.0, min(1.0, -float(_g[2])))) < 0.2 and float(d.root_ang_vel_b[0, :2].norm()) < 1.0
+            REC["up_t"] = REC["up_t"] + dt if ok_ else 0.0
+            if REC["up_t"] >= 0.3:                                  # 학습의 성공 판정 -> LQR 인계
+                REC["on"] = False
+                phase, t_phase = "drive", t
+                tipped = False
+                x_err = 0.0; gov.update(i=0.0, ref=0.0, vf=0.0); roll_pi.reset(float(h_now[0] - h_now[1]))
+                wheel_term.cfg.torque_scale = args.wheel_tau_max
+                print(f"[복구 성공] {t - REC['t0']:.2f} s — LQR 인계", flush=True)
+            elif t - REC["t0"] > args.rec_timeout:
+                REC["on"] = False
+                phase, t_phase = "down", t
+                print(f"[복구 실패] {args.rec_timeout:.0f} s 안에 못 섬 — 메뉴 = 다시 복구 / 한 번 더 = 처음으로", flush=True)
         if args.delay_ms > 0 or args.jitter_ms > 0:                 # 제어 지연 (+ 가끔 한 주기 더)
             ACTQ.append(act.clone())
             dly = int(round(args.delay_ms / 5.0)) + (1 if _rng.random() < args.jitter_ms / 5.0 else 0)
@@ -1224,7 +1282,9 @@ def episode():
             tilt = math.degrees(math.acos(max(-1.0, min(1.0, -float(gg[2])))))
             if tilt > 60 and not tipped:
                 tipped = True; stats["falls"] += 1
-                print(f"[넘어짐] 단계 {phase} (리셋 안 함, START = 처음으로)", flush=True)
+                print(f"[넘어짐] 단계 {phase} (리셋 안 함, 메뉴 = 복구{'' if REC['pol'] is not None else ' 정책 없음'} / 한 번 더 = 처음으로)", flush=True)
+                if args.ctrl == "lqr" and phase == "drive":
+                    phase, t_phase = "down", t                     # 누운 채 LQR 이 바퀴를 돌리지 않게 멈춤
                 dump_ring("fall")                                  # 넘어지기 직전 10 s 자동 저장 (원인 분석용)
             elif tilt < 20:
                 tipped = False
