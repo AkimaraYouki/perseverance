@@ -38,7 +38,7 @@ TUNE = dict(
     turn_slow=True,      # 돌 때 안쪽 바퀴를 느리게 (사용자 제안 2026-09-27): 바깥 바퀴 = 가운데 속도 + 0.094 x 회전 속도 가 최고 속도를 넘지 않게
                          #   가운데 속도를 낮춘다. 회전 명령은 그대로. 3 km/h + 2.5 rad/s 대각선에서 바깥 바퀴가 모터 한계 81~90 % -> 토크가 없어
                          #   회전도 멈추고 속도가 1.75 m/s 까지 올라 고꾸라짐 (창 기록 8 번). 이제 바깥 3 km/h, 가운데 2.2, 안쪽 1.3 km/h
-    wz_max=2.5,          # 제자리 회전 최대 [rad/s] (143 deg/s). 5 는 사용자가 너무 빠르다고 함 (4 / 6 rad/s 도 추종·안정은 됨)
+    wz_max=2.0,          # 제자리 회전 최대 [rad/s] (143 deg/s). 5 는 사용자가 너무 빠르다고 함 (4 / 6 rad/s 도 추종·안정은 됨)
     turn_limit=False,    # 달릴 때 회전 한계 (wheel_margin) 켜기. 사용자: 조향은 사람이 조심 -> 끔 (자갈길 3 km/h 급회전은 넘어질 수 있음)
     rl_on=False,         # 잔차 RL 보정 섞기 (패드 B 로 켜기/끄기). 끔 기본: rl2 는 옛 기본 제어기(조향 제한·푸시백 없음)로 학습해 창에서 더 나쁨 (사용자, 2026-09-27)
     rec_policy="",       # 넘어짐 복구 정책 (메뉴 버튼). "" = 끔 (2026-09-28 사용자: 일단 빼기 — 주행 중 넘어짐 3/3 실패).
@@ -50,7 +50,7 @@ TUNE = dict(
                          #   LQR 이 스스로 돌아오는 구간을 뺏지 않게 너무 낮추지 말 것 (LQR 과 같은 조건 비교는 아직 안 함)
     rl_policy="logs/rsl_rl/wheeled_biped_residual/2026-09-26_19-59-38_pv_rl2/model_2200.pt",   # 잔차 정책 (pv rl2 2200: 대회형 시험 세트 72/72)
     wheel_margin=0.7,    # (0.85 -> 0.7: 자갈길 최고 속도 급회전 6/8 -> 8/8. 3 km/h 에서는 회전 0.5 rad/s 로 제한됨) 달리며 돌 때 바깥 바퀴 속도 한계 = 모터 한계 x 이 비율 -> 속도가 빠를수록 회전 한계를 줄인다
-    vmax_kmh=3.0,        # 최고 속도 [km/h] (사용자 2026-09-26). 스틱 끝 = 이 속도. 모터 한계는 4.1 km/h (18.85 rad/s x 0.06)
+    vmax_kmh=3.5,        # 최고 속도 [km/h] (사용자 2026-09-26). 스틱 끝 = 이 속도. 모터 한계는 4.1 km/h (18.85 rad/s x 0.06)
     vmax_motor_frac=0.75,  # 최고 속도 <= 이 비율 x (배터리 전압으로 추정한 바퀴 모터 한계 x R). 모터가 약하면 자동으로 낮춘다
                          #   (만충 18.85 rad/s: 0.85 m/s = 3.05 km/h, 모터 -13 %: 2.66 km/h). 약한 모터가 경사로·삼각형길에서 넘어짐 (pv robust)
     bal_adapt=0.3,       # 균형점 자동 보정 [1/s]: 서 있거나 일정 속도일 때 추정 진자각 평균을 천천히 학습해 뺀다
@@ -216,6 +216,7 @@ ap.add_argument("--hand", type=float, nargs=2, default=None, metavar=("T_GRAB", 
                 help="손 들기 시험: 이 시각에 가상 손(몸통 스프링)으로 들었다가 놓는다 [s]")
 ap.add_argument("--hand_lift", type=float, default=0.15, help="손으로 드는 높이 [m]")
 ap.add_argument("--hand_roll", type=float, default=10.0, help="들고 있는 동안 옆으로 기울이는 각 [deg] (한쪽 바퀴부터 닿게)")
+ap.add_argument("--go_at", type=float, default=0.0, help="자동 시험: 이 시각 [s] 까지 서 있다가 출발 (균형점 보정이 먼저 배우게)")
 ap.add_argument("--stop_at", type=float, default=None, help="자동 시험: 이 시각 [s] 에 속도 명령 0 (달리다 멈추기)")
 ap.add_argument("--record", default=None, metavar="DIR")
 ap.add_argument("--rec_label", default=None, help="녹화 화면 왼쪽 위 지형 이름 (없으면 장애물 설정으로)")
@@ -828,6 +829,7 @@ if args.record:
 
 
 gov = dict(vf=0.0, i=0.0, ref=0.0)
+BAL = dict(b=0.0, v_prev=0.0)                                         # 균형점 자동 보정 (TUNE bal_adapt). 센서 치우침·무게중심 오차는 실행 동안 그대로라 시도 사이에도 유지
 LEG = dict(manual=False, h=0.1825, a_prev=False)             # 다리 수동 모드 (패드 A), 높이 가운데 [m]
 bump = dict(t=0.0, quiet=0.0)                                   # 턱 감속 남은 시간, 이 시각 전엔 턱 안 봄 (착지 직후)
 lift = dict(on=False, t_un=0.0, t_ld=0.0)                              # 들림 (손으로 들기, 공중 스폰) 상태
@@ -971,7 +973,7 @@ def episode():
         h_now = cad.leg_state(robot)[0][0]                         # (2,) 다리 길이
         tau = d.applied_torque[0, leg_ids] * hip_sign
         # --- 상태머신 --------------------------------------------------------------------------------
-        vx, wz, y_edge = (0.0 if args.stop_at is not None and t >= args.stop_at else args.v), 0.0, False
+        vx, wz, y_edge = (0.0 if (args.stop_at is not None and t >= args.stop_at) or t < args.go_at else args.v), 0.0, False
         if args.wz is not None:
             wz = args.wz
         elif args.heading_kp > 0:
@@ -1087,6 +1089,14 @@ def episode():
             act = torch.zeros_like(act)
             sense()
             th, thd, l_p, v_now, wz_now = lqr_state()
+            # 균형점 자동 보정 (wbctrl.py 와 같은 로직 — 창에는 빠져 있었다, 2026-09-29): 멈춰 서 있고 흔들림이 작을 때
+            # (참 진자각 = 0 이어야 하는 순간) 추정 진자각을 천천히 학습해 뺀다. 안 빼면 이 오차만큼 목표보다 빨리 달린다
+            acc_ = (v_now - BAL["v_prev"]) / dt; BAL["v_prev"] = v_now
+            if args.bal_adapt > 0 and phase == "drive" and not lift["on"] and abs(acc_) < 0.3 and abs(thd) < 0.3 \
+                    and abs(v_now) < 0.05 and abs(vx) < 0.02:
+                _lim = math.radians(args.bal_adapt_max_deg)
+                BAL["b"] = max(-_lim, min(_lim, BAL["b"] + args.bal_adapt * dt * (th - BAL["b"])))
+            th = th - BAL["b"]
             RF["r"] += (1.0 - math.exp(-2 * math.pi * args.roll_rate_lpf_hz * dt)) * (-SENSE["gx"] - RF["r"]) if args.roll_rate_lpf_hz > 0 else (-SENSE["gx"] - RF["r"])
             EST.update(th=th, thd=thd, v=v_now)
             ffF = 0.0
@@ -1122,6 +1132,7 @@ def episode():
                     v_ref = v_now * (1.0 - 0.6 * cut) if v_now * vx >= 0 else vx
                     x_err = 0.0
                 x_err = max(-0.3, min(0.3, x_err + (v_now - v_ref) * dt))
+                gov.update(vref=v_ref, vlim=v_lim, guard=ww > args.speed_guard, xe=x_err)   # 기록용
                 tau_w = lqr.torque(l_p, x_err, v_now - v_ref, th - th_ref, thd)
                 # 바깥 바퀴 = (|v| + 0.094 |wz|) / R <= 한계 x wheel_margin -> 회전 한계
                 if args.turn_limit:
@@ -1329,7 +1340,8 @@ def episode():
                         hl=float(h_now[0]), hr=float(h_now[1]), tau_l=float(tau[0]), tau_r=float(tau[1]),
                         w_l=float(mvel[0]), w_r=float(mvel[1]),
                         tw_l=float(d.applied_torque[0, wheel_ids[0]] * wsign[0]), vw_l=float(d.joint_vel[0, wheel_ids[0]] * wsign[0]),
-                        th_est=EST["th"], thd_est=EST["thd"], v_est=EST["v"], v_true=true_v(), th_true=true_th()))
+                        th_est=EST["th"], thd_est=EST["thd"], v_est=EST["v"], v_true=true_v(), th_true=true_th(),
+                        vref=gov.get("vref"), vlim=gov.get("vlim"), guard=gov.get("guard"), xe=gov.get("xe"), brk=gov["i"], bal=BAL["b"]))
         if rec is not None and k % rec_every == 0:
             rec.append_data(rec_stamp(np.asarray(env.render())[..., :3], t, true_v()))
     return judge(log, jumps, fell, fell_t)

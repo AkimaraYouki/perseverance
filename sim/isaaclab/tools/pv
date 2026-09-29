@@ -357,6 +357,64 @@ jump)
   fi
   ;;
 
+demo)
+  # pv demo [장면]   시연용 — 인자 없이 창 하나. 패드가 있으면 패드로 조종, 없으면 자동 주행을 반복.
+  #   떠 있는 창(pv jump / pv play / pv demo)은 닫고 새로 띄운다. 학습·평가가 돌고 있으면 건드리지 않고 멈춘다
+  scene="${1:-arena}"; shift || true
+  OBS="$HOME/perseverance/sim/obstacles"
+  case "$scene" in
+    arena|경기장)   name="경기장";        sargs=(--obstacle cad --cad_file "$OBS/arena.stl") ;;
+    course|코스)    name="대회 코스 (삼각형길 -> 2 단 턱)"; sargs=(--obstacle cad --cad_file "$OBS/course.stl") ;;
+    rough|험지)     name="험지 (자갈·파도·차선 돌·턱·블록)"; sargs=(--obstacle gen --gen_type mix --gen_h 0.06 --gen_len 16) ;;
+    stairs|계단)    name="2 단 턱 (점프)";  sargs=(--obstacle stairs2) ;;
+    ridges|삼각형길) name="삼각형길";      sargs=(--obstacle ridges) ;;
+    flat|평지)      name="평지";          sargs=(--obstacle flat) ;;
+    *) echo "모르는 장면: $scene   (arena 경기장 | course 코스 | rough 험지 | stairs 계단 | ridges 삼각형길 | flat 평지)" >&2; exit 1 ;;
+  esac
+  others=""
+  for p in $(isaac_pids); do
+    c="$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null)"
+    [[ "$c" =~ (climb_test|play_joy)\.py ]] && [[ ! "$c" =~ --(headless|record) ]] || others="$others $p"
+  done
+  if [ -n "$others" ]; then
+    echo "!! 학습이나 평가가 돌고 있습니다 (PID$others). 끝난 뒤에, 또는 'pv stop' 으로 정리한 뒤 다시 실행하세요." >&2
+    exit 1
+  fi
+  [ -n "$(isaac_pids)" ] && { echo "떠 있는 창을 닫습니다..."; "$0" stop >/dev/null; }
+  if [ -r /dev/input/js0 ]; then
+    pad=(--joystick); how="패드 조종"
+  else
+    pad=(--v 0.4 --seconds 45); how="패드 없음 -> 자동 직진 (넘어지면 처음부터)"
+  fi
+  export DISPLAY="$(desktop_display)"
+  cd "$PROJ"
+  L="$RUNLOG/demo.log"
+  setsid nohup "$IL" -p scripts/_isaaclab_launch.py scripts/climb_test.py "${sargs[@]}" "${pad[@]}" --device cpu "$@" \
+    > "$L" 2>&1 < /dev/null &
+  printf "%s — %s. 창 띄우는 중" "$name" "$how"
+  ok=0
+  for i in $(seq 1 180); do
+    if grep -qaE '^\[(LQR|HUD|패드)\]' "$L" 2>/dev/null; then ok=1; break; fi
+    if grep -qaE '^Traceback|Error:' "$L" 2>/dev/null; then break; fi
+    kill -0 $! 2>/dev/null || break
+    sleep 1; [ $((i % 5)) -eq 0 ] && printf "."
+  done
+  echo
+  if [ "$ok" != 1 ]; then echo "!! 창이 안 떴습니다 — $L" >&2; grep -aE 'Error|Traceback' "$L" | tail -5 >&2; exit 1; fi
+  echo "창이 떴습니다 (이 PC 모니터)."
+  if [ ${#pad[@]} -eq 1 ]; then
+    cat <<'EOF'
+  왼스틱 위아래   앞뒤로 달리기
+  오른스틱 좌우   회전
+  Y (또는 LT·RT)  점프
+  A               다리 높이 수동 (오른스틱 위아래) / 자동
+  START           처음으로 (넘어졌을 때도)
+  십자키          카메라 돌리기 / 높이      LB·RB  멀리·가까이      BACK  카메라 초기화
+EOF
+  fi
+  echo "  다른 장면: pv demo 험지 | 경기장 | 코스 | 계단 | 삼각형길 | 평지      끄기: pv stop"
+  ;;
+
 harsh)
   # pv harsh [--num_envs 4096 --harsh 1.5 --delay_ms 10 --level 9 --cmd straight --policy ...]
   #   가혹 평가: GPU 로봇 수천 대, 실기 조건 전부 (잡음·바이어스·지연+지터·질량·무게중심·모터·마찰·밀기·무작위 명령) -> 지형별 성공률 + 95 % 신뢰구간
@@ -410,6 +468,9 @@ test)
 *)
   cat <<'EOF'
 pv — PERSEVERANCE 휠-레그 원스톱 (odm 과 같은 문법)
+
+  pv demo   [장면]                          시연용 창 (패드 조종, 없으면 자동 주행). 떠 있는 창은 닫고 새로
+            장면: 경기장(기본) 코스 험지 계단 삼각형길 평지  (영어: arena course rough stairs ridges flat)
 
   pv train  <ver> [iters] [envs]            학습 (기본 1500 4096). 시작하면 텐서보드도 같이 뜬다
             ... --resume                    그 버전 최신 체크포인트에서 이어서
