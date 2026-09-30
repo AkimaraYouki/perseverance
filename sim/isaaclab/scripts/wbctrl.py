@@ -69,6 +69,7 @@ class WBController:
         self.q.clear()
         self.soft = False
         self.th_bias, self.v_prev = 0.0, 0.0                   # 균형점 보정 (추정 진자각의 정상 상태 오프셋)
+        self.dbg, self.jump_blocked = {}, ""                    # 화면·기록용 (제어에는 안 씀)
 
     # --- 센서 ------------------------------------------------------------------------------------
     def _sense(self, f: Frame):
@@ -97,8 +98,9 @@ class WBController:
         return th, S["gy"], f.l_pend, self.vf, S["gz"]
 
     # --- 한 스텝 ----------------------------------------------------------------------------------
-    def step(self, f: Frame, vx: float, wz: float, h_ref: float):
-        """-> (act[4], leg_kp, leg_kd, ff_force[N] (다리 하나당 자중 보상 힘)). h_ref: 명령의 높이 기준 (auto = idle_h)."""
+    def step(self, f: Frame, vx: float, wz: float, h_ref: float, jump: bool = False, h_mid=None):
+        """-> (act[4], leg_kp, leg_kd, ff_force[N] (다리 하나당 자중 보상 힘), info). h_ref: 명령의 높이 기준 (auto = idle_h).
+        jump: 조종자 점프 요청 (패드 Y). h_mid: 다리 높이 가운데 (패드 수동 높이, None = idle_h)."""
         P, t = self.P, f.t
         act = np.zeros(4)
         S = self._sense(f)
@@ -116,38 +118,41 @@ class WBController:
         self.rf += a_r * (-S["gx"] - self.rf)
         leg_kp, leg_kd = P.vmc_kp, P.vmc_kd
 
-        # 점프 상태머신 (모서리 자동 발동)
+        # 점프 상태머신 (모서리 자동 발동, 또는 조종자 요청 jump)
         tp = t - self.t_phase
         LEG_T = {"retract": H_MIN, "extract": H_MAX, "fly": H_MIN, "descend": P.h_land, "land": P.h_land}
-        if self.edges:
-            if self.phase == "drive" and not self.lift["on"] and self.next_edge < len(self.edges) \
-                    and f.wx >= self.edges[self.next_edge] - P.trigger:
-                self.phase, self.t_phase, self.h0 = "retract", t, float(np.mean(f.h))
-                self.jumps.append(dict(edge=self.next_edge, t_trigger=t, x_trigger=f.wx))
-                self.bump_t = 0.0
-            elif self.phase == "retract" and tp >= P.t_retract:
-                self.phase, self.t_phase = "extract", t
-            elif self.phase == "extract" and (float(np.min(f.h)) >= H_MAX - 0.008 or tp >= 0.25):
-                self.phase, self.t_phase = "fly", t
-                self.jumps[-1].update(t_takeoff=t, x_takeoff=f.wx, pitch_takeoff=round(math.degrees(S["pitch"]), 1))
-                self.air_pmin = 99.0
-            elif self.phase == "fly" and tp >= P.t_tuck:
-                self.phase, self.t_phase = "descend", t
-                self.soft = True
-            elif self.phase == "descend" and ((tp > 0.04 and float(np.max(np.abs(f.tau_hip))) > P.contact_tau)
-                                              or t - self.jumps[-1]["t_takeoff"] >= P.t_fly_max):
-                self.jumps[-1].update(t_land=t, x_land=f.wx, wheel_bottom=f.wheel_z_min,
-                                      pitch_land=round(math.degrees(S["pitch"]), 1), pitch_min_air=round(self.air_pmin, 1),
-                                      v_land=round(float(f.truth_v), 2),                        # 몸(바퀴축) 전진 속도
-                                      wheel_v_land=round(float(np.mean(f.w_wheel_abs)) * R_WHEEL, 2))   # 바퀴 둘레 속도 (같으면 미끄럼 없음)
-                self.phase, self.t_phase = "land", t
-            elif self.phase == "land" and tp >= P.land_s:
-                self.soft = False
-                self.phase, self.t_phase = "drive", t
-                self.next_edge += 1
-                self.bump_quiet = t + 1.0                       # 착지 충격을 턱으로 보지 않게
-            if self.next_edge >= len(self.edges) and f.wx >= self.edges[-1] + 0.25:
-                vx = 0.0                                        # 마지막 모서리 넘어 0.25 m 더 들어간 뒤 멈춘다 (모서리에 서면 굴러 내려옴, 0.4 면 1 m 평대를 지나침)
+        auto = bool(self.edges) and self.next_edge < len(self.edges) and f.wx >= self.edges[self.next_edge] - P.trigger
+        self.jump_blocked = ""
+        if jump and self.phase == "drive" and (v_now < P.jump_min_v or abs(wz_now) > P.jump_max_wz):   # 제자리·후진·회전 중 점프 막기
+            self.jump_blocked = f"{v_now * 3.6:+.1f} km/h" if v_now < P.jump_min_v else f"turning {wz_now:+.1f} rad/s"
+            jump = False
+        if self.phase == "drive" and not self.lift["on"] and (auto or jump):
+            self.phase, self.t_phase, self.h0 = "retract", t, float(np.mean(f.h))
+            self.jumps.append(dict(edge=self.next_edge, t_trigger=t, x_trigger=f.wx))
+            self.bump_t = 0.0
+        elif self.phase == "retract" and tp >= P.t_retract:
+            self.phase, self.t_phase = "extract", t
+        elif self.phase == "extract" and (float(np.min(f.h)) >= H_MAX - 0.008 or tp >= 0.25):
+            self.phase, self.t_phase = "fly", t
+            self.jumps[-1].update(t_takeoff=t, x_takeoff=f.wx, pitch_takeoff=round(math.degrees(S["pitch"]), 1))
+            self.air_pmin = 99.0
+        elif self.phase == "fly" and tp >= P.t_tuck:
+            self.phase, self.t_phase = "descend", t
+            self.soft = True
+        elif self.phase == "descend" and ((tp > 0.04 and float(np.max(np.abs(f.tau_hip))) > P.contact_tau)
+                                          or t - self.jumps[-1]["t_takeoff"] >= P.t_fly_max):
+            self.jumps[-1].update(t_land=t, x_land=f.wx, wheel_bottom=f.wheel_z_min,
+                                  pitch_land=round(math.degrees(S["pitch"]), 1), pitch_min_air=round(self.air_pmin, 1),
+                                  v_land=round(float(f.truth_v), 2),                        # 몸(바퀴축) 전진 속도
+                                  wheel_v_land=round(float(np.mean(f.w_wheel_abs)) * R_WHEEL, 2))   # 바퀴 둘레 속도 (같으면 미끄럼 없음)
+            self.phase, self.t_phase = "land", t
+        elif self.phase == "land" and tp >= P.land_s:
+            self.soft = False
+            self.phase, self.t_phase = "drive", t
+            self.next_edge += 1
+            self.bump_quiet = t + 1.0                       # 착지 충격을 턱으로 보지 않게
+        if self.edges and self.next_edge >= len(self.edges) and f.wx >= self.edges[-1] + 0.25:
+            vx = 0.0                                        # 마지막 모서리 넘어 0.25 m 더 들어간 뒤 멈춘다 (모서리에 서면 굴러 내려옴, 0.4 면 1 m 평대를 지나침)
 
         if self.phase in ("fly", "descend"):
             self.air_pmin = min(getattr(self, "air_pmin", 99.0), math.degrees(S["pitch"]))
@@ -183,8 +188,12 @@ class WBController:
                 self.x_err = 0.0
             self.x_err = max(-0.3, min(0.3, self.x_err + (v_now - v_ref) * DT))
             tau_w = self.lqr.torque(l_p, self.x_err, v_now - v_ref, th - th_ref, thd)
-            if getattr(P, "turn_limit", True):
-                wz_lim = max(0.5, (P.wheel_margin * w_max * R_WHEEL - abs(v_now)) / HALF_TRACK)
+            self.dbg = dict(v_ref=v_ref, v_lim=v_lim, vm=vm, brake=v_lim < vm - 0.02, bump=self.bump_t > 0.0, x_err=self.x_err)
+            if getattr(P, "turn_limit", True):                 # 바깥 바퀴 <= 모터 x wheel_margin 이 되게 회전 상한 (climb_test TUNE turn_limit)
+                # 속도는 명령(스틱)으로 본다: 실제 속도로 보면 자갈길에서 추정이 튀어 상한이 출렁여 넘어짐 (stones_turn 16/16 -> 14/16,
+                # 2026-09-30), 돌며 느려질수록 더 돌아 넘어짐 (fast_turn 7/16, 2026-09-28). 앞 스틱을 민 만큼 회전 상한이 낮아진다
+                v_cmd = min(abs(vx), vm)
+                wz_lim = max(0.5, (P.wheel_margin * w_max * R_WHEEL - v_cmd) / HALF_TRACK)
                 wz = max(-wz_lim, min(wz_lim, wz))
             tau_y = P.yaw_kd * (wz - wz_now)
             act[2] = max(-1.0, min(1.0, (0.5 * tau_w - tau_y) / P.wheel_tau_max))
@@ -215,7 +224,8 @@ class WBController:
             dlt = self.roll_pi(rl, DT, P.roll_kp, P.roll_ki, P.level_max,
                                freeze=airborne or abs(math.degrees(rl)) > P.roll_freeze_deg, leak=P.roll_leak,
                                rate=self.rf, kd=P.roll_kd)
-            tl = min(H_MAX, max(H_MIN, P.idle_h + 0.5 * dlt)); tr = min(H_MAX, max(H_MIN, P.idle_h - 0.5 * dlt))
+            hc = P.idle_h if h_mid is None else h_mid
+            tl = min(H_MAX, max(H_MIN, hc + 0.5 * dlt)); tr = min(H_MAX, max(H_MIN, hc - 0.5 * dlt))
             act[0], act[1] = (tl - h_ref) / 0.12, (tr - h_ref) / 0.12
             ffF = 0.5 * self.m_pend * 9.81
         elif self.phase == "land":
@@ -246,4 +256,4 @@ class WBController:
             self.q.append(act.copy())
             dly = int(round(P.delay_ms / 5.0)) + (1 if self.rng.random() < P.jitter_ms / 5.0 else 0)
             act = self.q[max(0, len(self.q) - 1 - dly)]
-        return act, leg_kp, leg_kd, ffF, dict(th=th, v=v_now, pitch=S["pitch"], roll=S["roll"])
+        return act, leg_kp, leg_kd, ffF, dict(th=th, thd=thd, v=v_now, pitch=S["pitch"], roll=S["roll"], **self.dbg)
