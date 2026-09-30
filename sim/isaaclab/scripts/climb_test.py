@@ -216,6 +216,10 @@ ap.add_argument("--hand", type=float, nargs=2, default=None, metavar=("T_GRAB", 
                 help="손 들기 시험: 이 시각에 가상 손(몸통 스프링)으로 들었다가 놓는다 [s]")
 ap.add_argument("--hand_lift", type=float, default=0.15, help="손으로 드는 높이 [m]")
 ap.add_argument("--hand_roll", type=float, default=10.0, help="들고 있는 동안 옆으로 기울이는 각 [deg] (한쪽 바퀴부터 닿게)")
+ap.add_argument("--stick", type=float, default=None,
+                help="자동 입력 = 패드 왼스틱 앞뒤 위치 (1 = 끝까지 앞): 창에서 스틱을 미는 것과 같은 명령 vx = stick x vmax_kmh (없으면 TUNE v)")
+ap.add_argument("--no_reset", action="store_true", help="넘어져도 되돌리지 않는다 (창 패드 모드와 같음). 넘어지면 2 s 뒤 끝")
+ap.add_argument("--stop_x", type=float, default=None, help="바퀴가 이 x [m] 를 지나면 속도 0, 2 s 뒤 끝 (코스 끝)")
 ap.add_argument("--stop_at", type=float, default=None, help="자동 시험: 이 시각 [s] 에 속도 명령 0 (달리다 멈추기)")
 ap.add_argument("--record", default=None, metavar="DIR")
 ap.add_argument("--rec_label", default=None, help="녹화 화면 왼쪽 위 지형 이름 (없으면 장애물 설정으로)")
@@ -268,7 +272,7 @@ if hasattr(cfg.observations, "critic"):
 if hasattr(cfg.scene, "critic_scanner"):
     cfg.scene.critic_scanner = None
 cfg.terminations.time_out = None
-if args.joystick:                                                     # 패드: 부딪히거나 기울어도 리셋하지 않고 계속 균형 (START 로만 처음으로)
+if args.joystick or args.no_reset:                                    # 패드: 부딪히거나 기울어도 리셋하지 않고 계속 균형 (START 로만 처음으로)
     for _n in list(vars(cfg.terminations)):
         if not _n.startswith("_"):
             setattr(cfg.terminations, _n, None)
@@ -435,6 +439,10 @@ if args.obstacle == "cad" and args.mode in ("jump", "none"):
                                           init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, 0.0)))
     _p = cfg.scene.robot.init_state.pos                                  # 바퀴 가운데 = 루트 y - 0.08 -> CAD Y 0 에 맞춘다
     cfg.scene.robot.init_state.pos = (_p[0], _p[1] + 0.08, _p[2])
+if args.stop_x is not None and args.stop_x < 0:                        # --stop_x -1: 장애물 끝 + 0.3 m (장면의 코스 끝, CAD 는 모름)
+    _end = dict(gen=args.edge + args.gen_len, stairs2=args.edge + 3 * args.tread, ridges=args.edge + args.ridge_len,
+                plateau=args.edge + args.length).get(args.obstacle)
+    args.stop_x = _end + 0.3 if _end is not None else None
 _p = cfg.scene.robot.init_state.pos                                   # 공중 스폰: 바퀴 바닥이 spawn_z 에 오게
 cfg.scene.robot.init_state.pos = (_p[0], _p[1], _p[2] + args.spawn_z)
 cfg.decimation = max(1, round(args.physics_hz / 200.0))              # 제어는 200 Hz 그대로
@@ -922,6 +930,7 @@ def episode():
     tipped = False
     log, jumps = [], []
     fell, fell_t = False, None
+    t_end = None                                               # --stop_x / --no_reset: 이 시각에 끝
     y_prev, back_prev, h_cmd, wall0 = True, True, args.idle_h, None
     for k in (itertools.count() if pad is not None else range(int(args.seconds / dt))):
         if not app.is_running():
@@ -935,7 +944,11 @@ def episode():
         h_now = cad.leg_state(robot)[0][0]                         # (2,) 다리 길이
         tau = d.applied_torque[0, leg_ids] * hip_sign
         # --- 상태머신 --------------------------------------------------------------------------------
-        vx, wz, y_edge = (0.0 if args.stop_at is not None and t >= args.stop_at else args.v), 0.0, False
+        vx_auto = args.stick * args.vmax_kmh / 3.6 if args.stick is not None else args.v
+        vx, wz, y_edge = (0.0 if args.stop_at is not None and t >= args.stop_at else vx_auto), 0.0, False
+        if args.stop_x is not None and wx >= args.stop_x:            # 코스 끝: 멈추고 2 s 뒤 끝
+            vx = 0.0
+            t_end = t + 2.0 if t_end is None else t_end
         if args.wz is not None:
             wz = args.wz
         elif args.heading_kp > 0:
@@ -1164,6 +1177,14 @@ def episode():
                 return "restart"
             if LOOP:
                 break                                              # 창 모드: 넘어지면 바로 다음 시도
+        if args.no_reset and pad is None and not fell:             # 리셋 없음 (창과 같음): 60 deg 넘게 기울면 넘어짐, 2 s 더 찍고 끝
+            gg = robot.data.projected_gravity_b[0]
+            if math.degrees(math.acos(max(-1.0, min(1.0, -float(gg[2]))))) > 60:
+                fell, fell_t = True, t
+                stats["falls"] += 1
+                t_end = t + 2.0 if t_end is None else min(t_end, t + 2.0)
+        if t_end is not None and t >= t_end:
+            break
         if k % int(10.0 / dt) == 0 and k > 0 and not args.headless:
             n_ = max(PROF["n"], 1)
             print(f"[창 속도] 실시간 대비 {stats['rtf']:.2f} 배 (시뮬 {t:.0f} s) | 스텝당 ms: env.step {1e3*PROF['step']/n_:.2f}"

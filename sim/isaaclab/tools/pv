@@ -358,10 +358,21 @@ jump)
   ;;
 
 demo)
-  # pv demo [장면]   시연용 — 인자 없이 창 하나. 패드가 있으면 패드로 조종, 없으면 자동 주행을 반복.
+  # pv demo [장면] [--record] [--seed N|new]   시연용 — 인자 없이 창 하나. 패드가 있으면 패드로 조종, 없으면 자동 주행을 반복.
   #   속도·게인은 전부 climb_test.py TUNE 그대로 (여기서는 장면만 고른다 — 사용자 2026-09-30)
   #   떠 있는 창(pv jump / pv play / pv demo)은 닫고 새로 띄운다. 학습·평가가 돌고 있으면 건드리지 않고 멈춘다
-  scene="${1:-arena}"; shift || true
+  #   --record: 마지막 창과 모든 조건을 같게 (같은 로봇 = 같은 시드, 같은 제어기 wbctrl, CPU 물리, 넘어져도 리셋 없음) 스틱을
+  #             끝까지 앞으로 민 채 코스 끝까지 달려 mp4 (시뮬 1 s = 영상 1 s). 창과 다른 건 조종자 입력뿐 (사용자 2026-09-30)
+  scene="arena"; if [ $# -gt 0 ] && [[ "$1" != -* ]]; then scene="$1"; shift; fi
+  rec=0; seed=""; extra=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --record) rec=1 ;;
+      --seed) seed="${2:-}"; shift ;;
+      *) extra+=("$1") ;;
+    esac
+    shift
+  done
   OBS="$HOME/perseverance/sim/obstacles"
   case "$scene" in
     arena|경기장)   name="경기장";        sargs=(--obstacle cad --cad_file "$OBS/arena.stl") ;;
@@ -382,15 +393,32 @@ demo)
     exit 1
   fi
   [ -n "$(isaac_pids)" ] && { echo "떠 있는 창을 닫습니다..."; "$0" stop >/dev/null; }
+  # 모델 오차·센서 치우침 시드 = 어떤 로봇인가. 창과 녹화가 같은 로봇이 되게 저장해 두고 계속 쓴다 (--seed new = 새 로봇, --seed N = 지정).
+  # TUNE dr_seed 를 0 이 아닌 값으로 고정해 두면 그 값을 쓴다
+  LAST="$RUNLOG/demo_last"
+  tune_seed="$(sed -n 's/^    dr_seed=\([0-9.]*\),.*/\1/p' "$PROJ/scripts/climb_test.py" | head -1)"
+  if [ -z "$seed" ] && [ "${tune_seed%.*}" = "0" ] && [ -s "$LAST" ]; then seed="$(cut -d' ' -f1 "$LAST")"; fi
+  if [ "$seed" = new ] || { [ -z "$seed" ] && [ "${tune_seed%.*}" = "0" ]; }; then seed=$(( (RANDOM * 32768 + RANDOM) % 999999 + 1 )); fi
+  [ -n "$seed" ] && [ "${tune_seed%.*}" = "0" ] && echo "$seed" > "$LAST"
+  sd=(); [ -n "$seed" ] && sd=(--dr_seed "$seed")
+  cd "$PROJ"
+  if [ "$rec" = 1 ]; then
+    dir="$OUT/video/demo"; mkdir -p "$dir"; L="$RUNLOG/demo_record.log"
+    secs=120; case "$scene" in arena|경기장|course|코스|flat|평지) secs=40 ;; esac   # 끝을 모르는 장면은 40 s (나머지는 코스 끝에서 멈춤)
+    echo "녹화: $name — 마지막 창과 같은 조건 (시드 ${seed:-TUNE}, 제어기 wbctrl, CPU 물리, 리셋 없음), 스틱 끝까지 앞으로. 시뮬 1 s = 영상 1 s"
+    "$IL" -p scripts/_isaaclab_launch.py scripts/climb_test.py "${sargs[@]}" --device cpu "${sd[@]}" --stick 1 --no_reset --stop_x -1 \
+      --seconds "$secs" --headless --record "$dir" --rec_label "$name" --out "$OUT/climb/demo_record.json" "${extra[@]}" > "$L" 2>&1
+    grep -aE '^\[모델 오차\]|^#1|^영상' "$L" || { echo "!! 녹화 실패 — $L" >&2; tail -8 "$L" >&2; exit 1; }
+    exit 0
+  fi
   if [ -r /dev/input/js0 ]; then
     pad=(--joystick); how="패드 조종"
   else
     pad=(); how="패드 없음 -> 자동 주행 (climb_test.py TUNE 그대로)"
   fi
   export DISPLAY="$(desktop_display)"
-  cd "$PROJ"
   L="$RUNLOG/demo.log"
-  setsid nohup "$IL" -p scripts/_isaaclab_launch.py scripts/climb_test.py "${sargs[@]}" "${pad[@]}" --device cpu "$@" \
+  setsid nohup "$IL" -p scripts/_isaaclab_launch.py scripts/climb_test.py "${sargs[@]}" "${pad[@]}" --device cpu "${sd[@]}" "${extra[@]}" \
     > "$L" 2>&1 < /dev/null &
   printf "%s — %s. 창 띄우는 중" "$name" "$how"
   ok=0
@@ -402,7 +430,7 @@ demo)
   done
   echo
   if [ "$ok" != 1 ]; then echo "!! 창이 안 떴습니다 — $L" >&2; grep -aE 'Error|Traceback' "$L" | tail -5 >&2; exit 1; fi
-  echo "창이 떴습니다 (이 PC 모니터)."
+  echo "창이 떴습니다 (이 PC 모니터). $(grep -a '^\[모델 오차\]' "$L" | head -1 | sed 's/ | .*//')  시드 ${seed:-TUNE}"
   if [ ${#pad[@]} -eq 1 ]; then
     cat <<'EOF'
   왼스틱 위아래   앞뒤로 달리기
@@ -413,7 +441,7 @@ demo)
   십자키          카메라 돌리기 / 높이      LB·RB  멀리·가까이      BACK  카메라 초기화
 EOF
   fi
-  echo "  다른 장면: pv demo 험지 | 경기장 | 코스 | 계단 | 삼각형길 | 평지      끄기: pv stop"
+  echo "  같은 조건으로 녹화: pv demo $scene --record      새 로봇(모델 오차): --seed new      다른 장면: pv demo 험지 | 경기장 | 코스 | 계단 | 삼각형길 | 평지      끄기: pv stop"
   ;;
 
 harsh)
@@ -471,6 +499,7 @@ test)
 pv — PERSEVERANCE 휠-레그 원스톱 (odm 과 같은 문법)
 
   pv demo   [장면]                          시연용 창 (패드 조종, 없으면 자동 주행). 떠 있는 창은 닫고 새로
+            ... --record                    마지막 창과 모든 조건 같게 (같은 로봇·제어기·물리), 스틱 끝까지 앞으로 코스 끝까지 mp4 (실제 시간)
             장면: 경기장(기본) 코스 험지 계단 삼각형길 평지  (영어: arena course rough stairs ridges flat)
 
   pv train  <ver> [iters] [envs]            학습 (기본 1500 4096). 시작하면 텐서보드도 같이 뜬다
