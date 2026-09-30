@@ -359,6 +359,7 @@ jump)
 
 demo)
   # pv demo [장면]   시연용 — 인자 없이 창 하나. 패드가 있으면 패드로 조종, 없으면 자동 주행을 반복.
+  #   속도·게인은 전부 climb_test.py TUNE 그대로 (여기서는 장면만 고른다 — 사용자 2026-09-30)
   #   떠 있는 창(pv jump / pv play / pv demo)은 닫고 새로 띄운다. 학습·평가가 돌고 있으면 건드리지 않고 멈춘다
   scene="${1:-arena}"; shift || true
   OBS="$HOME/perseverance/sim/obstacles"
@@ -384,7 +385,7 @@ demo)
   if [ -r /dev/input/js0 ]; then
     pad=(--joystick); how="패드 조종"
   else
-    pad=(--v 0.4 --seconds 45); how="패드 없음 -> 자동 직진 (넘어지면 처음부터)"
+    pad=(); how="패드 없음 -> 자동 주행 (climb_test.py TUNE 그대로)"
   fi
   export DISPLAY="$(desktop_display)"
   cd "$PROJ"
