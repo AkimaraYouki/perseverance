@@ -1,0 +1,15 @@
+#!/bin/sh
+# Desktop PC (not the Jetson): NetworkManager dispatcher — share this PC's internet with the Jetson over USB-C.
+# When an interface comes up with an address in the Jetson USB device-mode network (192.168.66.0/24, the Jetson is
+# .1 and hands this PC .100), turn on IPv4 forwarding and NAT that subnet out of whatever route this PC uses.
+# The Jetson's default route via 192.168.66.100 (metric 100) is set by its usb-device-mode config.
+# Install: sudo install -m 755 system/desktop/90-jetson-usb-share /etc/NetworkManager/dispatcher.d/
+#          sudo ufw route allow from 192.168.66.0/24      (only needed if ufw's forward policy is DROP)
+IFACE="$1"; ACTION="$2"
+NET=192.168.66.0/24
+case "$ACTION" in up|dhcp4-change) ;; *) exit 0 ;; esac
+ip -4 addr show dev "$IFACE" 2>/dev/null | grep -q 'inet 192\.168\.66\.' || exit 0
+sysctl -qw net.ipv4.ip_forward=1
+iptables -t nat -C POSTROUTING -s "$NET" ! -d "$NET" -j MASQUERADE >/dev/null 2>&1 \
+  || iptables -t nat -A POSTROUTING -s "$NET" ! -d "$NET" -j MASQUERADE
+logger -t jetson-usb-share "$IFACE $ACTION: forwarding + NAT for $NET"

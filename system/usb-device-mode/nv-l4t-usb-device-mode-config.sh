@@ -125,7 +125,10 @@ net_ipv6=fe80::1
 net_ipv4_defroute_router=192.168.66.100
 # The metric value for the default route; can be empty for none.
 # Empirically, 32766 is the largest metric value, so lowest priority available.
-net_ipv4_defroute_metric=32766
+# gen2 (2026-10-03): 100 — when the desktop PC is plugged in over USB-C, the Jetson uses the desktop's internet
+# (desktop NATs 192.168.66.0/24, system/desktop/90-jetson-usb-share). It beats Wi-Fi (NM 600, or 20600 when NM sees
+# a captive portal like kumoh-guest). Unplugged: sysctl/99-gen2-linkdown.conf makes the kernel skip this route.
+net_ipv4_defroute_metric=100
 
 # The disk image to export as a USB Mass Storage device
 fs_img="${script_dir}/filesystem.img"
