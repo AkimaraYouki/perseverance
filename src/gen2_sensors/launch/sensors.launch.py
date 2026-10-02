@@ -11,9 +11,7 @@ def generate_launch_description():
         Node(package='gen2_sensors', executable='iahrs_node', name='iahrs', parameters=[cfg],
              respawn=True, respawn_delay=2.0, output='screen'),
         Node(package='rplidar_ros', executable='rplidar_node', name='rplidar',
-             parameters=[{'channel_type': 'serial', 'serial_port': '/dev/gen2_lidar',
-                          'serial_baudrate': 460800, 'frame_id': 'laser', 'inverted': False,
-                          'angle_compensate': True, 'scan_mode': 'Standard'}],
+             parameters=[PathJoinSubstitution([FindPackageShare('gen2_sensors'), 'config', 'rplidar.yaml'])],
              respawn=True, respawn_delay=3.0, output='screen'),
         Node(package='gen2_sensors', executable='scan_monitor', name='scan_monitor'),
     ])

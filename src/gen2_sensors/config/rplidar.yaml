@@ -1,0 +1,12 @@
+# RPLIDAR C1 on /dev/gen2_lidar (CP2102N). A file, not an inline dict: launch writes inline params to
+# /tmp/launch_params_*, and a respawn after that temp file was cleaned up (seen 2026-10-03 after the
+# clock jumped from 1970) failed with "Couldn't parse params file".
+rplidar:
+  ros__parameters:
+    channel_type: serial
+    serial_port: /dev/gen2_lidar
+    serial_baudrate: 460800
+    frame_id: laser
+    inverted: false
+    angle_compensate: true
+    scan_mode: Standard
