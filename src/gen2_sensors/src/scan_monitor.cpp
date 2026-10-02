@@ -33,13 +33,14 @@ public:
           total_ = m->ranges.size();
         });
     restart_after_s_ = declare_parameter("restart_after_s", 5.0);
+    startup_grace_s_ = declare_parameter("startup_grace_s", 15.0);  // driver spin-up time after a restart
     driver_ = declare_parameter("driver_process", std::string("rplidar_node"));
     last_scan_ = last_kill_ = std::chrono::steady_clock::now();
     watchdog_ = create_wall_timer(1s, [this] {
           const auto now = std::chrono::steady_clock::now();
           const double since = std::chrono::duration<double>(now - last_scan_).count();
           const double since_kill = std::chrono::duration<double>(now - last_kill_).count();
-          if (since > restart_after_s_ && since_kill > restart_after_s_) {
+          if (since > restart_after_s_ && since_kill > startup_grace_s_) {
             last_kill_ = now;
             restart_driver();
           }
@@ -84,7 +85,7 @@ private:
     closedir(d);
   }
 
-  double restart_after_s_;
+  double restart_after_s_, startup_grace_s_;
   std::string driver_;
   std::chrono::steady_clock::time_point last_scan_, last_kill_;
   rclcpp::TimerBase::SharedPtr watchdog_;
