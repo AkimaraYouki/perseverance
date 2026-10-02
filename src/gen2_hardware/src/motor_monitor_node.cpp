@@ -36,8 +36,19 @@ public:
         m.name.c_str(), m.can_id, m.model.c_str(), m.pole_pairs, m.gear_ratio, m.direction,
         std::isfinite(m.kt_nm_per_a) ? std::to_string(m.kt_nm_per_a).c_str() : "UNKNOWN");
     }
+    const auto n_names = get_parameter("motors.names").as_string_array().size();
     bus_ = std::make_unique<MotorBus>(ifname, motors);
     bus_->enable_tx(false);
+    if (motors.size() < n_names) {
+      // An auto (can_id 0) motor found no drive at start-up. When a new drive shows up (hot-plug,
+      // powered later), exit so the launch respawns this node and the ID scan runs again.
+      rescan_timer_ = create_wall_timer(std::chrono::seconds(1), [this] {
+            if (!bus_->unconfigured_ids().empty()) {
+              RCLCPP_WARN(get_logger(), "new CAN drive appeared: restarting for the CAN ID scan");
+              rclcpp::shutdown();
+            }
+          });
+    }
     bus_->start();
     last_counts_.assign(motors.size(), 0);
     rates_.assign(motors.size(), 0.0);
@@ -235,7 +246,7 @@ private:
   double unconfigured_stale_s_ = 0.5;
   double unconfigured_forget_s_ = 30.0;
   rclcpp::Publisher<gen2_msgs::msg::MotorStateArray>::SharedPtr pub_;
-  rclcpp::TimerBase::SharedPtr timer_;
+  rclcpp::TimerBase::SharedPtr timer_, rescan_timer_;
   diagnostic_updater::Updater updater_;
   std::vector<uint64_t> last_counts_;
   std::vector<double> rates_;

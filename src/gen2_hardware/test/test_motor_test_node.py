@@ -17,7 +17,7 @@ import yaml
 HERE = os.path.dirname(os.path.abspath(__file__))
 cfg = sys.argv[1]
 _m = yaml.safe_load(open(cfg))['/**']['ros__parameters']['motors']
-CAN_ID = _m[_m['names'][0]]['can_id']   # the fake drive answers as the first configured motor
+CAN_ID = _m[_m['names'][0]]['can_id'] or 1   # 0 = auto-scan: the fake drive answers as id 1
 # neg-gain 0.8: the fake wheel accelerates 20 % less with negative current (asymmetry check)
 drive = subprocess.Popen([sys.executable, os.path.join(HERE, 'fake_cubemars_drive.py'), '--id', str(CAN_ID),
                           '--neg-gain', '0.8'],

@@ -80,6 +80,16 @@ private:
         continue;
       }
       const auto now = std::chrono::steady_clock::now();
+      if (n == 0) {   // USB unplugged often gives silent reads, not an error: reopen after 2 s
+        if (now - last_data_ > 2s) {
+          set_err("no data, reopening " + port_);
+          ::close(fd_);
+          fd_ = -1;
+          last_data_ = now;
+        }
+        continue;
+      }
+      last_data_ = now;
       for (ssize_t i = 0; i < n; ++i) {
         if (buf[i] == '\n') {handle(line, now); line.clear();}
         else if (buf[i] != '\r' && line.size() < 256) {line.push_back(buf[i]);}
@@ -173,7 +183,7 @@ private:
   long lines_ = 0, gaps_ = 0, gaps_total_ = 0, parse_err_ = 0, last_cnt_ = 0;
   bool have_last_ = false;
   double max_gap_ms_ = 0.0;
-  std::chrono::steady_clock::time_point last_rx_;
+  std::chrono::steady_clock::time_point last_rx_, last_data_{std::chrono::steady_clock::now()};
   std::string err_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diag_;
