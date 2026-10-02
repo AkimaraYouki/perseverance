@@ -1,0 +1,9 @@
+# iAHRS RB-SDA-v1 (fw pv=4.3) on /dev/gen2_imu (CP2102 serial 0001, udev 91-gen2-serial.rules).
+# Sensor-side settings saved to its flash 2026-10-02 (desktop request 2026-09-27_0520):
+#   b2=921600 so=1 sp=2 sd=0x8D gs=1 (500 dps) as=2 (8 g) gl=0 mv=0 ; fw ; rd
+# Measured: 500 lines/s, RX gap mean 2.000 ms sd 0.19 ms max 3.55 ms, 0 count gaps in 10 s.
+iahrs:
+  ros__parameters:
+    port: /dev/gen2_imu
+    frame_id: imu_link
+    expected_rate_hz: 500.0

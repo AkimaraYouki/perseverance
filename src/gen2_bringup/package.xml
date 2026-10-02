@@ -11,5 +11,6 @@
   <exec_depend>gen2_hardware</exec_depend>
   <exec_depend>gen2_status_display</exec_depend>
   <exec_depend>gen2_camera</exec_depend>
+  <exec_depend>gen2_sensors</exec_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

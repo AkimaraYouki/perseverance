@@ -1,0 +1,7 @@
+# Gen2 fixed serial names (independent of USB plug order)
+# RPLIDAR C1 on CP2102N adapter
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="a2c88185e56ff011a43393301045c30f", SYMLINK+="gen2_lidar", MODE="0666"
+# iAHRS RB-SDA (921600, 500 Hz sync data) on CP2102 adapter
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="0001", SYMLINK+="gen2_imu", MODE="0666"
+# ESP32-C3 sensor hub (USB CDC)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", SYMLINK+="gen2_hub", MODE="0666"

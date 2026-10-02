@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>gen2_sensors</name>
+  <version>0.1.0</version>
+  <description>iAHRS IMU driver (500 Hz sync data) and RPLIDAR C1 bring-up + scan diagnostics</description>
+  <maintainer email="choding860@gmail.com">suhopark</maintainer>
+  <license>Proprietary</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <exec_depend>rplidar_ros</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>
