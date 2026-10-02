@@ -65,7 +65,12 @@ std::vector<MotorConfig> declare_motor_params(rclcpp::Node & node)
   if (sock.open(ifname, err)) {
     const auto end = std::chrono::steady_clock::now() + std::chrono::duration<double>(scan_s);
     RxFrame f;
-    while (std::chrono::steady_clock::now() < end && found.size() < n_auto) {
+    // listen at least 0.5 s (all drives upload at >= 50 Hz) so the ascending-ID order does not
+    // depend on which drive happened to talk first; then stop early once enough are found
+    const auto min_end = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    while (std::chrono::steady_clock::now() < end &&
+      (found.size() < n_auto || std::chrono::steady_clock::now() < min_end))
+    {
       if (sock.read(f, 50) == 1 && f.extended && !f.error_frame && (f.frame.id >> 8) == 0x29) {
         const uint8_t id = f.frame.id & 0xFF;
         if (id != 0 && !fixed.count(id)) {found.insert(id);}
