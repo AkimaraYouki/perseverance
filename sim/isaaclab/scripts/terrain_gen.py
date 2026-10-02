@@ -15,7 +15,7 @@ import numpy as np
 
 KINDS = ("stones", "gravel", "bumps", "waves", "oneside", "oneside_stones", "lane_stones", "mix", "hill")
 # mix = 험지 코스: 출발 앞부터 끝까지를 같은 길이로 나눠 차례로 (종류, 높이 배율). 구간 사이는 0.4 m 에 걸쳐 섞는다
-MIX = (("stones", 1.0), ("waves", 1.3), ("lane_stones", 1.0), ("bumps", 0.6), ("gravel", 0.5))
+MIX = (("stones", 1.0), ("waves", 1.3), ("lane_stones", 1.0), ("gravel", 0.5))   # bumps (네모 턱) 뺌 — 사용자 2026-10-03
 
 
 def make_heights(kind: str, nx: int, ny: int, hs: float, h: float, i0: int, seed: int = 0) -> np.ndarray:

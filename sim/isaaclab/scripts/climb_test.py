@@ -35,6 +35,11 @@ TUNE = dict(
     lqr_qx=2.0, lqr_qv=5.0, lqr_qth=100.0, lqr_qthd=5.0,   # LQR 상태 가중 [진행거리 m, 속도 m/s, 진자각 rad, 각속도 rad/s]
     lqr_r=1.0,           # LQR 입력 가중 (두 바퀴 토크 합 N·m)
     wheel_tau_max=7.0,   # 바퀴 토크 한계 [N·m] (AK45-10 피크)
+    fric_comp_nm=0.25,   # 바퀴 마찰 보상 [N·m]: 바퀴마다 fric_comp_nm x tanh(관절 속도 / fric_comp_w) 를 토크에 더함. 0 = 끔.
+                         #   운동 마찰과 같은 크기로 (2026-10-03 pv robust 마찰 켬: 보상 0 -> 74/88, 0.25 -> 87/88 = 마찰 없음 88/88 수준,
+                         #   점프 16 대 마찰 없음 12/16 vs 보상 13/16). 0.4 (과보상) 는 점프 5/8
+    fric_comp_w=0.5,     # 마찰 보상 속도 폭 [rad/s]
+    fric_comp_static_nm=0.0,  # 정지 마찰 보상 [N·m]: 바퀴가 거의 멈췄을 때만 지령 토크 방향으로 더함 (0 = 끔)
     turn_slow=True,      # 돌 때 안쪽 바퀴를 느리게 (사용자 제안 2026-09-27): 바깥 바퀴 = 가운데 속도 + 0.094 x 회전 속도 가 최고 속도를 넘지 않게
                          #   가운데 속도를 낮춘다. 회전 명령은 그대로. 3 km/h + 2.5 rad/s 대각선에서 바깥 바퀴가 모터 한계 81~90 % -> 토크가 없어
                          #   회전도 멈추고 속도가 1.75 m/s 까지 올라 고꾸라짐 (창 기록 8 번). 이제 바깥 3 km/h, 가운데 2.2, 안쪽 1.3 km/h
@@ -180,6 +185,13 @@ TUNE = dict(
     dr_com_cm=2.0,       # 몸통 무게중심 ± [cm] (x, z)
     dr_motor=0.15,       # 바퀴 모터 토크·속도 한계 - 0~비율 (배터리 처짐)
     dr_seed=0,           # 0 = 실행마다 무작위, 그 외 = 고정 시드
+    # --- 바퀴 실측 (로봇 2026-10-03, comms 1500): AK45-10 은 0.4 A 이하 지령에 전혀 안 돈다 (재시작) ---
+    wheel_fric_nm=0.45,  # 바퀴축 정지 마찰 [N·m] (시동 0.3~0.4 A x Kt 1.27). 이보다 작은 토크엔 안 돈다 (PhysX 관절 마찰). 0 = 끔
+    wheel_fric_dyn_nm=0.25,  # 바퀴축 운동 마찰 [N·m] (추정: 반전 가속 맞춤 ~0.2, 0 A 로 놓으면 5 rad/s 에서 0.2 s 안에 정지). 1 kHz 실측 대기
+    wheel_visc=0.0,      # 바퀴축 점성 마찰 [N·m·s/rad] (실측 없음)
+    wheel_deadband_nm=0.0,  # 드라이브가 무시하는 작은 지령 [N·m] (0.4 A x 1.27 = 0.51). 마찰 대신 이것일 수도 있어 시험용
+    wheel_armature=4.5e-4,  # 바퀴 관성 추가 [kg·m²]: 링크 1.84e-3 + 이것 = 2.29e-3 (실측 2.0~2.6e-3). 제어기 LQR 모델에도 같이
+    dr_fric=0.3,         # 바퀴 마찰 로봇·바퀴마다 ± 비율
     # --- 화면 ---
     render_hz=50.0,      # 창 렌더 주기 [Hz] (재시작). 25 Hz 로 낮춰도 실시간 0.54 -> 0.55 배, CPU 물리도 같음 (2026-09-28) -> 렌더가 병목이 아님
     physics_hz=400.0,    # 물리 주기 [Hz] (제어 200 Hz 의 배수, 재시작). 400 에서도 점프 착지 +17 mm, 삼각형길 통과 (800 과 같음)
@@ -218,6 +230,8 @@ ap.add_argument("--hand_lift", type=float, default=0.15, help="손으로 드는 
 ap.add_argument("--hand_roll", type=float, default=10.0, help="들고 있는 동안 옆으로 기울이는 각 [deg] (한쪽 바퀴부터 닿게)")
 ap.add_argument("--stick", type=float, default=None,
                 help="자동 입력 = 패드 왼스틱 앞뒤 위치 (1 = 끝까지 앞): 창에서 스틱을 미는 것과 같은 명령 vx = stick x vmax_kmh (없으면 TUNE v)")
+ap.add_argument("--turns", type=float, nargs=3, default=None, metavar=("T0", "ON", "OFF"),
+                help="자동 입력: T0 s 직진 뒤 ON s 동안 스틱 끝 회전 (wz_max) / OFF s 직진을 좌우 번갈아 (pv robust fast_turn 과 같음)")
 ap.add_argument("--no_reset", action="store_true", help="넘어져도 되돌리지 않는다 (창 패드 모드와 같음). 넘어지면 2 s 뒤 끝")
 ap.add_argument("--stop_x", type=float, default=None, help="바퀴가 이 x [m] 를 지나면 속도 0, 2 s 뒤 끝 (코스 끝)")
 ap.add_argument("--stop_at", type=float, default=None, help="자동 시험: 이 시각 [s] 에 속도 명령 0 (달리다 멈추기)")
@@ -525,7 +539,7 @@ import lqr_vmc  # noqa: E402
 _nonwheel = [i for i in range(robot.num_bodies) if i not in wheel_bodies]
 _mass = robot.root_physx_view.get_masses()[0].clone().to(dev)    # 명목 질량 (복사! 모델 오차가 바꾸지 않게)
 _m_pend = float(_mass[_nonwheel].sum()); _m_w = float(_mass[wheel_bodies].sum())
-_I_w = 2 * cad.WHEEL_IZZ                                              # URDF l_wheel izz (회전자 반사관성 포함) x 2
+_I_w = 2 * (cad.WHEEL_IZZ + args.wheel_armature)                       # URDF l_wheel izz (회전자 반사관성 포함) + 실측 보정 armature, x 2
 lqr = None
 
 
@@ -563,6 +577,12 @@ def apply_dr():
         MOTOR["k"] = k
         msg.append(f"바퀴 모터 한계 x{k:.2f}")
     MOTOR["est"] = MOTOR["k"] * (1.0 + _rng.normal(0, 0.02))           # 제어기가 배터리 전압으로 추정한 모터 한계 (오차 2 %, pv robust 와 같음)
+    kf = 1.0 + _rng.uniform(-1, 1, 2) * args.dr_fric                   # 바퀴 마찰 (좌우 따로, pv robust 와 같음)
+    cad.set_wheel_model(robot, wheel_ids, torch.tensor([args.wheel_fric_nm * kf]), torch.tensor([args.wheel_fric_dyn_nm * kf]),
+                        args.wheel_visc, args.wheel_deadband_nm, args.wheel_armature)
+    if args.wheel_fric_nm > 0 or args.wheel_deadband_nm > 0:
+        msg.append(f"바퀴 마찰 L {args.wheel_fric_nm * kf[0]:.2f} R {args.wheel_fric_nm * kf[1]:.2f} N·m"
+                   + (f" 데드밴드 {args.wheel_deadband_nm:.2f}" if args.wheel_deadband_nm > 0 else ""))
     print("[모델 오차] " + (", ".join(msg) if msg else "없음") + f" | 추정 {args.est}, 지연 {args.delay_ms:.0f}+{args.jitter_ms:.0f} ms", flush=True)
     return msg
 
@@ -716,7 +736,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
     for kk, pl in plots.items():
         pl.set_data(*hist[kk])
 
-RESTART = ("rl_policy", "rec_policy", "dr_mass", "dr_com_cm", "dr_motor", "dr_seed", "imu_tilt_bias_deg", "render_hz", "physics_hz", "color_body", "color_legs", "color_wheels", "spawn_z", "obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
+RESTART = ("wheel_fric_nm", "wheel_fric_dyn_nm", "wheel_visc", "wheel_deadband_nm", "wheel_armature", "dr_fric", "rl_policy", "rec_policy", "dr_mass", "dr_com_cm", "dr_motor", "dr_seed", "imu_tilt_bias_deg", "render_hz", "physics_hz", "color_body", "color_legs", "color_wheels", "spawn_z", "obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
            "ridge_lane", "ridge_len", "cad_file", "cad_unit", "gen_type", "gen_h", "gen_len", "gen_seed", "env_name", "anymal_type", "anymal_level", "anymal_h", "anymal_w")   # 장면을 다시 만들어야 해서 재시작 필요
 CLI_KEYS = {k for k in TUNE if f"--{k}" in sys.argv}                        # 명령줄로 준 값은 파일보다 우선
 
@@ -887,18 +907,19 @@ def ctrl_frame(t, wx_, h_now, tau):
     c_nom = (d.body_com_pos_w[0, _nonwheel] * _mass[_nonwheel, None]).sum(0) / _m_pend
     rb = _qai(d.root_quat_w[0:1], (c_nom - ax)[None])[0]
     acc = d.body_lin_acc_w[0, 0]
-    np_ = lambda x: x.detach().cpu().numpy()  # noqa: E731
+    np_ = lambda x: x.detach().cpu().numpy()[None]  # noqa: E731
+    a1 = lambda x: np.array([float(x)])  # noqa: E731
     return wbctrl.Frame(t=t, g_b=np_(d.projected_gravity_b[0]), w_b=np_(d.root_ang_vel_b[0]), h=np_(h_now), tau_hip=np_(tau),
                         w_wheel_joint=np_(d.joint_vel[0, wheel_ids] * wsign), w_wheel_abs=np_(d.body_ang_vel_w[0, wheel_bodies] @ lat),
-                        th_kin=float(torch.atan2(rb[0], rb[2])), l_pend=float(rb.norm()), wx=wx_,
-                        wheel_z_min=float(d.body_pos_w[0, wheel_bodies, 2].min()) - R, yaw=psi,
-                        sf=float((acc + torch.tensor([0.0, 0.0, 9.81], device=dev)).norm()) / 9.81,
-                        truth_th=true_th(), truth_v=true_v(), motor_scale=MOTOR["est"], a_fwd=float(acc @ fwd))
+                        th_kin=a1(torch.atan2(rb[0], rb[2])), l_pend=a1(rb.norm()), wx=a1(wx_),
+                        wheel_z_min=a1(float(d.body_pos_w[0, wheel_bodies, 2].min()) - R), yaw=a1(psi),
+                        sf=a1(float((acc + torch.tensor([0.0, 0.0, 9.81], device=dev)).norm()) / 9.81),
+                        truth_th=a1(true_th()), truth_v=a1(true_v()), motor_scale=a1(MOTOR["est"]), a_fwd=a1(acc @ fwd))
 
 
 def lqr_jumps():
     """로봇용 제어기의 점프 기록 -> 창 결과 형식."""
-    return [dict(j, contact="-", wheel_bottom_mm=round(1000 * j["wheel_bottom"], 1) if "wheel_bottom" in j else "-") for j in CTRL.jumps]
+    return [dict(j, contact="-", wheel_bottom_mm=round(1000 * j["wheel_bottom"], 1) if "wheel_bottom" in j else "-") for j in CTRL.jumps[0]]
 
 
 def episode():
@@ -921,7 +942,7 @@ def episode():
             print(f"[LQR] m {_m_pend:.2f} kg, I {_I:.4f} kg·m², 바퀴 {_m_w:.3f} kg / {_I_w:.4f} kg·m², "
                   f"K(l=0.25) {_np.round(lqr.gain(0.25), 2).tolist()}  — 제어기 wbctrl (로봇용), 모터 추정 x{MOTOR['est']:.2f}", flush=True)
         if CTRL is None:                                        # 센서 치우침은 실행 동안 그대로 (제어기 시드), 모델 오차와 같은 시드
-            CTRL = wbctrl.WBController(args, lqr, _m_pend, seed=int(args.dr_seed) if args.dr_seed else int(_rng.integers(1 << 30)),
+            CTRL = wbctrl.WBController(args, lqr, _m_pend, n=1, seed=int(args.dr_seed) if args.dr_seed else int(_rng.integers(1 << 30)),
                                        edges=edges if (pad is None and args.mode == "jump") else ())
         CTRL.lqr = lqr
         CTRL.reset()
@@ -949,7 +970,11 @@ def episode():
         if args.stop_x is not None and wx >= args.stop_x:            # 코스 끝: 멈추고 2 s 뒤 끝
             vx = 0.0
             t_end = t + 2.0 if t_end is None else t_end
-        if args.wz is not None:
+        if args.turns is not None:                                 # 좌우 급회전 번갈아 (조향 시연)
+            t0_, on_, off_ = args.turns
+            kk_, rr_ = divmod(max(0.0, t - t0_), on_ + off_)
+            wz = 0.0 if t < t0_ or rr_ >= on_ else (args.wz_max if int(kk_) % 2 == 0 else -args.wz_max)
+        elif args.wz is not None:
             wz = args.wz
         elif args.heading_kp > 0:
             wz = max(-1.0, min(1.0, -args.heading_kp * yaw_of(robot.data.root_quat_w[0])))
@@ -1065,20 +1090,21 @@ def episode():
                 LEG["h"] += max(-args.leg_rate * dt, min(args.leg_rate * dt, args.idle_h - LEG["h"]))
             a_, kp_, kd_, ffF, info = CTRL.step(ctrl_frame(t, wx, h_now, tau), vx, wz, h_ref,
                                                 jump=bool(y_edge) and args.mode == "jump", h_mid=LEG["h"])
-            if CTRL.jump_blocked:
-                stats["last"] = f"blocked: {CTRL.jump_blocked}"
-                print(f"[점프 막음] {CTRL.jump_blocked} — 앞으로 {args.jump_min_v*3.6:.1f} km/h 이상, 회전 {args.jump_max_wz:.1f} rad/s 이하에서만", flush=True)
-            if phase == "drive" and CTRL.phase == "retract" and pad is not None:
+            a_, kp_, kd_, ffF, info = a_[0], kp_[0], kd_[0], ffF[0], {k_: v_[0] for k_, v_ in info.items()}   # 로봇 1 대
+            if CTRL.jump_blocked[0]:
+                stats["last"] = f"blocked: {CTRL.jump_blocked[0]}"
+                print(f"[점프 막음] {CTRL.jump_blocked[0]} — 앞으로 {args.jump_min_v*3.6:.1f} km/h 이상, 회전 {args.jump_max_wz:.1f} rad/s 이하에서만", flush=True)
+            if phase == "drive" and CTRL.phase[0] == wbctrl.RETRACT and pad is not None:
                 reload_tune()                                      # 점프마다 파일의 TUNE 을 다시 읽는다
-            phase = CTRL.phase
+            phase = wbctrl.PHASES[CTRL.phase[0]]
             act = torch.tensor(a_, device=dev, dtype=torch.float32)[None]
             legs_act.stiffness[:] = float(kp_); legs_act.damping[:] = float(kd_)
             M = robot.data.joint_pos[:, leg_ids]
             robot.set_joint_effort_target(hip_sign * float(ffF) * cad.dh_from_M(M).to(torch.float32), joint_ids=leg_ids)
             EST.update(th=info["th"], thd=info["thd"], v=info["v"])
-            stats.update(brake=bool(info.get("brake", False)), bump=bool(info.get("bump", False)), lift=CTRL.lift["on"],
+            stats.update(brake=bool(info.get("brake", False)), bump=bool(info.get("bump", False)), lift=bool(CTRL.lift_on[0]),
                          vm=info.get("vm", stats.get("vm", args.vmax_kmh / 3.6)))
-            landed = [j_ for j_ in CTRL.jumps if "t_land" in j_]
+            landed = [j_ for j_ in CTRL.jumps[0] if "t_land" in j_]
             if len(landed) > CJ["n"]:                              # 착지 한 번 = 화면·로그에 한 줄
                 CJ["n"] = len(landed); j_ = landed[-1]; stats["jumps"] += 1
                 e_ = edges[j_["edge"]] if (CTRL.edges and j_["edge"] < len(edges)) else None
@@ -1210,7 +1236,7 @@ def episode():
                              pitch=round(math.degrees(math.asin(max(-1.0, min(1.0, float(d.projected_gravity_b[0, 0]))))), 2),
                              hl=round(float(h_now[0]), 4), hr=round(float(h_now[1]), 4),
                              zl=round(float(wheel_pos[0, 2]) - R, 4), zr=round(float(wheel_pos[1, 2]) - R, 4),
-                             lvl=round(CTRL.roll_pi.i if CTRL is not None else lvl, 4), tl=round(float(tau[0]), 2), tr=round(float(tau[1]), 2)))
+                             lvl=round(float(CTRL.roll_pi.i[0]) if CTRL is not None else lvl, 4), tl=round(float(tau[0]), 2), tr=round(float(tau[1]), 2)))
             check_leg_osc(t)
             xb = pad.button(2)
             if xb and not OSC["x_prev"]:

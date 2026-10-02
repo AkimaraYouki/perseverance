@@ -445,7 +445,8 @@ EOF
   ;;
 
 harsh)
-  # pv harsh [--num_envs 4096 --harsh 1.5 --delay_ms 10 --level 9 --cmd straight --policy ...]
+  # pv harsh [--num_envs 4096 --harsh 1.5 --level 9 --suite rough --TUNE키 값 ...]
+  #   제어기는 wbctrl (창·pv robust 와 같은 코드, 로봇 N 대 배열), 로봇 조건은 climb_test.py TUNE — 지형·환경만 다르다 (2026-10-03)
   #   가혹 평가: GPU 로봇 수천 대, 실기 조건 전부 (잡음·바이어스·지연+지터·질량·무게중심·모터·마찰·밀기·무작위 명령) -> 지형별 성공률 + 95 % 신뢰구간
   require_free_gpu
   cd "$PROJ"; mkdir -p "$OUT/harsh"
@@ -508,7 +509,7 @@ pv — PERSEVERANCE 휠-레그 원스톱 (odm 과 같은 문법)
   pv watch  [ver]                           진행 한 줄 (20 s 완주율, 지형 단계, std, ETA, 크래시)
   pv jump   [--record] [--obstacle stairs2] 점프 상태머신 시험 창 (튜닝: scripts/climb_test.py 의 TUNE, 저장하면 바로 반영)
   pv robust [N] [--only a,b] [--키 값]      강인성 시험 세트: 시나리오별 로봇 N 대 (모델 오차·잡음·지연) 통과율 표
-  pv harsh [--num_envs 4096 --harsh 1.5 --delay_ms 10 --level 9 --cmd straight]   가혹 평가: GPU 수천 대, 실기 조건 전부 -> 지형별 성공률 + 95 % 신뢰구간
+  pv harsh [--num_envs 4096 --harsh 1.5 --level 9 --suite rough]   가혹 평가: 수천 대, 제어기·로봇 조건은 창·robust 와 같음 (지형만 다름) -> 지형별 성공률 + 95 % 신뢰구간
   pv jump   --joystick                      패드로 몰고 Y 로 점프 (기본 2 단 턱). 점프마다 TUNE 다시 읽음
   pv play   [ver] [iter] [--joystick]       재생 — 이 PC 모니터에 네이티브 창
             ... --terrain rugged --level 7  지형 (flat gravel rugged rough wave_long wave_short slope_up slope_down bumps)

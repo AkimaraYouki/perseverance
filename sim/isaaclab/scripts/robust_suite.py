@@ -211,7 +211,7 @@ c0 = (d.body_com_pos_w[0, nonwheel] * m_nom[nonwheel, None]).sum(0) / m_pend
 iyy = robot.root_physx_view.get_inertias()[0][:, 4].to(dev)
 rel = d.body_com_pos_w[0, nonwheel] - c0
 I_pend = float((iyy[nonwheel] + m_nom[nonwheel] * (rel[:, 0] ** 2 + rel[:, 2] ** 2)).sum())
-lqr = lqr_vmc.WheelLQR(m_pend, I_pend, float(m_nom[wheel_bodies].sum()), 2 * cad.WHEEL_IZZ, R,
+lqr = lqr_vmc.WheelLQR(m_pend, I_pend, float(m_nom[wheel_bodies].sum()), 2 * (cad.WHEEL_IZZ + P.wheel_armature), R,
                        q=(P.lqr_qx, P.lqr_qv, P.lqr_qth, P.lqr_qthd), r=P.lqr_r)
 
 # --- 모델 오차 (로봇마다) ------------------------------------------------------------------------------
@@ -237,7 +237,13 @@ if args.policy:                                                        # 학습 
     term_ = env.action_manager.get_term("ctrl")
     term_.motor_true[:] = torch.tensor([x["wheel_motor"] for x in dr], device=dev)
     term_.motor_est[:] = torch.tensor(motor_est, device=dev, dtype=torch.float32)
-ctrls = [wbctrl.WBController(P, lqr, m_pend, seed=args.seed + 1000 + i, edges=spec.get("edges", ())) for i in range(N)]
+kf = np.stack([g.uniform(-1, 1, 2) for g in rngs]) * P.dr_fric + 1.0          # 바퀴 마찰 로봇·바퀴마다 (실측 2026-10-03)
+for i in range(N):
+    dr[i]["wheel_fric_nm"] = [round(P.wheel_fric_nm * x, 3) for x in kf[i]]
+cad.set_wheel_model(robot, wheel_ids, torch.tensor(P.wheel_fric_nm * kf), torch.tensor(P.wheel_fric_dyn_nm * kf),
+                    P.wheel_visc, P.wheel_deadband_nm, P.wheel_armature)
+CTRL = wbctrl.WBController(P, lqr, m_pend, n=N, seed=args.seed + 1000, edges=spec.get("edges", ()))   # 로봇 N 대 한 번에
+motor_est_a = np.asarray(motor_est)
 
 
 def yaw_of(q):
@@ -299,27 +305,26 @@ with torch.inference_mode():
                     rec[i]["v"].append(float(vt_[i])); xmax[i] = max(xmax[i], wx[i])
             act_t = pol(obs["policy"])
         acts = np.zeros((N, 4)); kps = np.zeros((N, 2)); kds = np.zeros((N, 2)); ff = np.zeros(N)
-        for i in (range(N) if pol is None else ()):
-            if fell_t[i] is not None:
-                continue
-            vx_i = 0.0 if ("stop_x" in spec and wx[i] >= spec["stop_x"]) else vx
+        if pol is None:
+            vx_i = np.where(("stop_x" in spec) & (wx >= spec.get("stop_x", 1e9)), 0.0, vx)
             if "turns" in spec:
-                wz = turn_wz(t)
+                wz = np.full(N, turn_wz(t))
             elif "slalom" in spec:
-                wz = spec["slalom"] * (1.0 if int(t // 2.0) % 2 == 0 else -1.0)
+                wz = np.full(N, spec["slalom"] * (1.0 if int(t // 2.0) % 2 == 0 else -1.0))
             elif "wz_const" in spec:
-                wz = spec["wz_const"]
+                wz = np.full(N, float(spec["wz_const"]))
             else:
-                wz = max(-1.0, min(1.0, -P.heading_kp * float(psi_[i])))
-            f = wbctrl.Frame(t=t, g_b=g_b[i], w_b=w_b[i], h=h_[i], tau_hip=tau_[i], w_wheel_joint=wj_[i], w_wheel_abs=wabs_[i],
-                             th_kin=float(thk_[i]), l_pend=float(lp_[i]), wx=float(wx[i]), wheel_z_min=float(wzmin[i]),
-                             yaw=float(psi_[i]), sf=float(sf_[i]), truth_th=float(tht_[i]), truth_v=float(vt_[i]),
-                             motor_scale=motor_est[i], a_fwd=float(af_[i]))
-            a, kp, kd, ffF, info = ctrls[i].step(f, vx_i, wz, P.idle_h)
-            acts[i], kps[i], kds[i], ff[i] = a, kp, kd, ffF
-            rec[i]["pitch"].append(math.degrees(info["pitch"])); rec[i]["roll"].append(math.degrees(info["roll"]))
-            rec[i]["v"].append(float(vt_[i]))
-            xmax[i] = max(xmax[i], wx[i])
+                wz = np.clip(-P.heading_kp * psi_, -1.0, 1.0)
+            f = wbctrl.Frame(t=t, g_b=g_b, w_b=w_b, h=h_, tau_hip=tau_, w_wheel_joint=wj_, w_wheel_abs=wabs_, th_kin=thk_, l_pend=lp_,
+                             wx=wx, wheel_z_min=wzmin, yaw=psi_, sf=sf_, truth_th=tht_, truth_v=vt_, motor_scale=motor_est_a, a_fwd=af_)
+            a, kp, kd, ffF, info = CTRL.step(f, vx_i, wz, P.idle_h)
+            alive = np.array([x is None for x in fell_t])                # 넘어진 로봇은 힘 빼기 (예전과 같음)
+            acts[alive], ff[alive] = a[alive], ffF[alive]
+            kps[alive] = kp[alive, None]; kds[alive] = kd[alive, None]
+            for i in np.flatnonzero(alive):
+                rec[i]["pitch"].append(math.degrees(info["pitch"][i])); rec[i]["roll"].append(math.degrees(info["roll"][i]))
+                rec[i]["v"].append(float(vt_[i]))
+                xmax[i] = max(xmax[i], wx[i])
         if pol is None:
             cmd.set(torch.full((N,), float(vx), device=dev), torch.zeros(N, device=dev), torch.full((N,), P.idle_h, device=dev),
                     mode=torch.ones(N, device=dev))
@@ -373,7 +378,7 @@ for i in range(N):
     rows.append(dict(i=i, ok=bool(ok), fell_t=fell_t[i], xmax=round(float(xmax[i]), 2), dr=dr[i],
                      pitch95=round(float(np.percentile(pr, 95)), 1) if len(pr) else None,
                      roll95=round(float(np.percentile(rr, 95)), 1) if len(rr) else None,
-                     jumps=ctrls[i].jumps if pol is None else []))
+                     jumps=CTRL.jumps[i] if pol is None else []))
 npass = sum(r["ok"] for r in rows)
 wall = time.time() - t0
 print(f"\n[{SC}] 통과 {npass}/{N}   (시뮬 {spec['sec']:.0f} s, 실제 {wall:.0f} s)", flush=True)

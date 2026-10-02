@@ -21,7 +21,7 @@ import sys
 from typing import TYPE_CHECKING
 
 import torch
-from isaaclab.actuators import DCMotorCfg, IdealPDActuatorCfg, ImplicitActuatorCfg
+from isaaclab.actuators import DCMotor, DCMotorCfg, IdealPDActuatorCfg, ImplicitActuatorCfg
 from isaaclab.assets import Articulation
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.envs.mdp.actions import joint_actions
@@ -188,6 +188,44 @@ class CADWheelActionCfg(JointEffortActionCfg):
     torque_scale: float = 1.5
 
 
+# --- 바퀴 모터 + 축 마찰 (2026-10-03 실측: AK45-10 은 0.4 A 이하 지령에 전혀 안 돈다) ----------------------
+class DCMotorFric(DCMotor):
+    """DC 모터 + 드라이브 데드밴드: |지령| <= deadband 이면 0 (드라이브가 작은 전류 지령을 무시하는 경우의 모델 —
+    0.4 A 이하가 안 도는 원인이 마찰인지 이것인지 아직 모름). 기본 0 = DCMotor 와 같음.
+    축 마찰은 여기서 안 한다 — PhysX 관절 마찰 (set_wheel_model) 이 정지 마찰을 솔버 안에서 푼다 (진짜로 붙어 안 돈다)."""
+
+    def __init__(self, cfg, *args, **kwargs):
+        super().__init__(cfg, *args, **kwargs)
+        self.deadband = torch.full_like(self.computed_effort, cfg.deadband)
+
+    def compute(self, control_action, joint_pos, joint_vel):
+        e = control_action.joint_efforts
+        if e is not None:
+            control_action.joint_efforts = torch.where(e.abs() <= self.deadband, torch.zeros_like(e), e)
+        return super().compute(control_action, joint_pos, joint_vel)
+
+
+@configclass
+class DCMotorFricCfg(DCMotorCfg):
+    class_type: type = DCMotorFric
+    deadband: float = 0.0    # [N·m] 이하 지령은 0
+
+
+def set_wheel_model(robot, wheel_ids, fric_static, fric_dyn, viscous=0.0, deadband=0.0, armature=0.0):
+    """바퀴 실측 모델 적용 (창·시험 세트·가혹 평가 공통).
+    fric_static / fric_dyn [N·m]: PhysX 관절 마찰 (Isaac Sim 5.x: 정지 = 멈춰 있을 때 버티는 최대 토크, 운동 = 도는 동안 일정).
+      숫자 또는 (환경, 바퀴) 텐서. 2026-10-03 확인 (scripts/diag_wheel_friction.py): 정지 0.45 에 0.3 N·m -> 안 돎,
+      0.6 N·m -> (0.6 - 운동 0.3) / 관성 으로 가속 = N·m 단위가 맞다.
+    armature [kg·m²]: 관절에 더하는 관성 (실측 출력축 2.0~2.6e-3 - 링크 izz WHEEL_IZZ)."""
+    n, k = robot.num_instances, len(wheel_ids)
+    full = lambda x: (torch.as_tensor(x, dtype=torch.float32).expand(n, k).clone() if torch.as_tensor(x).ndim < 2
+                      else torch.as_tensor(x, dtype=torch.float32)).to(robot.device)  # noqa: E731
+    robot.write_joint_friction_coefficient_to_sim(full(fric_static), full(fric_dyn), full(viscous), joint_ids=wheel_ids)
+    robot.actuators["wheels"].deadband[:] = deadband
+    if armature > 0:
+        robot.write_joint_armature_to_sim(full(armature), joint_ids=wheel_ids)
+
+
 # --- 로봇 ---------------------------------------------------------------------
 H0_JOINT = float(leg_map.h_of_theta(THETA0) - R_WHEEL)     # CAD 영점 자세 다리 관절값 (0.1365)
 
@@ -212,8 +250,8 @@ CAD_ROBOT_CFG = ArticulationCfg(
                                    effort_limit=9.0, velocity_limit=24.4),
         "passive": ImplicitActuatorCfg(joint_names_expr=[".*_joint_[IK]"], stiffness=0.0, damping=0.02),
         # 바퀴: DC 모터 모델 (단순화 모델과 같은 값). 회전자 관성은 링크 izz 에 이미 있다 -> armature 0.
-        "wheels": DCMotorCfg(joint_names_expr=[".*_joint_W"], saturation_effort=7.0, effort_limit=7.0,
-                             velocity_limit=18.85, stiffness=0.0, damping=0.0),
+        "wheels": DCMotorFricCfg(joint_names_expr=[".*_joint_W"], saturation_effort=7.0, effort_limit=7.0,
+                                 velocity_limit=18.85, stiffness=0.0, damping=0.0),   # 마찰 기본 0 (set_wheel_model 로)
     },
     soft_joint_pos_limit_factor=1.0,
 )
