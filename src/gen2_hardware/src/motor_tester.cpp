@@ -44,7 +44,7 @@ std::string MotorTester::start(
     if (st_.running) {return "a test is already running";}
   }
   const auto & c = bus_.motors()[m];
-  if (!std::isfinite(value) || value == 0.0) {return "value must be non-zero";}
+  if (!std::isfinite(value) || std::fabs(value) < 1e-6) {return "value must be non-zero";}
   if (!(duration > 0) || duration > limits_.max_duration_s) {
     return "duration must be in (0, " + std::to_string(limits_.max_duration_s) + "] s";
   }
