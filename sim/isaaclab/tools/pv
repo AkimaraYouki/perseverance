@@ -402,11 +402,12 @@ demo)
   [ -n "$seed" ] && [ "${tune_seed%.*}" = "0" ] && echo "$seed" > "$LAST"
   sd=(); [ -n "$seed" ] && sd=(--dr_seed "$seed")
   cd "$PROJ"
+  secs=120; case "$scene" in arena|경기장|course|코스|flat|평지) secs=40 ;; esac   # 끝을 모르는 장면은 40 s (나머지는 코스 끝에서 멈춤)
+  stick=1; case "$scene" in stairs|계단) stick=0.4 ;; esac             # 점프는 0.4 m/s 접근 기준으로 맞춰져 있다
   if [ "$rec" = 1 ]; then
     dir="$OUT/video/demo"; mkdir -p "$dir"; L="$RUNLOG/demo_record.log"
-    secs=120; case "$scene" in arena|경기장|course|코스|flat|평지) secs=40 ;; esac   # 끝을 모르는 장면은 40 s (나머지는 코스 끝에서 멈춤)
     echo "녹화: $name — 마지막 창과 같은 조건 (시드 ${seed:-TUNE}, 제어기 wbctrl, CPU 물리, 리셋 없음), 스틱 끝까지 앞으로. 시뮬 1 s = 영상 1 s"
-    "$IL" -p scripts/_isaaclab_launch.py scripts/climb_test.py "${sargs[@]}" --device cpu "${sd[@]}" --stick 1 --no_reset --stop_x -1 \
+    "$IL" -p scripts/_isaaclab_launch.py scripts/climb_test.py "${sargs[@]}" --device cpu "${sd[@]}" --stick "$stick" --no_reset --stop_x -1 \
       --seconds "$secs" --headless --record "$dir" --rec_label "$name" --out "$OUT/climb/demo_record.json" "${extra[@]}" > "$L" 2>&1
     grep -aE '^\[모델 오차\]|^#1|^영상' "$L" || { echo "!! 녹화 실패 — $L" >&2; tail -8 "$L" >&2; exit 1; }
     exit 0
@@ -414,7 +415,7 @@ demo)
   if [ -r /dev/input/js0 ]; then
     pad=(--joystick); how="패드 조종"
   else
-    pad=(); how="패드 없음 -> 자동 주행 (climb_test.py TUNE 그대로)"
+    pad=(--stick "$stick" --no_reset --stop_x -1 --seconds "$secs"); how="패드 없음 -> 자동 주행: 녹화와 같은 입력 (스틱 ${stick}, 코스 끝·넘어지면 처음부터)"
   fi
   export DISPLAY="$(desktop_display)"
   L="$RUNLOG/demo.log"
