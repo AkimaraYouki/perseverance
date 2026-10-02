@@ -377,7 +377,7 @@ demo)
   case "$scene" in
     arena|경기장)   name="경기장";        sargs=(--obstacle cad --cad_file "$OBS/arena.stl") ;;
     course|코스)    name="대회 코스 (삼각형길 -> 2 단 턱)"; sargs=(--obstacle cad --cad_file "$OBS/course.stl") ;;
-    rough|험지)     name="험지 (자갈·파도·차선 돌·턱·블록)"; sargs=(--obstacle gen --gen_type mix --gen_h 0.06 --gen_len 16) ;;
+    rough|험지)     name="험지 (자갈·파도·차선 돌·블록)"; sargs=(--obstacle gen --gen_type mix --gen_h 0.06 --gen_len 16) ;;
     stairs|계단)    name="2 단 턱 (점프)";  sargs=(--obstacle stairs2) ;;
     ridges|삼각형길) name="삼각형길";      sargs=(--obstacle ridges) ;;
     flat|평지)      name="평지";          sargs=(--obstacle flat) ;;
