@@ -78,7 +78,15 @@ Enter / Ctrl+C, stale feedback, drive fault, over-temperature, over-speed, **GUI
 (0.5 s)**; always ends with 0 A. The drive itself stops after 1 s without commands
 (AppParams `timeout_msec 1000`). **A hardware E-stop is still required.**
 
-Integration test without hardware (vcan + fake drive with 20 % weaker negative torque, 26 checks):
+**MIT mode (user decision 2026-10-02, both models):** per motor `protocol: servo | mit_v3 | mit_legacy`
+and `mit.{p,v,t,kp,kd}_max` in `motors.yaml`. `mit_v3` = AK 3.0 (AK60-6 hips, ext id 0x08xx, feedback
+stays the 0x29 upload). `mit_legacy` = AK45-10 MIT firmware (std frames, enter FC / exit FD, the drive
+replies **only to commands**, so the read-only monitor cannot see it while idle). AK45-10 ranges:
+v ±20 rad/s, t ±8 N·m (manual V1.0.18), p ±12.56 rad (firmware binary). MIT feedback saturates at
+±v_max, so the over-speed guard fires at 0.98·v_max. Own MIT command frames seen through the local
+loopback are never parsed as replies (MSG_DONTROUTE).
+
+Integration test without hardware (vcan + fake drive with 20 % weaker negative torque, 26 checks per protocol, add `servo|mit_legacy|mit_v3` as 2nd argument):
 ```bash
 sudo modprobe vcan; sudo ip link add vcan0 type vcan; sudo ip link set vcan0 up
 python3 src/gen2_hardware/test/test_motor_test_node.py src/gen2_hardware/config/motors.yaml

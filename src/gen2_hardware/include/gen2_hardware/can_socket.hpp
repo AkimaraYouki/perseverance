@@ -14,6 +14,7 @@ struct RxFrame
   cubemars::Frame frame;
   bool extended = false;
   bool error_frame = false;
+  bool local = false;           // sent by a socket on this host (MSG_DONTROUTE)
   uint32_t error_class = 0;     // CAN_ERR_* mask when error_frame
   int64_t mono_ns = 0;          // CLOCK_MONOTONIC at receive (userspace)
   int64_t kernel_realtime_ns = 0;  // SO_TIMESTAMPNS (CLOCK_REALTIME) or 0

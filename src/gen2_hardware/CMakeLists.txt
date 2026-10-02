@@ -15,7 +15,7 @@ find_package(std_srvs REQUIRED)
 
 # ROS-free core (codec, socket, bus) — reused by the real-time controller process.
 add_library(gen2_hardware_core SHARED
-  src/cubemars_servo.cpp src/can_socket.cpp src/motor_bus.cpp src/motor_tester.cpp)
+  src/cubemars_servo.cpp src/cubemars_mit.cpp src/can_socket.cpp src/motor_bus.cpp src/motor_tester.cpp)
 target_include_directories(gen2_hardware_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include/${PROJECT_NAME}>)

@@ -4,7 +4,9 @@
 #include <sys/file.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <sstream>
 
@@ -144,6 +146,31 @@ void MotorBus::rx_loop()
     ++stats_.rx_frames;
     stats_.last_rx_mono_ns = rx.mono_ns;
     if (!rx.extended) {
+      // legacy MIT reply: std frame, data[0] = drive id (only sent in answer to a command)
+      const uint8_t rid = rx.frame.len >= 6 ? rx.frame.data[0] : 0;
+      auto lit = by_id_.find(rid);
+      // Our own MIT commands (std id = drive id, sent from this host) are seen by this RX socket
+      // through the local loopback; their data[0] (position high byte) could look like a drive id.
+      if (rx.local && by_id_.count(static_cast<uint8_t>(rx.frame.id))) {lit = by_id_.end();}
+      cubemars::Frame sf = rx.frame;
+      sf.standard = true;
+      if (lit != by_id_.end() && motors_[lit->second].protocol == "mit_legacy") {
+        const auto & c = motors_[lit->second];
+        if (auto y = mit::decode_legacy_reply(sf, c.mit_ranges)) {
+          MotorFeedback & fb = writer_state_[lit->second];
+          fb.valid = true;
+          fb.status.position_deg = y->p * 180.0 / M_PI;
+          fb.status.speed_erpm = y->v * c.pole_pairs * c.gear_ratio * 60.0 / (2.0 * M_PI);
+          fb.status.current_a = std::isfinite(c.kt_nm_per_a) ? y->t / c.kt_nm_per_a : y->t;
+          fb.status.temperature_c = static_cast<int8_t>(std::clamp(y->temperature_c, -128, 127));
+          fb.status.error = y->error;
+          fb.mono_ns = rx.mono_ns;
+          fb.realtime_ns = rx.kernel_realtime_ns;
+          ++fb.rx_count;
+          slots_[lit->second]->store(fb);
+          continue;
+        }
+      }
       ++stats_.rx_unknown;
       continue;
     }

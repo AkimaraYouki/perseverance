@@ -35,6 +35,17 @@ std::vector<MotorConfig> declare_motor_params(rclcpp::Node & node)
     c.feedback_stale_timeout_s = node.declare_parameter(p + "feedback_stale_timeout_s", 0.1);
     c.command_timeout_s = node.declare_parameter(p + "command_timeout_s", 0.05);
     c.supports_disable_cmd = node.declare_parameter(p + "supports_disable_cmd", false);
+    c.protocol = node.declare_parameter(p + "protocol", std::string("servo"));
+    if (c.protocol != "servo" && c.protocol != "mit_v3" && c.protocol != "mit_legacy") {
+      throw std::runtime_error("motor '" + n + "': protocol must be servo|mit_v3|mit_legacy");
+    }
+    c.mit_ranges.p_max = node.declare_parameter(p + "mit.p_max", 12.5);
+    c.mit_ranges.v_max = node.declare_parameter(p + "mit.v_max", 50.0);
+    c.mit_ranges.t_max = node.declare_parameter(p + "mit.t_max", 18.0);
+    c.mit_ranges.kp_max = node.declare_parameter(p + "mit.kp_max", 500.0);
+    c.mit_ranges.kd_max = node.declare_parameter(p + "mit.kd_max", 5.0);
+    c.mit_test_kp = node.declare_parameter(p + "mit.test_kp", 20.0);
+    c.mit_test_kd = node.declare_parameter(p + "mit.test_kd", 0.5);
     c.verified_direction = node.declare_parameter(p + "verified.direction", false);
     c.verified_position_scale = node.declare_parameter(p + "verified.position_scale", false);
     c.verified_velocity_scale = node.declare_parameter(p + "verified.velocity_scale", false);

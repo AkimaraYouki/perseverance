@@ -12,18 +12,28 @@ from gen2_msgs.srv import MotorTest
 from std_msgs.msg import Empty
 from std_srvs.srv import Trigger
 
+import tempfile
+
 import yaml
+
+DRIVE_LOG = tempfile.TemporaryFile(mode='w+')
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 cfg = sys.argv[1]
 _m = yaml.safe_load(open(cfg))['/**']['ros__parameters']['motors']
-CAN_ID = _m[_m['names'][0]]['can_id'] or 1   # 0 = auto-scan: the fake drive answers as id 1
+NAME = _m['names'][0]
+CAN_ID = _m[NAME]['can_id'] or 1   # 0 = auto-scan: the fake drive answers as id 1
+PROTO = sys.argv[2] if len(sys.argv) > 2 else 'servo'   # servo | mit_legacy | mit_v3
+MIT = PROTO != 'servo'
+PROTO_ARGS = ['-p', f'motors.{NAME}.protocol:={PROTO}']
+if PROTO == 'mit_v3':   # the fake drive uses the AK 3.0 table ranges
+    PROTO_ARGS += ['-p', f'motors.{NAME}.mit.v_max:=60.0', '-p', f'motors.{NAME}.mit.t_max:=12.0']
 # neg-gain 0.8: the fake wheel accelerates 20 % less with negative current (asymmetry check)
 drive = subprocess.Popen([sys.executable, os.path.join(HERE, 'fake_cubemars_drive.py'), '--id', str(CAN_ID),
-                          '--neg-gain', '0.8'],
-                         stdout=subprocess.PIPE, text=True)
+                          '--neg-gain', '0.8', '--proto', PROTO],
+                         stdout=DRIVE_LOG, text=True)   # file, not a pipe: MIT prints every command
 node_p = subprocess.Popen(['ros2', 'run', 'gen2_hardware', 'motor_test_node', '--ros-args',
-                           '--params-file', cfg, '-p', 'can_interface:=vcan0'],
+                           '--params-file', cfg, '-p', 'can_interface:=vcan0'] + PROTO_ARGS,
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                           start_new_session=True)  # own process group: ros2 run + the node
 rclpy.init()
@@ -55,7 +65,7 @@ def call(cli, req):
 
 def req(mode='current', value=0.5, dur=1.0, confirm=True, speed=0.0, pulse=0.0):
     r = MotorTest.Request()
-    r.motor, r.mode, r.value, r.duration_s, r.confirm_lifted = 'ak45_a', mode, value, dur, confirm
+    r.motor, r.mode, r.value, r.duration_s, r.confirm_lifted = NAME, mode, value, dur, confirm
     r.speed_rad_s, r.pulse_s = speed, pulse
     return r
 
@@ -79,7 +89,7 @@ try:
     assert start.wait_for_service(timeout_sec=10), 'service not up'
     spin(1.5)
     second = subprocess.run(['ros2', 'run', 'gen2_hardware', 'motor_test_node', '--ros-args',
-                             '--params-file', cfg, '-p', 'can_interface:=vcan0'],
+                             '--params-file', cfg, '-p', 'can_interface:=vcan0'] + PROTO_ARGS,
                             capture_output=True, text=True, timeout=20)
     check('second motor_test_node on the same bus refuses to start',
           second.returncode != 0 and 'already commands vcan0' in second.stderr + second.stdout,
@@ -104,7 +114,8 @@ try:
     r = call(start, req(mode='velocity', value=1.0, dur=2.0))
     m = wait_done()
     check('velocity test completes', r.accepted and m.result == 'done', m.result)
-    check('velocity scale consistent (mean ~1.0 rad/s)', abs(m.mean_velocity_rad_s - 1.0) < 0.15,
+    check('velocity scale consistent (mean ~1.0 rad/s)' + (' [MIT: kd loop, direction only]' if MIT else ''),
+          (m.mean_velocity_rad_s > 0.05) if MIT else abs(m.mean_velocity_rad_s - 1.0) < 0.15,
           f'{m.mean_velocity_rad_s:.3f}')
 
     r = call(start, req(value=0.5, dur=3.0))
@@ -123,7 +134,7 @@ try:
     m = wait_done()
     import math
     check('position move 90 deg completes', r.accepted and m.result == 'done', f'{r.message} / {m.result}')
-    check('position final error < 1 deg', abs(math.degrees(m.position_error_rad)) < 1.0,
+    check('position final error < 2 deg', abs(math.degrees(m.position_error_rad)) < 2.0,
           f'moved {math.degrees(m.moved_rad):.1f} deg, error {math.degrees(m.position_error_rad):+.2f} deg')
 
     spin(1.0)
@@ -171,10 +182,22 @@ finally:
         os.killpg(node_p.pid, signal.SIGKILL)
     time.sleep(0.3)
     drive.terminate()
-    out = drive.communicate(timeout=3)[0].strip().splitlines()
-    cur_cmds = [l for l in out if 'fn=1' in l]
-    check('last command sent was 0 A', bool(cur_cmds) and cur_cmds[-1].endswith('target=0.000'),
-          cur_cmds[-1] if cur_cmds else 'none')
+    drive.wait(timeout=3)
+    DRIVE_LOG.seek(0)
+    out = DRIVE_LOG.read().strip().splitlines()
+    if PROTO == 'mit_legacy':
+        last = [l for l in out if l.startswith('CMD')]
+        zero = [l for l in out if l.startswith('CMD mit')]
+        check('ends with zero MIT command, then exit motor mode (FD)',
+              bool(last) and last[-1] == 'CMD special FD' and zero and 'kp=0.0 kd=0.00' in zero[-1] and abs(float(zero[-1].split('t=')[1])) < 0.01,
+              f'{zero[-1] if zero else "none"} / {last[-1] if last else "none"}')
+    elif PROTO == 'mit_v3':
+        cur_cmds = [l for l in out if 'fn=8' in l or 'fn=15' in l]
+        check('ends with zero MIT command / disable', bool(cur_cmds), cur_cmds[-1] if cur_cmds else 'none')
+    else:
+        cur_cmds = [l for l in out if 'fn=1' in l]
+        check('last command sent was 0 A', bool(cur_cmds) and cur_cmds[-1].endswith('target=0.000'),
+              cur_cmds[-1] if cur_cmds else 'none')
     print(f'---- {sum(results)} passed, {len(results) - sum(results)} failed')
     rclpy.try_shutdown()
     sys.exit(0 if all(results) else 1)

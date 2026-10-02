@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "gen2_hardware/cubemars_mit.hpp"
 #include "gen2_hardware/cubemars_servo.hpp"
 
 namespace gen2_hardware
@@ -37,6 +38,15 @@ struct MotorConfig
   double command_timeout_s = 0.05;
 
   bool supports_disable_cmd = false;    // AK 3.0 mode 15
+
+  // Command protocol: "servo" (29-bit modes), "mit_v3" (AK 3.0 MIT, feedback = 0x29 upload),
+  // "mit_legacy" (std frames, reply only to commands). MIT ranges must match the drive firmware.
+  std::string protocol = "servo";
+  mit::Ranges mit_ranges;
+  double mit_test_kp = 20.0;    // position test stiffness (N·m/rad)
+  double mit_test_kd = 0.5;     // position / velocity test damping (N·m·s/rad)
+  bool is_mit() const {return protocol != "servo";}
+  mit::Proto mit_proto() const {return protocol == "mit_v3" ? mit::Proto::kV3 : mit::Proto::kLegacy;}
 
   // Verification gates: commanding (ARM) is refused until the relevant items are true.
   bool verified_direction = false;

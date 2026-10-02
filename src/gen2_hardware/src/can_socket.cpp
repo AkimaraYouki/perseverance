@@ -117,6 +117,7 @@ int CanSocket::read(RxFrame & out, int timeout_ms)
     return 0;
   }
   out.kernel_realtime_ns = 0;
+  out.local = (msg.msg_flags & MSG_DONTROUTE) != 0;
   for (cmsghdr * c = CMSG_FIRSTHDR(&msg); c; c = CMSG_NXTHDR(&msg, c)) {
     if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SO_TIMESTAMPNS) {
       timespec ts{};
@@ -140,7 +141,7 @@ bool CanSocket::write_ext(const cubemars::Frame & f, std::string & err)
     return false;
   }
   can_frame cf{};
-  cf.can_id = (f.id & CAN_EFF_MASK) | CAN_EFF_FLAG;
+  cf.can_id = f.standard ? (f.id & CAN_SFF_MASK) : ((f.id & CAN_EFF_MASK) | CAN_EFF_FLAG);
   cf.len = f.len > 8 ? 8 : f.len;
   std::memcpy(cf.data, f.data, 8);
   const ssize_t n = ::send(fd_, &cf, sizeof(cf), MSG_DONTWAIT);

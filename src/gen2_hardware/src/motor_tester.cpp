@@ -74,8 +74,26 @@ std::string MotorTester::start(
       return "position speed must be in (0, " + std::to_string(velocity_limit(m)) + "] rad/s";
     }
   }
+  if (c.is_mit() && (mode == TestMode::kCurrent || mode == TestMode::kAccel) &&
+    !std::isfinite(c.kt_nm_per_a))
+  {
+    return "MIT current test needs kt_nm_per_a (torque command = I x Kt)";
+  }
+  if (c.protocol == "mit_legacy") {
+    // legacy MIT drives answer only to commands: 'enter motor mode' returns the state (manual 5.3)
+    bus_.enable_tx(true);
+    std::string err;
+    bus_.send(mit::enter(c.can_id), err);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
   const MotorFeedback fb = bus_.feedback(m);
-  if (mode == TestMode::kPosition && fb.valid &&
+  if (mode == TestMode::kPosition && c.is_mit()) {
+    const double tgt = (fb.status.position_deg + value / c.direction) * M_PI / 180.0;
+    if (std::fabs(tgt) > c.mit_ranges.p_max) {
+      return "MIT position target outside +-mit.p_max (" + std::to_string(c.mit_ranges.p_max) + " rad)";
+    }
+  }
+  if (mode == TestMode::kPosition && fb.valid && !c.is_mit() &&
     std::fabs(fb.status.position_deg) > kPositionWrapGuardDeg)
   {
     return "raw position " + std::to_string(fb.status.position_deg) +
@@ -153,8 +171,11 @@ void MotorTester::run(
     std::lock_guard<std::mutex> lk(mtx_);
     st_.target_rad = target_joint;
   }
-  const double vel_guard = mode == TestMode::kVelocity ? std::fabs(value) * 1.5 + 0.5 :
+  double vel_guard = mode == TestMode::kVelocity ? std::fabs(value) * 1.5 + 0.5 :
     mode == TestMode::kPosition ? speed * 1.5 + 0.5 : velocity_limit(m) * 1.5;
+  // MIT feedback saturates at +-v_max: a reading at the edge means "at least v_max", so the
+  // guard must fire there, otherwise a runaway is never detected.
+  if (c.is_mit()) {vel_guard = std::min(vel_guard, 0.98 * c.mit_ranges.v_max);}
   double peak_i = 0, peak_w = 0, w_sum = 0;
   int w_n = 0;
   // accel mode state: current sign, pulse index, flip times (pulse k starts at flips[k])
@@ -198,6 +219,32 @@ void MotorTester::run(
     peak_w = std::max(peak_w, std::fabs(w));
     if (t > duration * 0.5) {w_sum += w; ++w_n;}
     cubemars::Frame f;
+    if (c.is_mit()) {
+      mit::Command mc;
+      switch (mode) {
+        case TestMode::kCurrent:
+          mc.t = value * std::min(1.0, t / limits_.current_ramp_s) * c.kt_nm_per_a;
+          break;
+        case TestMode::kAccel:
+          mc.t = sign * value / c.direction * c.kt_nm_per_a;
+          break;
+        case TestMode::kVelocity:
+          mc.v = value / c.direction;
+          mc.kd = c.mit_test_kd;
+          break;
+        case TestMode::kPosition: {   // ramp p_des at the speed limit, drive PD holds it
+            const double p0 = fb0.status.position_deg * M_PI / 180.0;
+            const double p1 = target_raw_deg * M_PI / 180.0;
+            const double step = speed * t;
+            mc.p = p1 > p0 ? std::min(p1, p0 + step) : std::max(p1, p0 - step);
+            mc.v = (mc.p == p1) ? 0.0 : (p1 > p0 ? speed : -speed);
+            mc.kp = c.mit_test_kp;
+            mc.kd = c.mit_test_kd;
+            break;
+          }
+      }
+      f = mit::encode(c.mit_proto(), c.can_id, c.mit_ranges, mc);
+    } else {
     switch (mode) {
       case TestMode::kCurrent:
         f = cubemars::encode_current(c.can_id, value * std::min(1.0, t / limits_.current_ramp_s));
@@ -211,6 +258,7 @@ void MotorTester::run(
       case TestMode::kAccel:   // bang-bang, starts with +value (joint direction), no ramp
         f = cubemars::encode_current(c.can_id, sign * value / c.direction);
         break;
+    }
     }
     std::string err;
     if (!bus_.send(f, err)) {why = "TX failed: " + err; break;}
@@ -292,11 +340,15 @@ void MotorTester::analyse_accel(
 void MotorTester::send_zero(std::size_t m)
 {
   if (!bus_.tx_enabled()) {return;}
+  const auto & c = bus_.motors()[m];
   std::string err;
   for (int k = 0; k < 20; ++k) {
-    bus_.send(cubemars::encode_current(bus_.motors()[m].can_id, 0.0), err);
+    bus_.send(c.is_mit() ? mit::encode(c.mit_proto(), c.can_id, c.mit_ranges, mit::Command{}) :
+      cubemars::encode_current(c.can_id, 0.0), err);
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
+  if (c.protocol == "mit_legacy") {bus_.send(mit::exit(c.can_id), err);}  // leave motor mode
+  else if (c.is_mit() && c.supports_disable_cmd) {bus_.send(cubemars::encode_disable(c.can_id), err);}
 }
 
 std::string MotorTester::zero_all()

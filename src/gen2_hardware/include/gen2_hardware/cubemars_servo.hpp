@@ -38,8 +38,9 @@ constexpr uint8_t kDisableAck = 0x77;        // DATA[7] of 0x29 after a disable 
 
 struct Frame
 {
-  uint32_t id = 0;   // 29-bit extended id
+  uint32_t id = 0;   // 29-bit extended id (11-bit when standard)
   uint8_t len = 0;
+  bool standard = false;  // legacy MIT firmware uses standard frames
   uint8_t data[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 };
 
