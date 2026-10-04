@@ -1,5 +1,23 @@
 # Gen2 wheeled-biped — ROS 2 workspace
 
+<p align="center">
+  <img src="docs/media/robot_cad_front.png" height="320" alt="PERSEVERANCE Gen2 CAD, front">
+  <img src="docs/media/robot_cad_inside.png" height="320" alt="PERSEVERANCE Gen2 CAD, electronics bay">
+</p>
+
+**PERSEVERANCE Gen2**: a two-wheeled balancing robot with four-bar legs (hips AK60-6 ×2, wheels AK45-10 ×2,
+Jetson Orin Nano). Target: 100 mm stairs and rough ground. Lab-meeting docs (Korean): [`docs/lab-meeting/`](docs/lab-meeting/README.md).
+
+### Simulation (Isaac Lab, real time 1×)
+
+| Rough ground (stones, waves, up to 6 cm) | Zig-zag turns at top speed (3.5 km/h) | Jump onto two 8 cm steps |
+|---|---|---|
+| ![rough](docs/media/sim_rough.gif) | ![steer](docs/media/sim_steer.gif) | ![jump](docs/media/sim_jump.gif) |
+
+Driven by the same controller the robot will run, [`sim/isaaclab/scripts/wbctrl.py`](sim/isaaclab/scripts/wbctrl.py)
+(wheel LQR + leg VMC), with measured wheel friction, model errors, sensor noise and 5 ms control delay.
+GIF time = simulation time (`pv demo <scene> --record`).
+
 Jetson Orin Nano 8GB · Ubuntu 24.04.4 · JetPack L4T R39.2.1 (kernel 6.8.12-1021-tegra) · **ROS 2 Jazzy** · CycloneDDS
 
 ## Architecture (current state)
