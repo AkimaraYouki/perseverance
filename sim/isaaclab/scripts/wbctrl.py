@@ -294,10 +294,14 @@ class WBController:
         # 바퀴 마찰 보상 (TUNE fric_comp_nm, 0 = 끔): 바퀴마다 fric_comp_nm x tanh(관절 속도 / fric_comp_w) 를 토크에 더한다.
         # 들린 동안(바퀴 감쇠)은 안 더함
         # fric_comp_static_nm: 바퀴가 거의 멈췄을 때 (1 - |tanh(w / fric_comp_w)|) 만큼 지령 토크 방향으로 더 — 정지 마찰 넘기기 (0 = 끔)
-        fc, fs = getattr(P, "fric_comp_nm", 0.0), getattr(P, "fric_comp_static_nm", 0.0)
-        if fc > 0 or fs > 0:
+        # fric_comp_cmd_nm: 바퀴 속도와 상관없이 지령 방향으로 항상 더 — 드라이브가 작은 지령을 무시(데드밴드)하는 경우 (0 = 끔)
+        fc, fs, fd = getattr(P, "fric_comp_nm", 0.0), getattr(P, "fric_comp_static_nm", 0.0), getattr(P, "fric_comp_cmd_nm", 0.0)
+        if fc > 0 or fs > 0 or fd > 0:
             sv = np.tanh(f.w_wheel_joint / P.fric_comp_w)
-            comp = fc * sv + fs * (1.0 - np.abs(sv)) * np.tanh(act[:, 2:] * P.wheel_tau_max / 0.05)
+            tcmd = act[:, 2:] * P.wheel_tau_max
+            comp = fc * sv + fs * (1.0 - np.abs(sv)) * np.tanh(tcmd / 0.05)
+            if fd > 0:
+                comp = comp + fd * np.tanh(tcmd / P.fric_comp_cmd_w)
             act[:, 2:] = np.where(lifted[:, None], act[:, 2:], np.clip(act[:, 2:] + comp / P.wheel_tau_max, -1.0, 1.0))
 
         # 제어 지연 (+ 가끔 한 주기 더) — 로봇마다 따로

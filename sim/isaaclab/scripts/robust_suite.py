@@ -237,11 +237,12 @@ if args.policy:                                                        # 학습 
     term_ = env.action_manager.get_term("ctrl")
     term_.motor_true[:] = torch.tensor([x["wheel_motor"] for x in dr], device=dev)
     term_.motor_est[:] = torch.tensor(motor_est, device=dev, dtype=torch.float32)
-kf = np.stack([g.uniform(-1, 1, 2) for g in rngs]) * P.dr_fric + 1.0          # 바퀴 마찰 로봇·바퀴마다 (실측 2026-10-03)
+kf = np.stack([g.uniform(-1, 1, 2) for g in rngs]) * P.dr_fric + 1.0          # 바퀴 정지 마찰·데드밴드 로봇·바퀴마다 (실측 2026-10-03)
+kd_ = np.stack([g.uniform(-1, 1, 2) for g in rngs]) * P.dr_fric_dyn + 1.0      # 운동 마찰
 for i in range(N):
     dr[i]["wheel_fric_nm"] = [round(P.wheel_fric_nm * x, 3) for x in kf[i]]
-cad.set_wheel_model(robot, wheel_ids, torch.tensor(P.wheel_fric_nm * kf), torch.tensor(P.wheel_fric_dyn_nm * kf),
-                    P.wheel_visc, P.wheel_deadband_nm, P.wheel_armature)
+cad.set_wheel_model(robot, wheel_ids, torch.tensor(P.wheel_fric_nm * kf), torch.tensor(P.wheel_fric_dyn_nm * kd_),
+                    P.wheel_visc, torch.tensor(P.wheel_deadband_nm * kf), P.wheel_armature)
 CTRL = wbctrl.WBController(P, lqr, m_pend, n=N, seed=args.seed + 1000, edges=spec.get("edges", ()))   # 로봇 N 대 한 번에
 motor_est_a = np.asarray(motor_est)
 

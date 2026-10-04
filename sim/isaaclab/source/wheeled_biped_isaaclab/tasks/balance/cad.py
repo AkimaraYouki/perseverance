@@ -221,7 +221,7 @@ def set_wheel_model(robot, wheel_ids, fric_static, fric_dyn, viscous=0.0, deadba
     full = lambda x: (torch.as_tensor(x, dtype=torch.float32).expand(n, k).clone() if torch.as_tensor(x).ndim < 2
                       else torch.as_tensor(x, dtype=torch.float32)).to(robot.device)  # noqa: E731
     robot.write_joint_friction_coefficient_to_sim(full(fric_static), full(fric_dyn), full(viscous), joint_ids=wheel_ids)
-    robot.actuators["wheels"].deadband[:] = deadband
+    robot.actuators["wheels"].deadband[:] = full(deadband)                 # 숫자 또는 (환경, 바퀴) — 로봇마다
     if armature > 0:
         robot.write_joint_armature_to_sim(full(armature), joint_ids=wheel_ids)
 

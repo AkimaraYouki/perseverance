@@ -39,7 +39,10 @@ TUNE = dict(
                          #   운동 마찰과 같은 크기로 (2026-10-03 pv robust 마찰 켬: 보상 0 -> 74/88, 0.25 -> 87/88 = 마찰 없음 88/88 수준,
                          #   점프 16 대 마찰 없음 12/16 vs 보상 13/16). 0.4 (과보상) 는 점프 5/8
     fric_comp_w=0.5,     # 마찰 보상 속도 폭 [rad/s]
-    fric_comp_static_nm=0.0,  # 정지 마찰 보상 [N·m]: 바퀴가 거의 멈췄을 때만 지령 토크 방향으로 더함 (0 = 끔)
+    fric_comp_static_nm=0.57,  # 정지 마찰 보상 [N·m]: 바퀴가 거의 멈췄을 때만 지령 토크 방향으로 더함 (0 = 끔). 실측 경계 0.40~0.50 A 가운데.
+                         #   2026-10-04 마찰·데드밴드 두 모델 x 보상 4 가지 비교에서 가장 좋음 (pv harsh 99.0 / 99.7 %, pv robust 6 종 46/48 / 43/48)
+    fric_comp_cmd_nm=0.0,     # 데드밴드 보상 [N·m]: 바퀴 속도와 상관없이 지령 토크 방향으로 항상 더함 x tanh(지령 / fric_comp_cmd_w) (0 = 끔)
+    fric_comp_cmd_w=0.05,     # 데드밴드 보상이 켜지는 지령 폭 [N·m] (0 근처에서 부호가 튀지 않게)
     turn_slow=True,      # 돌 때 안쪽 바퀴를 느리게 (사용자 제안 2026-09-27): 바깥 바퀴 = 가운데 속도 + 0.094 x 회전 속도 가 최고 속도를 넘지 않게
                          #   가운데 속도를 낮춘다. 회전 명령은 그대로. 3 km/h + 2.5 rad/s 대각선에서 바깥 바퀴가 모터 한계 81~90 % -> 토크가 없어
                          #   회전도 멈추고 속도가 1.75 m/s 까지 올라 고꾸라짐 (창 기록 8 번). 이제 바깥 3 km/h, 가운데 2.2, 안쪽 1.3 km/h
@@ -186,12 +189,15 @@ TUNE = dict(
     dr_motor=0.15,       # 바퀴 모터 토크·속도 한계 - 0~비율 (배터리 처짐)
     dr_seed=0,           # 0 = 실행마다 무작위, 그 외 = 고정 시드
     # --- 바퀴 실측 (로봇 2026-10-03, comms 1500): AK45-10 은 0.4 A 이하 지령에 전혀 안 돈다 (재시작) ---
-    wheel_fric_nm=0.45,  # 바퀴축 정지 마찰 [N·m] (시동 0.3~0.4 A x Kt 1.27). 이보다 작은 토크엔 안 돈다 (PhysX 관절 마찰). 0 = 끔
+    wheel_fric_nm=0.57,  # 바퀴축 정지 마찰 [N·m]: 실측 0.40 A 안 돎 / 0.50 A 무조건 돎 -> 경계 0.51~0.635, 가운데 0.45 A x 1.27.
+                         #   이보다 작은 토크엔 안 돈다 (PhysX 관절 마찰). 0 = 끔
     wheel_fric_dyn_nm=0.25,  # 바퀴축 운동 마찰 [N·m] (추정: 반전 가속 맞춤 ~0.2, 0 A 로 놓으면 5 rad/s 에서 0.2 s 안에 정지). 1 kHz 실측 대기
     wheel_visc=0.0,      # 바퀴축 점성 마찰 [N·m·s/rad] (실측 없음)
-    wheel_deadband_nm=0.0,  # 드라이브가 무시하는 작은 지령 [N·m] (0.4 A x 1.27 = 0.51). 마찰 대신 이것일 수도 있어 시험용
+    wheel_deadband_nm=0.0,  # 드라이브가 무시하는 작은 지령 [N·m] — 0.4 A 이하가 마찰이 아니라 이것이면 0.57 (정지 마찰은 역구동 0.1 로).
+                         #   로봇마다 dr_fric 만큼 흩어짐
     wheel_armature=4.5e-4,  # 바퀴 관성 추가 [kg·m²]: 링크 1.84e-3 + 이것 = 2.29e-3 (실측 2.0~2.6e-3). 제어기 LQR 모델에도 같이
-    dr_fric=0.3,         # 바퀴 마찰 로봇·바퀴마다 ± 비율
+    dr_fric=0.08,        # 정지 마찰·데드밴드 로봇·바퀴마다 ± 비율 (0.57 x 0.92~1.08 = 0.52~0.62, 실측 경계 0.508~0.635 안. 0.9 면 0.40 A 에서 0.2 s 뒤 미끄러져 돎)
+    dr_fric_dyn=0.3,     # 운동 마찰 로봇·바퀴마다 ± 비율
     # --- 화면 ---
     render_hz=50.0,      # 창 렌더 주기 [Hz] (재시작). 25 Hz 로 낮춰도 실시간 0.54 -> 0.55 배, CPU 물리도 같음 (2026-09-28) -> 렌더가 병목이 아님
     physics_hz=400.0,    # 물리 주기 [Hz] (제어 200 Hz 의 배수, 재시작). 400 에서도 점프 착지 +17 mm, 삼각형길 통과 (800 과 같음)
@@ -577,12 +583,13 @@ def apply_dr():
         MOTOR["k"] = k
         msg.append(f"바퀴 모터 한계 x{k:.2f}")
     MOTOR["est"] = MOTOR["k"] * (1.0 + _rng.normal(0, 0.02))           # 제어기가 배터리 전압으로 추정한 모터 한계 (오차 2 %, pv robust 와 같음)
-    kf = 1.0 + _rng.uniform(-1, 1, 2) * args.dr_fric                   # 바퀴 마찰 (좌우 따로, pv robust 와 같음)
-    cad.set_wheel_model(robot, wheel_ids, torch.tensor([args.wheel_fric_nm * kf]), torch.tensor([args.wheel_fric_dyn_nm * kf]),
-                        args.wheel_visc, args.wheel_deadband_nm, args.wheel_armature)
+    kf = 1.0 + _rng.uniform(-1, 1, 2) * args.dr_fric                   # 바퀴 정지 마찰·데드밴드 (좌우 따로, pv robust 와 같음)
+    kd_ = 1.0 + _rng.uniform(-1, 1, 2) * args.dr_fric_dyn              # 운동 마찰
+    cad.set_wheel_model(robot, wheel_ids, torch.tensor([args.wheel_fric_nm * kf]), torch.tensor([args.wheel_fric_dyn_nm * kd_]),
+                        args.wheel_visc, torch.tensor([args.wheel_deadband_nm * kf]), args.wheel_armature)
     if args.wheel_fric_nm > 0 or args.wheel_deadband_nm > 0:
-        msg.append(f"바퀴 마찰 L {args.wheel_fric_nm * kf[0]:.2f} R {args.wheel_fric_nm * kf[1]:.2f} N·m"
-                   + (f" 데드밴드 {args.wheel_deadband_nm:.2f}" if args.wheel_deadband_nm > 0 else ""))
+        msg.append(f"바퀴 정지 마찰 L {args.wheel_fric_nm * kf[0]:.2f} R {args.wheel_fric_nm * kf[1]:.2f} N·m"
+                   + (f" 데드밴드 L {args.wheel_deadband_nm * kf[0]:.2f} R {args.wheel_deadband_nm * kf[1]:.2f}" if args.wheel_deadband_nm > 0 else ""))
     print("[모델 오차] " + (", ".join(msg) if msg else "없음") + f" | 추정 {args.est}, 지연 {args.delay_ms:.0f}+{args.jitter_ms:.0f} ms", flush=True)
     return msg
 
@@ -736,7 +743,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
     for kk, pl in plots.items():
         pl.set_data(*hist[kk])
 
-RESTART = ("wheel_fric_nm", "wheel_fric_dyn_nm", "wheel_visc", "wheel_deadband_nm", "wheel_armature", "dr_fric", "rl_policy", "rec_policy", "dr_mass", "dr_com_cm", "dr_motor", "dr_seed", "imu_tilt_bias_deg", "render_hz", "physics_hz", "color_body", "color_legs", "color_wheels", "spawn_z", "obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
+RESTART = ("wheel_fric_nm", "wheel_fric_dyn_nm", "wheel_visc", "dr_fric_dyn", "wheel_deadband_nm", "wheel_armature", "dr_fric", "rl_policy", "rec_policy", "dr_mass", "dr_com_cm", "dr_motor", "dr_seed", "imu_tilt_bias_deg", "render_hz", "physics_hz", "color_body", "color_legs", "color_wheels", "spawn_z", "obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
            "ridge_lane", "ridge_len", "cad_file", "cad_unit", "gen_type", "gen_h", "gen_len", "gen_seed", "env_name", "anymal_type", "anymal_level", "anymal_h", "anymal_w")   # 장면을 다시 만들어야 해서 재시작 필요
 CLI_KEYS = {k for k in TUNE if f"--{k}" in sys.argv}                        # 명령줄로 준 값은 파일보다 우선
 

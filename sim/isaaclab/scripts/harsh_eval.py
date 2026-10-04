@@ -84,7 +84,7 @@ import wbctrl  # noqa: E402
 
 H = args.harsh
 P = _types.SimpleNamespace(**{k: (getattr(args, k) if k != "seconds" else v) for k, v in TUNE.items()})
-for k in ("imu_tilt_noise_deg", "imu_tilt_bias_deg", "imu_gyro_noise", "enc_vel_noise", "imu_acc_noise", "dr_mass", "dr_com_cm", "dr_fric"):
+for k in ("imu_tilt_noise_deg", "imu_tilt_bias_deg", "imu_gyro_noise", "enc_vel_noise", "imu_acc_noise", "dr_mass", "dr_com_cm", "dr_fric", "dr_fric_dyn"):
     setattr(P, k, getattr(P, k) * H)
 P.dr_motor = min(0.6, P.dr_motor * H)
 
@@ -241,7 +241,7 @@ g = np.random.default_rng(args.seed)
 km = 1.0 + g.uniform(-1, 1, N) * P.dr_mass
 dxz = g.uniform(-1, 1, (N, 2)) * P.dr_com_cm / 100.0
 kv = 1.0 - g.uniform(0, 1, N) * P.dr_motor
-kf = 1.0 + g.uniform(-1, 1, (N, 2)) * P.dr_fric
+kf = 1.0 + g.uniform(-1, 1, (N, 2)) * P.dr_fric                        # 정지 마찰·데드밴드
 view = robot.root_physx_view
 masses, coms = view.get_masses().clone(), view.get_coms().clone()
 masses[:, 0] *= torch.tensor(km, dtype=masses.dtype)
@@ -253,8 +253,9 @@ wheels_act.velocity_limit = (vlim.to(dev) * torch.tensor(kv, device=dev, dtype=t
 if hasattr(wheels_act, "_vel_at_effort_lim"):
     wheels_act._vel_at_effort_lim = wheels_act.velocity_limit * (1 + wheels_act.effort_limit / wheels_act._saturation_effort)
 motor_est = kv * (1.0 + g.normal(0, 0.02, N))                          # 전압으로 추정한 모터 한계 (오차 2 %)
-cad.set_wheel_model(robot, wheel_ids, torch.tensor(P.wheel_fric_nm * kf), torch.tensor(P.wheel_fric_dyn_nm * kf),
-                    P.wheel_visc, P.wheel_deadband_nm, P.wheel_armature)
+kd_ = 1.0 + g.uniform(-1, 1, (N, 2)) * P.dr_fric_dyn                   # 운동 마찰
+cad.set_wheel_model(robot, wheel_ids, torch.tensor(P.wheel_fric_nm * kf), torch.tensor(P.wheel_fric_dyn_nm * kd_),
+                    P.wheel_visc, torch.tensor(P.wheel_deadband_nm * kf), P.wheel_armature)
 mass_true = masses.to(dev)
 CTRL = wbctrl.WBController(P, lqr, m_pend, n=N, seed=args.seed + 1000)
 
