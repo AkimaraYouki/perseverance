@@ -100,6 +100,8 @@ class WBController:
         old = getattr(self, "jumps", [[] for _ in range(n)])
         self.jumps = [[] if m[i] else old[i] for i in range(n)]
         self.roll_pi.reset(0.0, m)
+        self.wf = np.where(m[:, None], 0.0, getattr(self, "wf", np.zeros((n, 2))))        # 바퀴 토크 LPF 상태 (행동 단위)
+        self.db_e = np.where(m[:, None], 0.0, getattr(self, "db_e", np.zeros((n, 2))))    # 데드밴드 시그마-델타 누적 오차
         if mask is None:
             self.q.clear()
         self.dbg, self.jump_blocked = {}, [""] * n           # 화면·기록용 (제어에는 안 씀)
@@ -303,6 +305,30 @@ class WBController:
             if fd > 0:
                 comp = comp + fd * np.tanh(tcmd / P.fric_comp_cmd_w)
             act[:, 2:] = np.where(lifted[:, None], act[:, 2:], np.clip(act[:, 2:] + comp / P.wheel_tau_max, -1.0, 1.0))
+
+        # 바퀴 토크 1 차 저역통과 (TUNE wheel_lpf_hz, 기본 20 Hz, 200 Hz 에서 a = 0.466) — 호스트에서, 실기도 여기서 한다.
+        # 2026-10-04 시뮬 환경 행동 항(CADWheelAction)에서 옮겨 옴: 드라이브 데드밴드 보상은 필터 **뒤**여야 한다 (앞에서 올린 작은 지령을
+        # 필터가 다시 데드밴드 아래로 뭉갠다). 지연(아래)과 순서만 바뀌었다 — 선형이라 결과는 같다.
+        lpf = getattr(P, "wheel_lpf_hz", 0.0)
+        if lpf > 0:
+            self.wf = self.wf + (1.0 - math.exp(-2.0 * math.pi * lpf * DT)) * (act[:, 2:] - self.wf)
+            act[:, 2:] = self.wf
+        # 드라이브 데드밴드 보상 (TUNE db_comp, climb_test 기본 sigma, 없으면 off): 드라이브가 |지령| < 문턱 을 0 으로 버리는 경우 (AK45-10 0.5 A 미만 안 돎 가설 b).
+        #   boost: db_comp_eps < |τ| < db_comp_nm 인 지령을 ±db_comp_nm 로 올려 보낸다 (작은 토크는 크게, 더 작은 건 버림)
+        #   sigma: 문턱 아래 지령은 0 과 ±db_comp_nm 를 섞어 보내 평균이 τ 가 되게 (시그마-델타, 남은 오차를 다음 주기로 넘김)
+        # 문턱 위 지령은 그대로 보낸다. 바퀴 들림 감쇠 중에도 같다 (드라이브 특성의 역함수라 상태와 무관).
+        mode = getattr(P, "db_comp", "off")
+        if mode in ("boost", "sigma"):
+            db = P.db_comp_nm / P.wheel_tau_max
+            if mode == "boost":
+                a_ = np.abs(act[:, 2:])
+                act[:, 2:] = np.where(a_ <= P.db_comp_eps / P.wheel_tau_max, act[:, 2:], np.sign(act[:, 2:]) * np.maximum(a_, db))
+            else:
+                v = act[:, 2:] + self.db_e
+                av = np.abs(v)
+                out = np.where(av >= db, v, np.where(av >= 0.5 * db, np.sign(v) * db, 0.0))
+                self.db_e = np.clip(v - out, -db, db)
+                act[:, 2:] = np.clip(out, -1.0, 1.0)
 
         # 제어 지연 (+ 가끔 한 주기 더) — 로봇마다 따로
         if P.delay_ms > 0 or P.jitter_ms > 0:

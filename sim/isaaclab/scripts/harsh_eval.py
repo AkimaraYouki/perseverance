@@ -214,6 +214,7 @@ if args.cmd == "course":
     cmd_term.pin(True)
 cmd_term.cfg.auto_height = cmd_term.cfg.default_height = P.idle_h
 env.action_manager.get_term("wheels").cfg.torque_scale = P.wheel_tau_max   # 바퀴 행동 = 토크 / wheel_tau_max
+env.action_manager.get_term("wheels")._alpha = 1.0                          # 바퀴 20 Hz 필터는 wbctrl 안 (wheel_lpf_hz)
 leg_ids = robot.find_joints(cad.LEG_JOINTS, preserve_order=True)[0]
 wheel_ids = robot.find_joints(cad.WHEEL_JOINTS, preserve_order=True)[0]
 wheel_bodies = robot.find_bodies(["l_wheel", "r_wheel"], preserve_order=True)[0]

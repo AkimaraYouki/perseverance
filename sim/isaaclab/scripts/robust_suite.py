@@ -187,6 +187,7 @@ cmd.cfg.auto_height = cmd.cfg.default_height = P.idle_h
 if not args.policy:
     wheel_term = env.action_manager.get_term("wheels")
     wheel_term.cfg.torque_scale = P.wheel_tau_max                    # 모든 바퀴 행동 = 토크 / wheel_tau_max
+    wheel_term._alpha = 1.0                                          # 바퀴 20 Hz 필터는 wbctrl 안 (wheel_lpf_hz)
 pol = None
 if args.policy:
     from policy_io import load_actor

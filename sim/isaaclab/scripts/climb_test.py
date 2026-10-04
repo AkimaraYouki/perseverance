@@ -39,10 +39,17 @@ TUNE = dict(
                          #   운동 마찰과 같은 크기로 (2026-10-03 pv robust 마찰 켬: 보상 0 -> 74/88, 0.25 -> 87/88 = 마찰 없음 88/88 수준,
                          #   점프 16 대 마찰 없음 12/16 vs 보상 13/16). 0.4 (과보상) 는 점프 5/8
     fric_comp_w=0.5,     # 마찰 보상 속도 폭 [rad/s]
-    fric_comp_static_nm=0.625, # 정지 마찰 보상 [N·m]: 바퀴가 거의 멈췄을 때만 지령 토크 방향으로 더함 (0 = 끔). 실측 경계 0.40~0.50 A 가운데.
-                         #   2026-10-04 마찰·데드밴드 두 모델 x 보상 4 가지 비교에서 가장 좋음 (pv harsh 99.0 / 99.7 %, pv robust 6 종 46/48 / 43/48)
-    fric_comp_cmd_nm=0.0,     # 데드밴드 보상 [N·m]: 바퀴 속도와 상관없이 지령 토크 방향으로 항상 더함 x tanh(지령 / fric_comp_cmd_w) (0 = 끔)
-    fric_comp_cmd_w=0.05,     # 데드밴드 보상이 켜지는 지령 폭 [N·m] (0 근처에서 부호가 튀지 않게)
+    fric_comp_static_nm=0.0,  # 정지 마찰 보상 [N·m] (C2): 바퀴가 거의 멈췄을 때만 지령 토크 방향으로 더함 (0 = 끔). 마찰 가설이면 0.625.
+                         #   2026-10-04 시그마-델타(db_comp)로 바꿈 — C2 는 데드밴드 가설에서 점프 넘어짐 (아래 db_comp 표)
+    fric_comp_cmd_nm=0.0,     # (C3, 옛 후보) 바퀴 속도와 상관없이 지령 방향으로 항상 더함 x tanh(지령 / fric_comp_cmd_w) (0 = 끔). 과보상
+    fric_comp_cmd_w=0.05,     # C3 가 켜지는 지령 폭 [N·m]
+    wheel_lpf_hz=20.0,   # 바퀴 토크 1 차 저역통과 [Hz] (wbctrl 안, 호스트). 2026-10-04 환경 행동 항에서 옮김 — 데드밴드 보상이 그 뒤에 와야 해서
+    db_comp="sigma",     # 0.5 A 문턱 보상 (필터 뒤): off | boost (작은 지령을 ±db_comp_nm 로 올림) | sigma (0 과 ±db_comp_nm 를 섞어 평균 = 지령)
+                         #   2026-10-04 두 가설 x 보상 [pv robust 11 종 x 16 대 / pv harsh 4096]: 기준(마찰 없음) 169/176 · 99.1 %
+                         #   마찰 가설: C2 167 · 99.1 %, sigma 165 · 98.9 %   데드밴드 가설: C2 159 (점프 넘어짐, 삼각형길 11/16) · 99.2 %, sigma 167 · 99.5 %
+                         #   boost 는 데드밴드 가설 6 종 81/96 (C2 와 같음, sigma 93/96) -> sigma 만 두 가설 모두 기준 수준
+    db_comp_nm=0.65,     # 문턱 보상 크기 [N·m] — 0.5 A (0.635) 보다 조금 위. 실측 "0.5 A 면 무조건 돈다" 라 이보다 큰 문턱은 없다
+    db_comp_eps=0.05,    # boost: 이 이하 지령은 올리지 않음 [N·m] (0 근처 부호 떨림 막기)
     turn_slow=True,      # 돌 때 안쪽 바퀴를 느리게 (사용자 제안 2026-09-27): 바깥 바퀴 = 가운데 속도 + 0.094 x 회전 속도 가 최고 속도를 넘지 않게
                          #   가운데 속도를 낮춘다. 회전 명령은 그대로. 3 km/h + 2.5 rad/s 대각선에서 바깥 바퀴가 모터 한계 81~90 % -> 토크가 없어
                          #   회전도 멈추고 속도가 1.75 m/s 까지 올라 고꾸라짐 (창 기록 8 번). 이제 바깥 3 km/h, 가운데 2.2, 안쪽 1.3 km/h
@@ -215,7 +222,7 @@ POLICY = "logs/rsl_rl/wheeled_biped_balance/2026-09-25_18-24-20_rough_v3/model_7
 
 CHOICES = dict(est=("truth", "sensors"), ctrl=("policy", "lqr"), obstacle=("flat", "plateau", "stairs2", "ridges", "cad", "gen", "env", "anymal"),
                anymal_type=("rough", "stairs", "stairs_inv", "boxes", "slope", "slope_inv"),
-               gen_type=("stones", "gravel", "bumps", "waves", "oneside", "oneside_stones", "lane_stones", "mix", "hill"), extract_wheels=("pd", "policy", "free"), pd_from=("extract", "fly"), hip=("dc", "ideal"))
+               gen_type=("stones", "gravel", "bumps", "waves", "oneside", "oneside_stones", "lane_stones", "mix", "hill"), extract_wheels=("pd", "policy", "free"), pd_from=("extract", "fly"), hip=("dc", "ideal"), db_comp=("off", "boost", "sigma"))
 ap = argparse.ArgumentParser()
 ap.add_argument("--policy", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", POLICY))
 ap.add_argument("--mode", choices=("jump", "stance", "none"), default="jump")
@@ -533,7 +540,7 @@ wheel_bodies = robot.find_bodies(["l_wheel", "r_wheel"], preserve_order=True)[0]
 hip_sign = torch.tensor([cad.M_SIGN["L"], cad.M_SIGN["R"]], device=dev)
 wheel_ids = robot.find_joints(cad.WHEEL_JOINTS, preserve_order=True)[0]
 wheel_term = env.action_manager.get_term("wheels")
-scale0 = wheel_term.cfg.torque_scale
+scale0, alpha0 = wheel_term.cfg.torque_scale, wheel_term._alpha
 wsign = torch.tensor(cad.WHEEL_SIGN, device=dev, dtype=torch.float32)   # 관절축 -> +y 부호 (기록용). 행동은 이미 +y 규약
 legs_act = robot.actuators["legs"]
 
@@ -932,6 +939,7 @@ def lqr_jumps():
 def episode():
     soft_legs(False)
     wheel_term.cfg.torque_scale = scale0
+    wheel_term._alpha = alpha0
     obs, _ = env.reset()
     global wheel_y0, CTRL
     wheel_y0 = [round(float(v), 3) for v in robot.data.body_pos_w[0, wheel_bodies, 1]]
@@ -955,6 +963,7 @@ def episode():
         CTRL.reset()
         CJ["n"] = 0
         wheel_term.cfg.torque_scale = args.wheel_tau_max              # 바퀴 행동 = 토크 / wheel_tau_max (pv robust 와 같음)
+        wheel_term._alpha = 1.0                                       # 바퀴 20 Hz 필터는 wbctrl 안 (wheel_lpf_hz) -> 행동 항 필터 끔
     tipped = False
     log, jumps = [], []
     fell, fell_t = False, None
@@ -1178,6 +1187,7 @@ def episode():
             act[0, :2] = (hj - h_ref) / 0.12
             act[0, 2:4] = ra[2:4]
             wheel_term.cfg.torque_scale = 7.0
+            wheel_term._alpha = alpha0                                # 복구 정책은 행동 항 20 Hz 필터로 학습됨
             legs_act.stiffness[:] = 60.0; legs_act.damping[:] = 1.5
             _g = d.projected_gravity_b[0]
             ok_ = math.acos(max(-1.0, min(1.0, -float(_g[2])))) < 0.2 and float(d.root_ang_vel_b[0, :2].norm()) < 1.0
@@ -1189,6 +1199,7 @@ def episode():
                 if CTRL is not None:
                     CTRL.reset()
                 wheel_term.cfg.torque_scale = args.wheel_tau_max
+                wheel_term._alpha = 1.0
                 print(f"[복구 성공] {t - REC['t0']:.2f} s — LQR 인계", flush=True)
             elif t - REC["t0"] > args.rec_timeout:
                 REC["on"] = False
