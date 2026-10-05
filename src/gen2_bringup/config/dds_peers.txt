@@ -3,3 +3,4 @@
 # (sudo systemctl restart gen2-bench) or open a new terminal.
 192.168.147.160   # desktop PC on "NEW T433 5G" (2026-09-25)
 192.168.55.112    # desktop PC wired (campus LAN, desk debugging)
+192.168.50.189    # desktop PC USB dongle on "ROBOT" (EAP225 AP, 2026-10-05)
