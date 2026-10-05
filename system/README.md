@@ -8,7 +8,7 @@
 | `systemd/wifi-diag.service` + `scripts/wifi_diag.sh` | `/etc/systemd/system/`, `~/lcd_test/` | boot-time Wi-Fi log → `~/wifi_diag.log` |
 | `systemd/post-boot-check.service` | `/etc/systemd/system/` | one-shot post-reboot check (disables itself) |
 | `chrony/gen2-lan-server.conf` | `/etc/chrony/conf.d/` | Jetson serves NTP to the LAN / phone hotspot (camera latency clock sync) |
-| `networkmanager/99-gen2-wifi-powersave-off.conf` | `/etc/NetworkManager/conf.d/` | Wi-Fi power save off for all connections (latency tails) |
+| `networkmanager/zz-gen2-wifi-powersave-off.conf` | `/etc/NetworkManager/conf.d/` | Wi-Fi power save off for all connections (latency tails). Name must sort after `default-wifi-powersave-on.conf` |
 | `networkmanager/90-gen2-dds` | `/etc/NetworkManager/dispatcher.d/` (root, 755) | restart gen2-bench when the Wi-Fi IPv4 address appears/changes/disappears (DDS mode re-selection) |
 | `sysctl/99-gen2-arp.conf` | `/etc/sysctl.d/` | answer ARP only for addresses on the receiving interface (the Jetson answered for l4tbr0's 192.168.55.1 on the campus LAN) |
 | `usb-device-mode/nv-l4t-usb-device-mode-config.sh` | `/opt/nvidia/l4t-usb-device-mode/` | USB device-mode network moved 192.168.55.x → **192.168.66.x** (campus LAN uses 192.168.55.x). Default route via the host PC (192.168.66.100) **metric 100** (was 32766): plugged into the desktop, the Jetson uses the desktop's internet. Package file: re-apply after `nvidia-l4t-usb-service` upgrades |
@@ -24,7 +24,9 @@ sudo cp system/systemd/*.service /etc/systemd/system/
 sudo install -m 755 system/sbin/lcd_pinmux.sh /usr/local/sbin/
 sudo cp system/udev/90-ax210-btusb.rules /etc/udev/rules.d/ && sudo udevadm control --reload
 sudo install -m 755 system/networkmanager/90-gen2-dds /etc/NetworkManager/dispatcher.d/
-sudo cp system/networkmanager/99-gen2-wifi-powersave-off.conf /etc/NetworkManager/conf.d/ && sudo nmcli general reload conf
+sudo rm -f /etc/NetworkManager/conf.d/99-gen2-wifi-powersave-off.conf   # old name, lost to the package default
+sudo cp system/networkmanager/zz-gen2-wifi-powersave-off.conf /etc/NetworkManager/conf.d/ && sudo nmcli general reload conf
+NetworkManager --print-config | grep -A1 powersave   # must print wifi.powersave=2
 sudo iw dev wlP1p1s0 set power_save off   # now, without reconnecting
 sudo cp system/chrony/gen2-lan-server.conf /etc/chrony/conf.d/ && sudo systemctl restart chrony
 sudo cp system/sysctl/99-gen2-arp.conf system/sysctl/99-gen2-linkdown.conf /etc/sysctl.d/ && sudo sysctl --system
