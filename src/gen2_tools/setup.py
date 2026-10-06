@@ -20,5 +20,6 @@ setup(
         'hub_cli = gen2_tools.hub_cli:main',
         'motor_test_gui = gen2_tools.motor_test_gui:main',
         'bag_to_csv = gen2_tools.bag_to_csv:main',
+        'hip_cli = gen2_tools.hip_cli:main',
     ]},
 )
