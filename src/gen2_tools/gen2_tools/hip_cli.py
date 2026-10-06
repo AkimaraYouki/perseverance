@@ -20,6 +20,7 @@ The CLI starts its own motor_test_node with the source motors.yaml, so saved cha
   up   l|r|b <deg>        retract the leg (wheel / link goes UP to the body) M -= deg
   h    l|r|b <mm>         go to motor-axle height h [mm] (192.5 .. 312.5 with R 70 mm)
   home                    both legs to M = 0
+  speed <rad/s>           joint speed for moves (default 0.2, 0.05 .. 2.0)
   q                       quit (Ctrl+C during a move = STOP)
 Until a leg's direction is verified (dir), moves are limited to |M| <= 10 deg.
 """
@@ -50,7 +51,7 @@ import leg_map  # noqa: E402
 THETA0 = math.radians(45.002)                       # CAD zero pose (sim cad.py THETA0)
 M_MIN, M_MAX = leg_map.THETA_MIN - THETA0, math.radians(52.5)   # -7.0 .. +52.5 deg
 UNVERIFIED_LIMIT = math.radians(10.0)
-SPEED = 0.5                                         # rad/s joint
+SPEED = 0.2                                         # rad/s joint (slow: assembled legs); 'speed' command
 HOLD_S = 1.5
 LEGS = {'l': 'leg_l', 'r': 'leg_r'}
 
@@ -146,6 +147,7 @@ class Cli:
         self.ros = Ros()
         self.tn = TestNode()
         self.cfg = load_cfg()
+        self.speed = SPEED
 
     # ---- state
     def M(self, name):
@@ -182,7 +184,7 @@ class Cli:
             return True
         r = MotorTest.Request()
         r.motor, r.mode, r.value = name, 'position', float(deg(d))
-        r.speed_rad_s, r.duration_s, r.confirm_lifted = SPEED, float(abs(d) / SPEED + HOLD_S), True
+        r.speed_rad_s, r.duration_s, r.confirm_lifted = self.speed, float(abs(d) / self.speed + HOLD_S), True
         res = self.ros.call(self.ros.start_cli, r)
         if res is None or not res.accepted:
             print(f'  {name}: rejected: {None if res is None else res.message}'); return False
@@ -282,11 +284,16 @@ class Cli:
                     th = float(leg_map.theta_of_h(float(a[1]) / 1000.0))
                     for n in self.legs(a[0]):
                         self.move_to(n, th - THETA0)
+                elif c == 'speed' and len(a) == 1:
+                    v = float(a[0])
+                    if 0.05 <= v <= 2.0:
+                        self.speed = v
+                    print(f'  speed {self.speed:.2f} rad/s (0.05 .. 2.0)')
                 elif c == 'home':
                     for n in LEGS.values():
                         self.move_to(n, 0.0)
                 else:
-                    print('  ? (s, dir l|r, zero l|r, up/down l|r|b deg, h l|r|b mm, home, q)')
+                    print('  ? (s, dir l|r, zero l|r, up/down l|r|b deg, h l|r|b mm, home, speed rad/s, q)')
             except ValueError as e:
                 print(f'  bad number: {e}')
         self.tn.stop()
