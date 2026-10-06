@@ -38,7 +38,7 @@ AK45-10 데이터시트 (사용자 제공): $K_e$ 13.33 V/krpm, 선간 저항 2.
 \tau_{\text{hold}}=\frac{Mg}{2}\cdot\frac{\partial h}{\partial\theta}\approx\frac{4.15\times9.81}{2}\times0.113\sim0.119=2.30\sim2.42\ \text{Nm}\quad[\text{계산, gains.yaml}]
 ```
 
-→ **정격의 77 – 81 %**. 총중량 5.14 kg 에서 100 % 에 닿는다([CAD §3](01_cad.md#3-질량-export-5-urdf-cad)).
+→ **정격의 77 – 81 %**. 총중량 5.14 kg 에서 100 % 에 닿는다([CAD §3](01_cad.md#3-질량--실측-반영-export-7-2026-10-06-측정)).
 - 피크 9 Nm 는 **순간** 값이다. 다른 팀(QBMET 외골격 보고서)이 9 Nm 를 정격으로 읽고 30 분 연속으로 돌려 과열 셧다운된 사례가 있다.
 - 동적 여유: 요철 흡수(0.85 m/s 로 3 cm 턱을 10 cm 안에 넘음)에 필요한 속도는 아래 정도로 한계(24.4 rad/s)보다 한참 작다.
 

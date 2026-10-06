@@ -44,11 +44,12 @@ WHEEL_SIGN = (-1.0, +1.0)                     # (L, R): CAD 바퀴축 -> 정책�
 LEG_JOINTS = ["L_joint_M", "R_joint_M"]
 WHEEL_JOINTS = ["L_joint_W", "R_joint_W"]
 # 로봇 USD (WB_WHEEL_R 로 고름):
-#   70 mm = usd_loop          CAD export 6 (바퀴 140 mm, 2026-09-27 교체, 기본)
+#   70 mm = usd_loop          CAD export 7 (export 6 + 질량 실측, 4.165 kg, 2026-10-06, 기본). 형상·바퀴는 6 과 같음
+#           usd_loop_e6       CAD export 6 (바퀴 140 mm, 2026-09-27, 4.037 kg CAD 밀도) — WB_USD_DIR=usd_loop_e6 로 비교
 #   60 mm = usd_loop_e5_R60   CAD export 5 (바퀴 120 mm, 이전 기본)
 #   그 밖 = usd_loop_R{mm}    export 5 에서 바퀴 반지름·질량·관성만 바꾼 사본 (scripts/make_wheel_variant.py)
 _R_MM = int(round(R_WHEEL * 1000))
-_USD_DIR = {70: "usd_loop", 60: "usd_loop_e5_R60"}.get(_R_MM, f"usd_loop_R{_R_MM}")
+_USD_DIR = os.environ.get("WB_USD_DIR") or {70: "usd_loop", 60: "usd_loop_e5_R60"}.get(_R_MM, f"usd_loop_R{_R_MM}")
 USD_PATH = os.path.expanduser(f"~/wheeled_biped_isaaclab/{_USD_DIR}/robot_simple.usd")
 # 바퀴 축 관성 (한 개) = 모터 회전자 반사관성 (fix_urdf: 157.33e-7 x 10^2 = 1.573e-3) + 바퀴 자체.
 #   CAD: 120 mm 자체 1.82e-4 -> 1.755e-3, 140 mm 자체 2.661e-4 -> 1.839e-3. 사본은 make_wheel_variant 와 같은 식

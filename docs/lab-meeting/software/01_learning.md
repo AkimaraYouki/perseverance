@@ -326,7 +326,7 @@ f_{\text{spin}}=G\,\exp\!\Big(-\frac{\bar\omega_w^2}{0.5^2}\Big)
 | 항목 | 분포 | 근거 |
 |---|---|---|
 | 바퀴-바닥 마찰 | $\mu\sim\mathcal{U}(0.5,0.8)$, 지면 1.0 곱 결합 | 사용자 지정 (대리석·실내) |
-| 몸체 질량 | $+\mathcal{U}(-0.3,+0.5)$ kg | 실측 총질량 ≈ CAD 4.03 + 0.25 kg [추정] |
+| 몸체 질량 | $+\mathcal{U}(-0.3,+0.5)$ kg | 학습 당시 추정 CAD 4.03 + 0.25 kg. 2026-10-06 실측 총질량 4.165 kg ([CAD §3](../hardware/01_cad.md#3-질량--실측-반영-export-7-2026-10-06-측정)) |
 | 몸체 COM | $x\pm2$, $y\in[-3,+1]$, $z\pm1$ cm | 편심 15 mm 실측 |
 | 밀기 | 4–8 s 마다 $\Delta v_{xy}\sim\mathcal{U}(\pm0.4)$ m/s | |
 | 초기 자세 | pitch ±0.15, roll ±0.08 rad, 각속도 ±0.3 rad/s | |

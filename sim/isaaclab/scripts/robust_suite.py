@@ -194,6 +194,7 @@ if args.policy:
     pol = load_actor(args.policy, dev)
 leg_ids = robot.find_joints(cad.LEG_JOINTS, preserve_order=True)[0]
 wheel_ids = robot.find_joints(cad.WHEEL_JOINTS, preserve_order=True)[0]
+print(f"[모델] {cad.USD_PATH}  총질량 {float(robot.data.default_mass[0].sum()):.3f} kg", flush=True)
 wheel_bodies = robot.find_bodies(["l_wheel", "r_wheel"], preserve_order=True)[0]
 hip_sign = torch.tensor([cad.M_SIGN["L"], cad.M_SIGN["R"]], device=dev)
 wsign = torch.tensor(cad.WHEEL_SIGN, device=dev)
