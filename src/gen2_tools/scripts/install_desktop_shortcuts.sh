@@ -23,4 +23,6 @@ mk gen2-sensor-hub-test.desktop "Gen2 Sensor Hub Test" utilities-system-monitor 
   "source $WS/install/setup.bash; ros2 run gen2_tools hub_cli"
 mk gen2-bench-check.desktop "Gen2 Bench Check" emblem-default \
   "source $WS/install/setup.bash; ros2 run gen2_bringup gen2_bench_check.py"
+mk gen2-hip-setup.desktop "Gen2 Hip Setup" input-gaming \
+  "source $WS/install/setup.bash; ros2 run gen2_tools hip_cli"
 echo "Created launchers in $DESK"
