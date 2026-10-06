@@ -26,7 +26,9 @@ cfg = ArticulationCfg(
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             fix_root_link=True, enabled_self_collisions=False,
             solver_position_iteration_count=int(os.environ.get("PIT","16")), solver_velocity_iteration_count=int(os.environ.get("VIT","4")))),
-    init_state=ArticulationCfg.InitialStateCfg(pos=(0, 0, 1.0), joint_pos={".*": 0.0}),
+    init_state=ArticulationCfg.InitialStateCfg(pos=(0, 0, 1.0), joint_pos={".*": 0.0},   # PITCH_DEG: 몸통 앞뒤 기울기 (매달린 다리 토크 민감도)
+                                           rot=(math.cos(math.radians(float(os.environ.get("PITCH_DEG", "0"))) / 2), 0.0,
+                                                math.sin(math.radians(float(os.environ.get("PITCH_DEG", "0"))) / 2), 0.0)),
     actuators={
         "motor": ImplicitActuatorCfg(joint_names_expr=[".*_joint_M"], stiffness=float(os.environ.get("KP","200")), damping=float(os.environ.get("KD","5")), effort_limit_sim=float(os.environ.get("EFF","9.0"))),
         "passive": ImplicitActuatorCfg(joint_names_expr=[".*_joint_[IK]"], stiffness=0.0, damping=0.02),
@@ -69,7 +71,7 @@ if os.environ.get("FREE_IK"):
     robot.write_joint_position_limit_to_sim(lim)
     print("수동관절 I/K 한계 해제", flush=True)
 rows = []
-for deg in np.linspace(-7.0, 52.5, 12):
+for deg in ([float(x) for x in os.environ["MS"].split(",")] if os.environ.get("MS") else np.linspace(-7.0, 52.5, 12)):   # MS: M 목표 목록 [deg]
     tgt = torch.zeros(1, robot.num_joints, device=sim.device)
     tgt[0, jm["L"]] = math.radians(deg); tgt[0, jm["R"]] = -math.radians(deg)
     robot.set_joint_position_target(tgt)
