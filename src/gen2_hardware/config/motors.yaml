@@ -88,8 +88,9 @@
         raw_deg_per_output_rev: 360.0  # VERIFY (scale check)
         direction: 1               # hip_cli 2026-10-07: + = leg extends (sim M)
         position_offset_rad: -0.464258  # user zero pose 2026-10-06: raw -26.6 deg (drive frame) = joint 0
-        kt_nm_per_a: 0.5994         # output side, manual V3.2.0 §4.2; desktop assumed 0.81 -> torque arm
-        current_limit_a: 15.0       # VERIFY: ~9 N·m peak / 0.5994; rated 3 N·m ~ 5 A
+        kt_nm_per_a: 0.81           # PROVISIONAL 2026-10-07: product page 0.135 x 6 (manual table 0.5994 is 35 % off;
+                                    # hanging-leg test -> 0.67–0.82). Confirm with the weight-difference test.
+        current_limit_a: 10.0       # datasheet peak current 10.3 A @24 V (x 0.81 = 8.1 N·m), desktop 2026-10-07
         velocity_limit_rad_s: 20.0  # VERIFY
         joint_min_rad: -1.0e9       # VERIFY: hip has mechanical stops — set real limits before use
         joint_max_rad: 1.0e9
@@ -119,8 +120,9 @@
         raw_deg_per_output_rev: 360.0  # VERIFY (scale check)
         direction: -1              # hip_cli 2026-10-07: + = leg extends (sim M)
         position_offset_rad: -0.401426  # hip_cli 2026-10-07: CAD zero pose (theta 45 deg)
-        kt_nm_per_a: 0.5994         # output side, manual V3.2.0 §4.2; desktop assumed 0.81 -> torque arm
-        current_limit_a: 15.0       # VERIFY: ~9 N·m peak / 0.5994; rated 3 N·m ~ 5 A
+        kt_nm_per_a: 0.81           # PROVISIONAL 2026-10-07: product page 0.135 x 6 (manual table 0.5994 is 35 % off;
+                                    # hanging-leg test -> 0.67–0.82). Confirm with the weight-difference test.
+        current_limit_a: 10.0       # datasheet peak current 10.3 A @24 V (x 0.81 = 8.1 N·m), desktop 2026-10-07
         velocity_limit_rad_s: 20.0  # VERIFY
         joint_min_rad: -1.0e9       # VERIFY: hip has mechanical stops — set real limits before use
         joint_max_rad: 1.0e9
