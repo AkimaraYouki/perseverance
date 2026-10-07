@@ -22,5 +22,6 @@ setup(
         'bag_to_csv = gen2_tools.bag_to_csv:main',
         'hip_cli = gen2_tools.hip_cli:main',
         'imu_cal = gen2_tools.imu_cal:main',
+        'balance_cli = gen2_tools.balance_cli:main',
     ]},
 )

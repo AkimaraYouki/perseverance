@@ -42,7 +42,8 @@ gen2_status_display (Python, 1 Hz, /diagnostics only) ──SPI──> ST7789 2"
 | `gen2_hardware` | SocketCAN, CubeMars AK **servo-mode** codec (manual V1.0.15 / AK3.0 V3.2.0), MotorBus, MotorTester, monitor/test nodes, CLI |
 | `gen2_status_display` | B&W LCD "C-WANG": boot animation, then 4 sectors (1 PC · 2 sensors · 3 motors · 4 network & power). Errors blink 2 Hz (inverted), warnings 1 Hz, OK steady; only changed regions are sent; `rotate_180` option |
 | `gen2_camera` | IMX219 → nvjpegenc → `/camera/image_raw/compressed` (Best Effort, depth 1), auto-restart, latency probe (desktop draft + robot measurements) |
-| `gen2_tools` | `hub_cli`, `motor_test_gui`, desktop shortcuts |
+| `gen2_control` | **balance controller**: `wb_core` = C++ port of `sim/isaaclab/scripts/wbctrl.py` (DRIVE path, golden test vs the Python spec), `balance_node` (200 Hz, modes disarmed / stand / balance / fault, guards: operator heartbeat, IMU/motor freshness, drive fault, hip zero, tilt) |
+| `gen2_tools` | `hub_cli`, `motor_test_gui`, `hip_cli` (leg direction / zero / height), `imu_cal`, `balance_cli` (operator console: heartbeat, stand/balance/disarm, speed keys), desktop shortcuts |
 | `gen2_bringup` | profiles, CycloneDDS config, systemd units, `gen2_bench_check.py` |
 
 Vendor documents used as the source of truth are in `docs/vendor/` (CubeMars manuals, AK45-10

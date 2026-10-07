@@ -8,6 +8,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MotorState.msg"
   "msg/MotorStateArray.msg"
   "msg/MotorTestStatus.msg"
+  "msg/ControllerState.msg"
   "srv/MotorTest.srv"
   DEPENDENCIES std_msgs)
 ament_export_dependencies(rosidl_default_runtime)
