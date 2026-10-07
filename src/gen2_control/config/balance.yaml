@@ -13,7 +13,13 @@ balance:
     cmd_timeout_s: 0.5        # cmd_vel watchdog -> 0
     stand_ramp_s: 2.0         # stand: current leg height -> idle_h
     stand_feedforward: true   # stand: + weight feed-forward (0.5 m g per leg, via dh/dtheta) — current_pd only
-    hip_mode: servo_pos       # servo_pos (drive position loop) | current_pd (host PD, shook at 200 Hz 2026-10-07)
+    hip_mode: mit             # mit (kd in the drive, kp + ff from here) | servo_pos (drive position loop) | current_pd (host PD, shook at 200 Hz)
+    mit_kt_drive: 0.5994      # Kt the AK60-6 drive uses inside MIT (0.5 N·m -> 0.83 A measured 2026-10-07)
+    osc_flips: 6              # fault: hip velocity (|w| > osc_vel) changes sign this often within osc_window_s
+    osc_window_s: 0.3
+    osc_vel_rad_s: 1.0
+    sat_frac: 0.9             # fault: hip current > sat_frac x current_limit for sat_time_s
+    sat_time_s: 0.1
     hip_speed_rad_s: 2.0      # servo_pos speed limit
     hip_accel_rad_s2: 20.0
     tune:                     # wbctrl TUNE (climb_test defaults); others in gen2_control/wb_core.hpp Params

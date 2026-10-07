@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "gen2_control/wb_core.hpp"
+#include "gen2_hardware/cubemars_mit.hpp"
 #include "gen2_hardware/cubemars_servo.hpp"
 #include "gen2_hardware/motor_bus.hpp"
 #include "gen2_hardware/motor_params.hpp"
@@ -104,7 +105,17 @@ public:
     // compliance / feed-forward), "current_pd" = host PD -> current (wbctrl VMC, needs >= 500 Hz and
     // a clean velocity: shook at 200 Hz on 2026-10-07)
     hip_mode_ = declare_parameter("hip_mode", std::string("servo_pos"));
-    if (hip_mode_ != "servo_pos" && hip_mode_ != "current_pd") {throw std::runtime_error("hip_mode: servo_pos|current_pd");}
+    // "mit" = AK 3.0 MIT frames: damping kd inside the drive (kHz), stiffness kp(M*-M) + feed-forward
+    //   computed here and sent as t_ff; p_des unused (drive frame has the 60 deg power-up wrap)
+    if (hip_mode_ != "servo_pos" && hip_mode_ != "current_pd" && hip_mode_ != "mit") {
+      throw std::runtime_error("hip_mode: servo_pos|current_pd|mit");
+    }
+    mit_kt_drive_ = declare_parameter("mit_kt_drive", 0.5994);   // Kt the drive uses for t -> current (measured 2026-10-07)
+    osc_flips_ = static_cast<int>(declare_parameter("osc_flips", 6));
+    osc_window_s_ = declare_parameter("osc_window_s", 0.3);
+    osc_vel_ = declare_parameter("osc_vel_rad_s", 1.0);
+    sat_frac_ = declare_parameter("sat_frac", 0.9);
+    sat_time_s_ = declare_parameter("sat_time_s", 0.1);
     hip_speed_ = declare_parameter("hip_speed_rad_s", 2.0);
     hip_accel_ = declare_parameter("hip_accel_rad_s2", 20.0);
     rt_prio_ = static_cast<int>(declare_parameter("rt_priority", 80));
@@ -289,7 +300,7 @@ private:
     }
     if (m == Mode::kStand || m == Mode::kBalance) {
       t_mode_ = 0.0;
-      for (int k = 0; k < 2; ++k) {M_start_[k] = M_[k];}
+      for (int k = 0; k < 2; ++k) {M_start_[k] = M_[k]; osc_t_[k].clear(); osc_sign_[k] = 0; sat_s_[k] = 0.0;}
       if (core_) {core_->reset();}
     }
     mode_ = m;
@@ -381,6 +392,23 @@ private:
       if (want_ != mode_ && !(mode_ == Mode::kFault && want_ != Mode::kDisarmed)) {enter(want_);}
       if (mode_ == Mode::kStand || mode_ == Mode::kBalance) {
         std::string why = bad;
+        // oscillation / saturation guard on the hips
+        for (int k = 0; k < 2 && why.empty(); ++k) {
+          const auto & c = bus_->motors()[idx_.at(names[k])];
+          const double w = c.erpm_to_joint_vel(fb[k].status.speed_erpm);
+          if (std::fabs(w) > osc_vel_) {
+            const int sg = w > 0 ? 1 : -1;
+            if (sg != osc_sign_[k]) {
+              osc_t_[k].push_back(t * 1e-9);
+              osc_sign_[k] = sg;
+            }
+          }
+          while (!osc_t_[k].empty() && t * 1e-9 - osc_t_[k].front() > osc_window_s_) {osc_t_[k].erase(osc_t_[k].begin());}
+          if (static_cast<int>(osc_t_[k].size()) >= osc_flips_) {why = std::string(names[k]) + " oscillation detected";}
+          const bool sat = std::fabs(fb[k].status.current_a) > sat_frac_ * c.current_limit_a;
+          sat_s_[k] = sat ? sat_s_[k] + 1.0 / rate_hz_ : 0.0;
+          if (sat_s_[k] > sat_time_s_) {why = std::string(names[k]) + " current saturated";}
+        }
         if (why.empty() && imu_age_ms_ > imu_timeout_ * 1e3) {why = "IMU stale";}
         if (why.empty() && (t - hb_ns_.load()) * 1e-9 > hb_timeout_) {why = "operator heartbeat lost";}
         if (why.empty() && (std::fabs(pitch_) > max_tilt_ || std::fabs(roll_) > max_tilt_)) {why = "tilt limit (fell)";}
@@ -424,6 +452,18 @@ private:
         bus_->send(gen2_hardware::cubemars::encode_pos_spd(c.can_id, tgt_raw, hip_speed_ * epr, hip_accel_ * epr), err);
         hip_tau_[k] = f.tau_hip[k];                        // measured (logging)
         hip_cur_[k] = fb[k].status.current_a;
+      } else if (hip_mode_ == "mit") {
+        // drive: t = t_ff + kd_drive * (0 - w_drive); it converts with its own Kt (0.6) -> scale by kt_drive / kt
+        const double kt = std::isfinite(c.kt_nm_per_a) ? c.kt_nm_per_a : mit_kt_drive_;
+        const double sc = mit_kt_drive_ / kt;
+        double tau = kp * (M_tgt[k] - M[k]) + ffF * interp(th[k], leg_th_, leg_dh_);
+        const double tmax = c.current_limit_a * kt;
+        tau = std::clamp(tau, -tmax, tmax);
+        gen2_hardware::mit::Command mc;
+        mc.t = tau * c.direction * sc;
+        mc.kd = kd * sc;
+        bus_->send(gen2_hardware::mit::encode(gen2_hardware::mit::Proto::kV3, c.can_id, c.mit_ranges, mc), err);
+        hip_tau_[k] = tau; hip_cur_[k] = fb[k].status.current_a;
       } else {
         const double tau = kp * (M_tgt[k] - M[k]) - kd * Md[k] + ffF * interp(th[k], leg_th_, leg_dh_);
         const double cur = c.joint_torque_to_current(tau);
@@ -472,7 +512,11 @@ private:
   double rate_hz_, max_tilt_, start_tilt_, imu_timeout_, motor_timeout_, hb_timeout_, cmd_timeout_, stand_ramp_s_;
   bool stand_ff_;
   std::string hip_mode_;
-  double hip_speed_, hip_accel_;
+  double hip_speed_, hip_accel_, mit_kt_drive_, osc_window_s_, osc_vel_, sat_frac_, sat_time_s_;
+  int osc_flips_;
+  int osc_sign_[2] = {0, 0};
+  std::vector<double> osc_t_[2];
+  double sat_s_[2] = {0, 0};
   int rt_prio_;
   gen2_control::Params params_;
   std::unique_ptr<gen2_control::WBCore> core_;

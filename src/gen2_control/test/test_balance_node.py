@@ -22,6 +22,8 @@ FAKE = os.path.join(WS, 'src/gen2_hardware/test/fake_cubemars_drive.py')
 m = yaml.safe_load(open(MOT))['/**']['ros__parameters']['motors']
 ids = {n: m[n]['can_id'] for n in ('wheel_l', 'wheel_r', 'leg_l', 'leg_r')}
 logs = {n: tempfile.TemporaryFile(mode='w+') for n in ids}
+HIP_YAML = os.path.join(tempfile.mkdtemp(), 'hip.yaml')   # a params file: -p does not override balance.yaml
+open(HIP_YAML, 'w').write(f"balance:\n  ros__parameters:\n    hip_mode: {os.environ.get('HIP_MODE', 'mit')}\n")
 drives = [subprocess.Popen([sys.executable, FAKE, '--id', str(i), '--rate', '500'], stdout=logs[n], text=True)
           for n, i in ids.items()]
 share = os.path.join(WS, 'install/gen2_control/share/gen2_control/config')
@@ -29,7 +31,7 @@ node = subprocess.Popen(['ros2', 'run', 'gen2_control', 'balance_node', '--ros-a
                          '--params-file', MOT, '--params-file', os.path.join(share, 'leg_table.yaml'),
                          '--params-file', os.path.join(share, 'balance.yaml'),
                          '--params-file', os.path.join(share, 'balance_tables.yaml'), '-p', 'can_interface:=vcan0',
-                         '-r', '__node:=balance'],
+                         '--params-file', HIP_YAML, '-r', '__node:=balance'],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 rclpy.init()
 n = rclpy.create_node('balance_itest')
@@ -90,10 +92,10 @@ try:
     s = st['m']
     check('stand: mode stand, wheels 0 A', s.mode == 'stand' and all(c == 0 for c in s.wheel_cur_cmd),
           f'{s.mode} wheel {list(s.wheel_cur_cmd)}')
-    check('hips get position-speed commands (servo_pos), wheels get current',
-          all(drive_cmds(k, 6) for k in ('leg_l', 'leg_r')) and all(drive_cmds(k, 1) for k in ('wheel_l', 'wheel_r'))
-          and not drive_cmds('leg_l', 1),
-          str({k: (len(drive_cmds(k, 6)), len(drive_cmds(k, 1))) for k in ids}))
+    HIP_FN = {'mit': 8, 'servo_pos': 6, 'current_pd': 1}[os.environ.get('HIP_MODE', 'mit')]
+    check(f'hips get fn={HIP_FN} commands ({os.environ.get("HIP_MODE", "mit")}), wheels get current',
+          all(drive_cmds(k, HIP_FN) for k in ('leg_l', 'leg_r')) and all(drive_cmds(k, 1) for k in ('wheel_l', 'wheel_r')),
+          str({k: (len(drive_cmds(k, HIP_FN)), len(drive_cmds(k, 1))) for k in ids}))
     check('loop timing (no overruns, worst period < 15 ms)', s.overruns == 0 and s.loop_dt_max_ms < 15,
           f'overruns {s.overruns}, worst {s.loop_dt_max_ms:.1f} ms')
     state['hb'] = False; spin(1.0)
