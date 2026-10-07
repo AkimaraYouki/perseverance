@@ -62,6 +62,7 @@ double interp(double x, const std::vector<double> & xs, const std::vector<double
   return ys[i - 1] + u * (ys[i] - ys[i - 1]);
 }
 enum class Mode {kDisarmed, kStand, kBalance, kFault};
+constexpr double kHMinSit = gen2_control::kHMin + 0.003;   // just above the lowest table height
 const char * mode_name(Mode m)
 {
   return m == Mode::kDisarmed ? "disarmed" : m == Mode::kStand ? "stand" : m == Mode::kBalance ? "balance" : "fault";
@@ -188,6 +189,15 @@ public:
     srv_stand_ = srv("balance/stand", Mode::kStand);
     srv_bal_ = srv("balance/balance", Mode::kBalance);
     srv_dis_ = srv("balance/disarm", Mode::kDisarmed);
+    // sit: lower the body slowly to the lowest leg height (balance keeps running), then disarm
+    srv_sit_ = create_service<std_srvs::srv::Trigger>("balance/sit",
+        [this](std_srvs::srv::Trigger::Request::ConstSharedPtr, std_srvs::srv::Trigger::Response::SharedPtr rs) {
+          std::lock_guard<std::mutex> lk(mode_m_);
+          if (mode_ != Mode::kStand && mode_ != Mode::kBalance) {rs->success = false; rs->message = "not standing"; return;}
+          sit_ = true; sit_t_ = 0.0;
+          rs->success = true; rs->message = "ok: sitting down";
+        });
+    sit_s_ = declare_parameter("sit_s", 3.0);
     pub_ = create_publisher<gen2_msgs::msg::ControllerState>("controller/state", 10);
     pub_timer_ = create_wall_timer(10ms, [this] {publish();});
     th_ = std::thread([this] {loop();});
@@ -320,6 +330,7 @@ private:
     if (m == Mode::kStand || m == Mode::kBalance) {
       t_mode_ = 0.0;
       for (int k = 0; k < 2; ++k) {M_start_[k] = M_[k]; osc_t_[k].clear(); osc_sign_[k] = 0; sat_s_[k] = 0.0;}
+      sit_ = false;
       if (core_) {core_->reset();}
     }
     mode_ = m;
@@ -451,6 +462,19 @@ private:
     }
     if (mode_ != Mode::kStand && mode_ != Mode::kBalance) {return;}
     t_mode_ += 1.0 / rate_hz_;
+    double sit_u = -1.0;     // < 0: not sitting; 0..1 ramp to the lowest height
+    if (sit_) {
+      if (sit_t_ == 0.0) {for (int k = 0; k < 2; ++k) {sit_from_[k] = M_[k];}}
+      sit_t_ += 1.0 / rate_hz_;
+      sit_u = std::min(1.0, sit_t_ / sit_s_);
+      if (sit_t_ > sit_s_ + 0.5) {
+        std::lock_guard<std::mutex> lk(mode_m_);
+        enter(Mode::kDisarmed);
+        want_ = Mode::kDisarmed;
+        return;
+      }
+    }
+    const double M_low = interp(kHMinSit, leg_h_, leg_th_) - theta0_;
 
     // ---- control
     double h_tgt[2], M_tgt[2], ffF = 0.0, kp = params_.vmc_kp, kd = params_.vmc_kd, wheel_tau[2] = {0, 0};
@@ -460,12 +484,14 @@ private:
       // retracted stop -12 deg < -7 deg: a height ramp would start with a step there)
       const double u = std::min(1.0, t_mode_ / stand_ramp_s_);
       for (int k = 0; k < 2; ++k) {
-        M_tgt[k] = M_start_[k] + u * (M_idle - M_start_[k]);
+        M_tgt[k] = sit_u >= 0 ? sit_from_[k] + sit_u * (M_low - sit_from_[k]) : M_start_[k] + u * (M_idle - M_start_[k]);
         h_tgt[k] = interp(theta0_ + M_tgt[k], leg_th_, leg_h_);
       }
       ffF = stand_ff_ ? 0.5 * (model_ok_ ? m_pend_ : params_.m_pend) * 9.81 : 0.0;
     } else {
-      const Output o = core_->step(f, vx, wz, params_.idle_h);
+      // sitting: the leg mid height ramps from IDLE to the lowest height while the LQR keeps balancing
+      const double h_mid = sit_u >= 0 ? params_.idle_h + sit_u * (kHMinSit - params_.idle_h) : -1.0;
+      const Output o = core_->step(f, sit_u >= 0 ? 0.0 : vx, sit_u >= 0 ? 0.0 : wz, params_.idle_h, h_mid);
       last_ = o;
       for (int k = 0; k < 2; ++k) {
         h_tgt[k] = params_.idle_h + 0.12 * o.act[k];
@@ -581,7 +607,9 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr hb_sub_;
   rclcpp::Subscription<gen2_msgs::msg::MotorStateArray>::SharedPtr ms_sub_;
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_stand_, srv_bal_, srv_dis_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_stand_, srv_bal_, srv_dis_, srv_sit_;
+  bool sit_ = false;
+  double sit_t_ = 0.0, sit_s_ = 3.0, sit_from_[2] = {0, 0};
   rclcpp::Publisher<gen2_msgs::msg::ControllerState>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr pub_timer_;
 };
