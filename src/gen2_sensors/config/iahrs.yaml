@@ -7,3 +7,5 @@ iahrs:
     port: /dev/gen2_imu
     frame_id: imu_link
     expected_rate_hz: 500.0
+    body_frame_id: base_link
+    mount_rpy_deg: [0.0, 0.0, 0.0]   # imu_link in base_link; set by `ros2 run gen2_tools imu_cal`

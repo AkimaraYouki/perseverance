@@ -2,7 +2,12 @@
 // comment): b2=921600, so=1, sp=2 (500 Hz), sd=0x8D -> each line is
 //   count_ms, ax, ay, az [g], gx, gy, gz [deg/s], qw, qx, qy, qz
 // A dedicated thread reads the port (no executor latency) and publishes sensor_msgs/Imu in the
-// SENSOR frame (frame_id imu_link; mounting -> base_link goes in the URDF/TF). Stamp = Jetson
+// two topics:
+//   imu/data_raw  SENSOR frame (frame_id imu_link)
+//   imu/data      BODY frame (frame_id base_link, REP-103 x fwd / y left / z up): accel and gyro
+//                 rotated by the mounting rotation mount_rpy_deg (imu_link in base_link, from
+//                 `ros2 run gen2_tools imu_cal`), orientation q_world_body = q_world_sensor * q_body_sensor^-1.
+// Stamp = Jetson
 // receive time (steady line arrival). Diagnostics "imu: iahrs": rate, count gaps, max RX gap.
 #include <fcntl.h>
 #include <termios.h>
@@ -15,6 +20,8 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
+#include <stdexcept>
 
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -31,7 +38,14 @@ public:
     port_ = declare_parameter("port", std::string("/dev/gen2_imu"));
     frame_ = declare_parameter("frame_id", std::string("imu_link"));
     expected_hz_ = declare_parameter("expected_rate_hz", 500.0);
+    body_frame_ = declare_parameter("body_frame_id", std::string("base_link"));
+    const auto rpy = declare_parameter("mount_rpy_deg", std::vector<double>{0.0, 0.0, 0.0});
+    if (rpy.size() != 3) {throw std::runtime_error("mount_rpy_deg needs 3 values");}
+    set_mount(rpy[0] * M_PI / 180.0, rpy[1] * M_PI / 180.0, rpy[2] * M_PI / 180.0);
+    RCLCPP_INFO(get_logger(), "mount rpy %.2f %.2f %.2f deg (imu_link in %s)", rpy[0], rpy[1], rpy[2],
+      body_frame_.c_str());
     pub_ = create_publisher<sensor_msgs::msg::Imu>("imu/data", rclcpp::SensorDataQoS());
+    raw_pub_ = create_publisher<sensor_msgs::msg::Imu>("imu/data_raw", rclcpp::SensorDataQoS());
     diag_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/diagnostics", 10);
     timer_ = create_wall_timer(1s, [this] {report();});
     th_ = std::thread([this] {loop();});
@@ -44,6 +58,25 @@ public:
   }
 
 private:
+  // R = Rz(yaw) Ry(pitch) Rx(roll): v_body = R v_sensor; q_bs the same rotation as a quaternion
+  void set_mount(double r, double p, double y)
+  {
+    const double cr = std::cos(r), sr = std::sin(r), cp = std::cos(p), sp = std::sin(p);
+    const double cy = std::cos(y), sy = std::sin(y);
+    R_[0][0] = cy * cp; R_[0][1] = cy * sp * sr - sy * cr; R_[0][2] = cy * sp * cr + sy * sr;
+    R_[1][0] = sy * cp; R_[1][1] = sy * sp * sr + cy * cr; R_[1][2] = sy * sp * cr - cy * sr;
+    R_[2][0] = -sp;     R_[2][1] = cp * sr;                R_[2][2] = cp * cr;
+    const double hr = r / 2, hp = p / 2, hy = y / 2;
+    qbs_[0] = std::cos(hr) * std::cos(hp) * std::cos(hy) + std::sin(hr) * std::sin(hp) * std::sin(hy);
+    qbs_[1] = std::sin(hr) * std::cos(hp) * std::cos(hy) - std::cos(hr) * std::sin(hp) * std::sin(hy);
+    qbs_[2] = std::cos(hr) * std::sin(hp) * std::cos(hy) + std::sin(hr) * std::cos(hp) * std::sin(hy);
+    qbs_[3] = std::cos(hr) * std::cos(hp) * std::sin(hy) - std::sin(hr) * std::sin(hp) * std::cos(hy);
+  }
+  void rot(const double in[3], double out[3]) const
+  {
+    for (int i = 0; i < 3; ++i) {out[i] = R_[i][0] * in[0] + R_[i][1] * in[1] + R_[i][2] * in[2];}
+  }
+
   bool open_port()
   {
     fd_ = ::open(port_.c_str(), O_RDONLY | O_NOCTTY | O_CLOEXEC);
@@ -116,12 +149,32 @@ private:
     msg.orientation.y = q[2];
     msg.orientation.z = q[3];
     constexpr double d2r = M_PI / 180.0, g0 = 9.80665;
-    msg.angular_velocity.x = g[0] * d2r;
-    msg.angular_velocity.y = g[1] * d2r;
-    msg.angular_velocity.z = g[2] * d2r;
-    msg.linear_acceleration.x = a[0] * g0;
-    msg.linear_acceleration.y = a[1] * g0;
-    msg.linear_acceleration.z = a[2] * g0;
+    double w_s[3] = {g[0] * d2r, g[1] * d2r, g[2] * d2r}, a_s[3] = {a[0] * g0, a[1] * g0, a[2] * g0};
+    msg.angular_velocity.x = w_s[0];
+    msg.angular_velocity.y = w_s[1];
+    msg.angular_velocity.z = w_s[2];
+    msg.linear_acceleration.x = a_s[0];
+    msg.linear_acceleration.y = a_s[1];
+    msg.linear_acceleration.z = a_s[2];
+    raw_pub_->publish(msg);
+    // body frame
+    double w_b[3], a_b[3];
+    rot(w_s, w_b);
+    rot(a_s, a_b);
+    msg.header.frame_id = body_frame_;
+    msg.angular_velocity.x = w_b[0];
+    msg.angular_velocity.y = w_b[1];
+    msg.angular_velocity.z = w_b[2];
+    msg.linear_acceleration.x = a_b[0];
+    msg.linear_acceleration.y = a_b[1];
+    msg.linear_acceleration.z = a_b[2];
+    // q_wb = q_ws * conj(q_bs)
+    const double aw = q[0], ax = q[1], ay = q[2], az = q[3];
+    const double bw = qbs_[0], bx = -qbs_[1], by = -qbs_[2], bz = -qbs_[3];
+    msg.orientation.w = aw * bw - ax * bx - ay * by - az * bz;
+    msg.orientation.x = aw * bx + ax * bw + ay * bz - az * by;
+    msg.orientation.y = aw * by - ax * bz + ay * bw + az * bx;
+    msg.orientation.z = aw * bz + ax * by - ay * bx + az * bw;
     pub_->publish(msg);
     std::lock_guard<std::mutex> lk(m_);
     if (have_last_) {
@@ -173,7 +226,9 @@ private:
     diag_->publish(arr);
   }
 
-  std::string port_, frame_;
+  std::string port_, frame_, body_frame_;
+  double R_[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+  double qbs_[4] = {1, 0, 0, 0};
   double expected_hz_;
   long expected_dc_ = 2;
   int fd_ = -1;
@@ -185,7 +240,7 @@ private:
   double max_gap_ms_ = 0.0;
   std::chrono::steady_clock::time_point last_rx_, last_data_{std::chrono::steady_clock::now()};
   std::string err_;
-  rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_, raw_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diag_;
   rclcpp::TimerBase::SharedPtr timer_;
 };

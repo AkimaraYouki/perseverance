@@ -25,4 +25,6 @@ mk gen2-bench-check.desktop "Gen2 Bench Check" emblem-default \
   "source $WS/install/setup.bash; ros2 run gen2_bringup gen2_bench_check.py"
 mk gen2-hip-setup.desktop "Gen2 Hip Setup" input-gaming \
   "source $WS/install/setup.bash; ros2 run gen2_tools hip_cli"
+mk gen2-imu-cal.desktop "Gen2 IMU Calibration" applications-science \
+  "source $WS/install/setup.bash; ros2 run gen2_tools imu_cal"
 echo "Created launchers in $DESK"
