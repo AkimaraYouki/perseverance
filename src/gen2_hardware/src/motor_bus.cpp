@@ -36,8 +36,10 @@ MotorBus::MotorBus(std::string ifname, std::vector<MotorConfig> motors)
     slots_.push_back(std::make_unique<SeqLock<MotorFeedback>>());
   }
   writer_state_.resize(motors_.size());
+  adopt_ = std::vector<std::atomic<double>>(motors_.size());
   for (std::size_t i = 0; i < motors_.size(); ++i) {
     if (motors_[i].wrap_deg > 0.0) {writer_state_[i].zero_state = MotorFeedback::kZeroUnresolved;}
+    adopt_[i].store(std::nan(""));
   }
 }
 
@@ -212,6 +214,11 @@ void MotorBus::rx_loop()
       if (c.wrap_deg > 0.0) {
         if (!fb.valid || rx.mono_ns - fb.mono_ns > 500000000LL) {
           fb.zero_state = MotorFeedback::kZeroUnresolved;
+        }
+        const double ad = adopt_[it->second].exchange(std::nan(""));
+        if (fb.zero_state != MotorFeedback::kZeroResolved && std::isfinite(ad)) {
+          fb.zero_state = MotorFeedback::kZeroResolved;
+          fb.unwrap_deg = ad;
         }
         if (fb.zero_state != MotorFeedback::kZeroResolved) {
           double sh = 0.0;

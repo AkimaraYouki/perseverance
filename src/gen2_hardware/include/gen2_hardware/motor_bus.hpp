@@ -76,6 +76,9 @@ public:
   // twice; motor_cli + a controller would fight. Returns false (err names the holder's PID) if taken.
   bool claim_commander(std::string & err);
   bool is_commander() const {return lock_fd_ >= 0;}
+  // Adopt a wrap shift resolved elsewhere (e.g. the monitor process, which may have seen the joint pass
+  // through the unambiguous band). Applied by the RX thread only while this process is not resolved.
+  void adopt_unwrap(std::size_t m, double shift_deg) {adopt_[m].store(shift_deg);}
   // TX is refused unless this process is the commander and enable_tx(true) was called.
   void enable_tx(bool on) {tx_enabled_ = on;}
   bool tx_enabled() const {return tx_enabled_;}
@@ -98,6 +101,7 @@ private:
   std::atomic<bool> running_{false};
   std::atomic<bool> tx_enabled_{false};
   int lock_fd_ = -1;
+  std::vector<std::atomic<double>> adopt_;   // NaN = none
   BusStats stats_;
 };
 

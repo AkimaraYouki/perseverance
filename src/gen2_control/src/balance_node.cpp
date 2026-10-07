@@ -32,6 +32,7 @@
 #include "gen2_hardware/motor_bus.hpp"
 #include "gen2_hardware/motor_params.hpp"
 #include "gen2_msgs/msg/controller_state.hpp"
+#include "gen2_msgs/msg/motor_state_array.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -152,6 +153,21 @@ public:
         [this](geometry_msgs::msg::Twist::ConstSharedPtr m) {
           std::lock_guard<std::mutex> lk(cmd_m_);
           vx_ = m->linear.x; wz_ = m->angular.z; cmd_ns_ = now_ns();
+        });
+    // hip zero: adopt the monitor's resolved wrap when this process starts inside the ambiguous band
+    // (legs hanging at the end stop) — only if both see the same drive position (same drive boot)
+    ms_sub_ = create_subscription<gen2_msgs::msg::MotorStateArray>("motors/state", rclcpp::SensorDataQoS(),
+        [this](gen2_msgs::msg::MotorStateArray::ConstSharedPtr msg) {
+          for (const auto & s : msg->motors) {
+            const auto it = idx_.find(s.name);
+            if (it == idx_.end() || s.stale || s.zero_state != 1) {continue;}
+            const MotorFeedback fb = bus_->feedback(it->second);
+            if (fb.valid && !fb.zero_ok() && std::fabs(fb.status.position_deg - s.raw_position_deg) < 1.0) {
+              bus_->adopt_unwrap(it->second, s.unwrap_deg);
+              RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000, "%s: adopted the monitor's resolved zero (unwrap %+.0f deg)",
+                s.name.c_str(), s.unwrap_deg);
+            }
+          }
         });
     hb_sub_ = create_subscription<std_msgs::msg::Empty>("balance/heartbeat", 10,
         [this](std_msgs::msg::Empty::ConstSharedPtr) {hb_ns_ = now_ns();});
@@ -541,6 +557,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr hb_sub_;
+  rclcpp::Subscription<gen2_msgs::msg::MotorStateArray>::SharedPtr ms_sub_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_stand_, srv_bal_, srv_dis_;
   rclcpp::Publisher<gen2_msgs::msg::ControllerState>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr pub_timer_;
