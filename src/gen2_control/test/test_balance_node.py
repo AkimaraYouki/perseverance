@@ -27,7 +27,8 @@ drives = [subprocess.Popen([sys.executable, FAKE, '--id', str(i), '--rate', '500
 share = os.path.join(WS, 'install/gen2_control/share/gen2_control/config')
 node = subprocess.Popen(['ros2', 'run', 'gen2_control', 'balance_node', '--ros-args',
                          '--params-file', MOT, '--params-file', os.path.join(share, 'leg_table.yaml'),
-                         '--params-file', os.path.join(share, 'balance.yaml'), '-p', 'can_interface:=vcan0',
+                         '--params-file', os.path.join(share, 'balance.yaml'),
+                         '--params-file', os.path.join(share, 'balance_tables.yaml'), '-p', 'can_interface:=vcan0',
                          '-r', '__node:=balance'],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 rclpy.init()
@@ -68,15 +69,14 @@ def check(name, ok, detail=''):
     print(('PASS  ' if ok else 'FAIL  ') + name + (f'   [{detail}]' if detail else ''), flush=True)
 
 
-def drive_cmds(name):
+def drive_cmds(name, fn=None):
     logs[name].seek(0)
-    return [l for l in logs[name].read().splitlines() if l.startswith('CMD fn=1')]
+    return [l for l in logs[name].read().splitlines() if l.startswith('CMD') and (fn is None or l.startswith(f'CMD fn={fn} '))]
 
 
 try:
     assert srv['stand'].wait_for_service(timeout_sec=15), 'node not up'
     spin(1.5)
-    check('balance refused without model tables', not call('balance').success, call('balance').message)
     state['hb'] = False; spin(0.8)
     r = call('stand')
     check('stand refused without operator heartbeat', not r.success, r.message)
@@ -88,18 +88,19 @@ try:
     check('stand accepted (upright, heartbeat, fresh motors/IMU)', r.success, r.message)
     spin(1.0)
     s = st['m']
-    check('stand: mode stand, hip currents commanded, wheels 0 A',
-          s.mode == 'stand' and all(abs(c) > 0.01 for c in s.hip_cur_cmd) and all(c == 0 for c in s.wheel_cur_cmd),
-          f'{s.mode} hip {list(s.hip_cur_cmd)} wheel {list(s.wheel_cur_cmd)}')
-    check('all four drives receive current commands', all(drive_cmds(k) for k in ids),
-          str({k: len(drive_cmds(k)) for k in ids}))
+    check('stand: mode stand, wheels 0 A', s.mode == 'stand' and all(c == 0 for c in s.wheel_cur_cmd),
+          f'{s.mode} wheel {list(s.wheel_cur_cmd)}')
+    check('hips get position-speed commands (servo_pos), wheels get current',
+          all(drive_cmds(k, 6) for k in ('leg_l', 'leg_r')) and all(drive_cmds(k, 1) for k in ('wheel_l', 'wheel_r'))
+          and not drive_cmds('leg_l', 1),
+          str({k: (len(drive_cmds(k, 6)), len(drive_cmds(k, 1))) for k in ids}))
     check('loop timing (no overruns, worst period < 15 ms)', s.overruns == 0 and s.loop_dt_max_ms < 15,
           f'overruns {s.overruns}, worst {s.loop_dt_max_ms:.1f} ms')
     state['hb'] = False; spin(1.0)
     s = st['m']
     check('heartbeat loss -> fault', s.mode == 'fault' and 'heartbeat' in s.fault, f'{s.mode}: {s.fault}')
     check('fault -> last command to every drive is 0 A',
-          all(drive_cmds(k) and drive_cmds(k)[-1].endswith('target=0.000') for k in ids),
+          all(drive_cmds(k) and drive_cmds(k)[-1].startswith('CMD fn=1 ') and drive_cmds(k)[-1].endswith('target=0.000') for k in ids),
           str({k: drive_cmds(k)[-1][-14:] if drive_cmds(k) else None for k in ids}))
     state['hb'] = True; spin(0.3)
     check('fault latches (stand refused until disarm)', not call('stand').success)
@@ -114,7 +115,12 @@ try:
     state['imu'] = False; spin(0.3)
     s = st['m']
     check('IMU stops -> fault', s.mode == 'fault' and 'IMU' in s.fault, f'{s.mode}: {s.fault}')
-    state['imu'] = True; call('disarm'); call('stand'); spin(0.3)
+    state['imu'] = True; call('disarm'); spin(0.3)
+    r = call('balance'); spin(0.5)
+    s = st['m']
+    check('balance accepted with model tables, LQR running', r.success and s.mode == 'balance' and s.l_pend > 0.1,
+          f'{r.message}, mode {s.mode}, l_pend {s.l_pend:.3f}, th_kin {s.th_kin:+.3f}')
+    call('disarm'); call('stand'); spin(0.3)
     drives[0].send_signal(signal.SIGUSR1); spin(0.3)       # first drive stops uploading
     s = st['m']
     check('motor feedback stale -> fault', s.mode == 'fault' and 'stale' in s.fault, f'{s.mode}: {s.fault}')

@@ -100,6 +100,13 @@ public:
     cmd_timeout_ = declare_parameter("cmd_timeout_s", 0.5);
     stand_ramp_s_ = declare_parameter("stand_ramp_s", 2.0);
     stand_ff_ = declare_parameter("stand_feedforward", true);
+    // hips: "servo_pos" = drive position-speed loop (PID inside the drive, stable; stiff, no VMC
+    // compliance / feed-forward), "current_pd" = host PD -> current (wbctrl VMC, needs >= 500 Hz and
+    // a clean velocity: shook at 200 Hz on 2026-10-07)
+    hip_mode_ = declare_parameter("hip_mode", std::string("servo_pos"));
+    if (hip_mode_ != "servo_pos" && hip_mode_ != "current_pd") {throw std::runtime_error("hip_mode: servo_pos|current_pd");}
+    hip_speed_ = declare_parameter("hip_speed_rad_s", 2.0);
+    hip_accel_ = declare_parameter("hip_accel_rad_s2", 20.0);
     rt_prio_ = static_cast<int>(declare_parameter("rt_priority", 80));
     // controller params (wbctrl TUNE names), defaults = Params{}
     gen2_control::Params P;
@@ -282,7 +289,7 @@ private:
     }
     if (m == Mode::kStand || m == Mode::kBalance) {
       t_mode_ = 0.0;
-      for (int k = 0; k < 2; ++k) {h_start_[k] = h_[k];}
+      for (int k = 0; k < 2; ++k) {M_start_[k] = M_[k];}
       if (core_) {core_->reset();}
     }
     mode_ = m;
@@ -342,7 +349,8 @@ private:
         else if (i < 2 && !fb[i].zero_ok()) {bad = std::string(names[i]) + " zero not resolved";}
       }
     }
-    double th[2], M[2], Md[2];
+    double th[2], Md[2];
+    double * M = M_;
     for (int k = 0; k < 2; ++k) {
       const auto & c = bus_->motors()[idx_.at(names[k])];
       M[k] = c.raw_to_joint_pos(fb[k].raw_unwrapped());
@@ -383,16 +391,23 @@ private:
     t_mode_ += 1.0 / rate_hz_;
 
     // ---- control
-    double h_tgt[2], ffF = 0.0, kp = params_.vmc_kp, kd = params_.vmc_kd, wheel_tau[2] = {0, 0};
+    double h_tgt[2], M_tgt[2], ffF = 0.0, kp = params_.vmc_kp, kd = params_.vmc_kd, wheel_tau[2] = {0, 0};
+    const double M_idle = interp(params_.idle_h, leg_h_, leg_th_) - theta0_;
     if (mode_ == Mode::kStand) {
+      // ramp in joint angle from where the leg really is (it may sit beyond the leg table, e.g. at the
+      // retracted stop -12 deg < -7 deg: a height ramp would start with a step there)
       const double u = std::min(1.0, t_mode_ / stand_ramp_s_);
-      for (int k = 0; k < 2; ++k) {h_tgt[k] = h_start_[k] + u * (params_.idle_h - h_start_[k]);}
+      for (int k = 0; k < 2; ++k) {
+        M_tgt[k] = M_start_[k] + u * (M_idle - M_start_[k]);
+        h_tgt[k] = interp(theta0_ + M_tgt[k], leg_th_, leg_h_);
+      }
       ffF = stand_ff_ ? 0.5 * (model_ok_ ? m_pend_ : params_.m_pend) * 9.81 : 0.0;
     } else {
       const Output o = core_->step(f, vx, wz, params_.idle_h);
       last_ = o;
       for (int k = 0; k < 2; ++k) {
         h_tgt[k] = params_.idle_h + 0.12 * o.act[k];
+        M_tgt[k] = interp(std::clamp(h_tgt[k], leg_h_.front(), leg_h_.back()), leg_h_, leg_th_) - theta0_;
         wheel_tau[k] = o.act[2 + k] * params_.wheel_tau_max;
       }
       ffF = o.ff_force; kp = o.leg_kp; kd = o.leg_kd;
@@ -400,11 +415,21 @@ private:
     std::string err;
     for (int k = 0; k < 2; ++k) {
       const auto & c = bus_->motors()[idx_.at(names[k])];
-      const double th_t = interp(std::clamp(h_tgt[k], leg_h_.front(), leg_h_.back()), leg_h_, leg_th_);
-      const double tau = kp * ((th_t - theta0_) - M[k]) - kd * Md[k] + ffF * interp(th[k], leg_th_, leg_dh_);
-      const double cur = c.joint_torque_to_current(tau);
-      h_tgt_[k] = h_tgt[k]; hip_tau_[k] = tau; hip_cur_[k] = cur;
-      bus_->send(gen2_hardware::cubemars::encode_current(c.can_id, cur), err);
+      h_tgt_[k] = h_tgt[k];
+      if (hip_mode_ == "servo_pos") {
+        // absolute drive degrees = reported drive position + joint error (same frame as MotorTester)
+        const double tgt_raw = fb[k].status.position_deg +
+          (M_tgt[k] - M[k]) * 180.0 / M_PI * c.raw_deg_per_output_rev / 360.0 / c.direction;
+        const double epr = c.pole_pairs * c.gear_ratio * 60.0 / (2.0 * M_PI);   // ERPM per joint rad/s
+        bus_->send(gen2_hardware::cubemars::encode_pos_spd(c.can_id, tgt_raw, hip_speed_ * epr, hip_accel_ * epr), err);
+        hip_tau_[k] = f.tau_hip[k];                        // measured (logging)
+        hip_cur_[k] = fb[k].status.current_a;
+      } else {
+        const double tau = kp * (M_tgt[k] - M[k]) - kd * Md[k] + ffF * interp(th[k], leg_th_, leg_dh_);
+        const double cur = c.joint_torque_to_current(tau);
+        hip_tau_[k] = tau; hip_cur_[k] = cur;
+        bus_->send(gen2_hardware::cubemars::encode_current(c.can_id, cur), err);
+      }
       const auto & cw = bus_->motors()[idx_.at(names[2 + k])];
       const double wc = cw.joint_torque_to_current(wheel_tau[k]);
       wheel_tau_[k] = wheel_tau[k]; wheel_cur_[k] = wc;
@@ -446,6 +471,8 @@ private:
   std::vector<double> body_c_, kin_th_, wheel_xz_, leg_com_xz_, dphi_, wx_, wz_tab_, cx_, cz_;
   double rate_hz_, max_tilt_, start_tilt_, imu_timeout_, motor_timeout_, hb_timeout_, cmd_timeout_, stand_ramp_s_;
   bool stand_ff_;
+  std::string hip_mode_;
+  double hip_speed_, hip_accel_;
   int rt_prio_;
   gen2_control::Params params_;
   std::unique_ptr<gen2_control::WBCore> core_;
@@ -459,7 +486,7 @@ private:
   // state (written by the loop thread, read by publish — plain doubles, debug only)
   Mode mode_ = Mode::kDisarmed, want_ = Mode::kDisarmed;
   std::string fault_, last_refusal_;
-  double t_mode_ = 0, h_start_[2] = {0, 0}, h_[2] = {0, 0}, h_tgt_[2] = {0, 0};
+  double t_mode_ = 0, M_start_[2] = {0, 0}, M_[2] = {0, 0}, h_[2] = {0, 0}, h_tgt_[2] = {0, 0};
   double hip_tau_[2] = {0, 0}, hip_cur_[2] = {0, 0}, wheel_tau_[2] = {0, 0}, wheel_cur_[2] = {0, 0};
   double pitch_ = 0, roll_ = 0, th_kin_ = 0, l_pend_ = 0, imu_age_ms_ = 1e9, vx_cmd_ = 0, wz_cmd_ = 0;
   Output last_;
