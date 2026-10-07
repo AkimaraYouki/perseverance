@@ -73,7 +73,7 @@ from isaaclab.terrains.height_field.hf_terrains_cfg import HfTerrainBaseCfg  # n
 from isaaclab.terrains.height_field.utils import height_field_to_mesh  # noqa: E402
 from isaaclab.terrains.trimesh.mesh_terrains_cfg import MeshPlaneTerrainCfg  # noqa: E402
 from isaaclab.utils import configclass  # noqa: E402
-from isaaclab.utils.math import quat_apply_inverse  # noqa: E402
+from isaaclab.utils.math import quat_apply, quat_apply_inverse  # noqa: E402
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
 from wheeled_biped_isaaclab.tasks.balance import terrain as T  # noqa: E402
 from wheeled_biped_isaaclab.tasks.balance import cad  # noqa: E402
@@ -245,6 +245,7 @@ dxz = g.uniform(-1, 1, (N, 2)) * P.dr_com_cm / 100.0
 kv = 1.0 - g.uniform(0, 1, N) * P.dr_motor
 kf = 1.0 + g.uniform(-1, 1, (N, 2)) * P.dr_fric                        # 정지 마찰·데드밴드
 view = robot.root_physx_view
+com_b_nom = view.get_coms().clone()[..., :3].to(dev)                # 모델 오차 전 링크 좌표 무게중심 (명목, 제어기용)
 masses, coms = view.get_masses().clone(), view.get_coms().clone()
 masses[:, 0] *= torch.tensor(km, dtype=masses.dtype)
 coms[:, 0, 0] += torch.tensor(dxz[:, 0], dtype=coms.dtype); coms[:, 0, 2] += torch.tensor(dxz[:, 1], dtype=coms.dtype)  # noqa: E702
@@ -313,7 +314,11 @@ with torch.inference_mode():
         wj = d.joint_vel[:, wheel_ids] * wsign
         wabs = (d.body_ang_vel_w[:, wheel_bodies] * lat[:, None]).sum(-1)
         ax = d.body_pos_w[:, wheel_bodies].mean(1)
-        c_nom = (d.body_com_pos_w[:, nonwheel] * m_nom[None, nonwheel, None]).sum(1) / m_pend
+        # 명목 무게중심 (모델 오차 전 링크 좌표 COM 을 지금 링크 자세로) — 실기는 명목 표만 안다. 2026-10-07 전에는 오차가 반영된
+        # body_com_pos_w 를 써서 제어기가 실제 무게중심 (±2 cm 오차 포함) 을 알고 있었다
+        c_pos = d.body_link_pos_w[:, nonwheel] + quat_apply(d.body_link_quat_w[:, nonwheel].reshape(-1, 4),
+                                                            com_b_nom[:, nonwheel].reshape(-1, 3)).reshape(N, len(nonwheel), 3)
+        c_nom = (c_pos * m_nom[None, nonwheel, None]).sum(1) / m_pend
         rb = quat_apply_inverse(q, c_nom - ax)
         c_tru = (d.body_com_pos_w[:, nonwheel] * mass_true[:, nonwheel, None]).sum(1) / mass_true[:, nonwheel].sum(1, keepdim=True)
         r_t = c_tru - ax

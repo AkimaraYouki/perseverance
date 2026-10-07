@@ -551,17 +551,26 @@ import numpy as _np  # noqa: E402
 import lqr_vmc  # noqa: E402
 _nonwheel = [i for i in range(robot.num_bodies) if i not in wheel_bodies]
 _mass = robot.root_physx_view.get_masses()[0].clone().to(dev)    # 명목 질량 (복사! 모델 오차가 바꾸지 않게)
+_com_b_nom = robot.root_physx_view.get_coms()[0, :, :3].clone().to(dev)   # 명목 무게중심 (링크 좌표, 모델 오차 전)
 _m_pend = float(_mass[_nonwheel].sum()); _m_w = float(_mass[wheel_bodies].sum())
 _I_w = 2 * (cad.WHEEL_IZZ + args.wheel_armature)                       # URDF l_wheel izz (회전자 반사관성 포함) + 실측 보정 armature, x 2
 lqr = None
 
 
+def _com_nom_w():
+    """명목 무게중심 (모델 오차 전 링크 좌표 COM 을 지금 링크 자세로, 월드). 실기는 명목 표만 안다 (2026-10-07 전엔 실제 COM 을 썼음)."""
+    d = robot.data
+    from isaaclab.utils.math import quat_apply as _qa
+    return d.body_link_pos_w[0, _nonwheel] + _qa(d.body_link_quat_w[0, _nonwheel], _com_b_nom[_nonwheel])
+
+
 def build_lqr():
     global lqr
     d = robot.data
-    c = (d.body_com_pos_w[0, _nonwheel] * _mass[_nonwheel, None]).sum(0) / _m_pend
+    cp = _com_nom_w()
+    c = (cp * _mass[_nonwheel, None]).sum(0) / _m_pend
     iyy = robot.root_physx_view.get_inertias()[0][:, 4].to(dev)
-    rel = d.body_com_pos_w[0, _nonwheel] - c
+    rel = cp - c
     I = float((iyy[_nonwheel] + _mass[_nonwheel] * (rel[:, 0] ** 2 + rel[:, 2] ** 2)).sum())
     lqr = lqr_vmc.WheelLQR(_m_pend, I, _m_w, _I_w, R, q=(args.lqr_qx, args.lqr_qv, args.lqr_qth, args.lqr_qthd), r=args.lqr_r)
     return I
@@ -918,7 +927,7 @@ def ctrl_frame(t, wx_, h_now, tau):
     fwd = torch.tensor([math.cos(psi), math.sin(psi), 0.0], device=dev)
     lat = torch.tensor([-math.sin(psi), math.cos(psi), 0.0], device=dev)
     ax = d.body_pos_w[0, wheel_bodies].mean(0)
-    c_nom = (d.body_com_pos_w[0, _nonwheel] * _mass[_nonwheel, None]).sum(0) / _m_pend
+    c_nom = (_com_nom_w() * _mass[_nonwheel, None]).sum(0) / _m_pend
     rb = _qai(d.root_quat_w[0:1], (c_nom - ax)[None])[0]
     acc = d.body_lin_acc_w[0, 0]
     np_ = lambda x: x.detach().cpu().numpy()[None]  # noqa: E731
