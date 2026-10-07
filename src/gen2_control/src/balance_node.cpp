@@ -123,6 +123,9 @@ public:
     hip_accel_ = declare_parameter("hip_accel_rad_s2", 20.0);
     rt_prio_ = static_cast<int>(declare_parameter("rt_priority", 80));
     use_shm_ = declare_parameter("imu_shm", true);
+    // balance-point trim [deg] added to th_kin: + = the controller balances with the body leaning BACK
+    // by this much (use when the robot drifts forward: the real COM is ahead of the model)
+    th_trim_ = declare_parameter("th_trim_deg", 0.0) * M_PI / 180.0;
     // controller params (wbctrl TUNE names), defaults = Params{}
     gen2_control::Params P;
     P.r_wheel = declare_parameter("leg_table.r_wheel", P.r_wheel);
@@ -421,6 +424,7 @@ private:
       f.w_wheel_abs[k] = f.w_wheel_joint[k] + f.w_b[1] + (model_ok_ ? interp(th[k], kin_th_, dphi_) * Md[k] : 0.0);
     }
     if (model_ok_) {pendulum(th, f.th_kin, f.l_pend);}
+    f.th_kin += th_trim_;
     f.t = t * 1e-9;
     th_kin_ = f.th_kin;
     l_pend_ = f.l_pend;
@@ -598,6 +602,7 @@ private:
   gen2_sensors::ImuShmReader shm_;
   int64_t shm_try_ns_ = 0;
   bool use_shm_ = true;
+  double th_trim_ = 0.0;
   std::atomic<bool> imu_src_shm_{false};
   std::atomic<double> dt_max_ms_{0.0};
   std::atomic<uint32_t> overruns_{0};
