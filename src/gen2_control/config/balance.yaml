@@ -30,7 +30,8 @@ balance:
       vmc_kp: 60.0
       vmc_kd: 1.0
       vmax_kmh: 3.5
-      fric_comp_nm: 0.11
+      fric_comp_nm: 0.0       # 2026-10-08 MIT wheels: 0.11 (velocity-sign Coulomb comp) drove a 12-15 Hz wheel chatter; 0 = quiet
+      yaw_kd: 0.15            # 2026-10-08 MIT wheels: 0.5 (sim) gave a 13 Hz L/R torque chatter; 0.15 quiet
       db_comp: 2              # 0 off, 1 boost, 2 sigma
       db_comp_nm: 0.65
       wheel_lpf_hz: 20.0
