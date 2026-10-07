@@ -119,6 +119,7 @@ public:
     osc_vel_ = declare_parameter("osc_vel_rad_s", 1.0);
     sat_frac_ = declare_parameter("sat_frac", 0.9);
     sat_time_s_ = declare_parameter("sat_time_s", 0.1);
+    sit_sat_a_ = declare_parameter("sit_sat_current_a", 5.0);
     hip_speed_ = declare_parameter("hip_speed_rad_s", 2.0);
     hip_accel_ = declare_parameter("hip_accel_rad_s2", 20.0);
     rt_prio_ = static_cast<int>(declare_parameter("rt_priority", 80));
@@ -522,9 +523,11 @@ private:
           }
           while (!osc_t_[k].empty() && t * 1e-9 - osc_t_[k].front() > osc_window_s_) {osc_t_[k].erase(osc_t_[k].begin());}
           if (static_cast<int>(osc_t_[k].size()) >= osc_flips_) {why = std::string(names[k]) + " oscillation detected";}
-          const bool sat = std::fabs(fb[k].status.current_a) > sat_frac_ * c.current_limit_a;
+          // sitting needs little torque: a leg pushing harder is blocked (2026-10-08: 9.9 A slipped leg_r's link)
+          const double lim = sit_ ? sit_sat_a_ : sat_frac_ * c.current_limit_a;
+          const bool sat = std::fabs(fb[k].status.current_a) > lim;
           sat_s_[k] = sat ? sat_s_[k] + 1.0 / rate_hz_ : 0.0;
-          if (sat_s_[k] > sat_time_s_) {why = std::string(names[k]) + " current saturated";}
+          if (sat_s_[k] > sat_time_s_) {why = std::string(names[k]) + (sit_ ? " blocked while sitting" : " current saturated");}
         }
         if (why.empty() && imu_age_ms_ > imu_timeout_ * 1e3) {why = "IMU stale";}
         if (why.empty() && (t - hb_ns_.load()) * 1e-9 > hb_timeout_) {why = "operator heartbeat lost";}
@@ -652,7 +655,7 @@ private:
   double rate_hz_, max_tilt_, start_tilt_, imu_timeout_, motor_timeout_, hb_timeout_, cmd_timeout_, stand_ramp_s_;
   bool stand_ff_;
   std::string hip_mode_;
-  double hip_speed_, hip_accel_, mit_kt_drive_, osc_window_s_, osc_vel_, sat_frac_, sat_time_s_;
+  double hip_speed_, hip_accel_, mit_kt_drive_, osc_window_s_, osc_vel_, sat_frac_, sat_time_s_, sit_sat_a_;
   int osc_flips_;
   int osc_sign_[2] = {0, 0};
   std::vector<double> osc_t_[2];

@@ -19,6 +19,7 @@ p.add_argument('--rate', type=float, default=100.0)
 p.add_argument('--pole-pairs', type=float, default=14)
 p.add_argument('--gear', type=float, default=10)
 p.add_argument('--proto', default='servo', choices=['servo', 'mit_legacy', 'mit_v3'])
+p.add_argument('--pos0', type=float, default=0.0, help='power-up output position (deg)')
 p.add_argument('--kt', type=float, default=1.27, help='MIT torque -> current (N·m/A)')
 p.add_argument('--neg-gain', type=float, default=1.0,
                help='torque gain for negative current (direction asymmetry, e.g. 0.8)')
@@ -33,7 +34,7 @@ signal.signal(signal.SIGUSR1, lambda *_: upload.__setitem__(0, not upload[0]))
 damping = [8.0]  # SIGUSR2 toggles a low-friction "runaway" wheel
 signal.signal(signal.SIGUSR2, lambda *_: damping.__setitem__(0, 0.5 if damping[0] > 1 else 8.0))
 
-pos_deg, erpm, cur = 0.0, 0.0, 0.0
+pos_deg, erpm, cur = a.pos0, 0.0, 0.0
 mode, target = 'idle', 0.0
 last_cmd_t = 0.0
 R = dict(mit_legacy=(12.56, 20.0, 8.0), mit_v3=(12.56, 60.0, 12.0)).get(a.proto, (12.56, 20.0, 8.0))

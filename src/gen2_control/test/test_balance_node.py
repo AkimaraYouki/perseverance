@@ -26,8 +26,11 @@ FAKE_PROTO = {n: ('mit_legacy' if p == 'mit_legacy' else 'servo') for n, p in pr
 logs = {n: tempfile.TemporaryFile(mode='w+') for n in ids}
 HIP_YAML = os.path.join(tempfile.mkdtemp(), 'hip.yaml')   # a params file: -p does not override balance.yaml
 open(HIP_YAML, 'w').write(f"balance:\n  ros__parameters:\n    hip_mode: {os.environ.get('HIP_MODE', 'mit')}\n    imu_shm: false\n")
-drives = [subprocess.Popen([sys.executable, FAKE, '--id', str(i), '--rate', '500', '--proto', FAKE_PROTO[n]],
-                          stdout=logs[n], text=True) for n, i in ids.items()]
+# hips power up at joint 20 deg: inside the stops with no 60 deg twin (an end-stop band would be ambiguous)
+POS0 = {n: (m[n]['direction'] * (20.0 + math.degrees(m[n]['position_offset_rad'])) if n.startswith('leg') else 0.0)
+        for n in ids}
+drives = [subprocess.Popen([sys.executable, FAKE, '--id', str(i), '--rate', '500', '--proto', FAKE_PROTO[n],
+                           '--pos0', str(POS0[n])], stdout=logs[n], text=True) for n, i in ids.items()]
 share = os.path.join(WS, 'install/gen2_control/share/gen2_control/config')
 node = subprocess.Popen(['ros2', 'run', 'gen2_control', 'balance_node', '--ros-args',
                          '--params-file', MOT, '--params-file', os.path.join(share, 'leg_table.yaml'),

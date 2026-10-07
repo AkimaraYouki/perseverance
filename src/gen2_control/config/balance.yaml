@@ -22,6 +22,7 @@ balance:
     osc_vel_rad_s: 1.0
     sat_frac: 0.9             # fault: hip current > sat_frac x current_limit for sat_time_s
     sat_time_s: 0.1
+    sit_sat_current_a: 5.0    # while sitting: hip |I| above this for sat_time_s = leg blocked -> fault (2026-10-08 leg_r link slipped at 9.9 A)
     hip_speed_rad_s: 2.0      # servo_pos speed limit
     hip_accel_rad_s2: 20.0
     tune:                     # wbctrl TUNE (climb_test defaults); others in gen2_control/wb_core.hpp Params
