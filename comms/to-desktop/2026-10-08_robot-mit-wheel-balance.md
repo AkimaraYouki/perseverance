@@ -19,3 +19,18 @@ Other events today:
 - leg_r: link slipped ~30.5° on the motor output during a sit (leg blocked, hip pushed 9.9 A). End stops re-measured,
   offset −0.401426 -> 0.131772 rad. New guard: hip |I| > 5 A while sitting = blocked -> fault (sit_sat_current_a).
 - Wheel directions flipped for the MIT firmware (L −1, R +1).
+
+## LQR gain steps (2026-10-08, same robot defaults fric 0 / yaw_kd 0.15), logs/2026-10-08_balance_gain_step*.csv
+K at l = 0.20 [x, v, θ, θ̇]; f = fraction from lowgain to default.
+
+| step | K | travel (max) | pitch sd | fwd wheel torque >8 Hz |
+|---|---|---|---|---|
+| lowgain | −1.0 −2.38 −12.2 −1.37 | 0.11 (0.17) m | 1.4° | 0.031 |
+| all ×1/3 | −1.14 −2.68 −14.3 −2.08 | 0.20 (0.36) | 2.7° | 0.130 (15 Hz) |
+| x,v,θ 1/3, θ̇ low | −1.14 −2.68 −14.3 −1.54 | 0.24 (0.38) | 3.4° | 0.075 |
+| x,v,θ 2/3, θ̇ low | −1.28 −3.04 −16.1 −1.54 | 0.51 (0.87) | 3.2° | 0.057 |
+| x,v,θ full, θ̇ low | −1.41 −3.39 −18.0 −1.54 | 1.30 (1.30) | 5.2° | 0.192 |
+
+Raising θ̇ brings back the 15 Hz wheel chatter; raising x/v/θ with θ̇ fixed gives ±8–9° pitch swings at 2–3 Hz
+(less damping). The low-gain table is still the best on hardware. Could you check in sim (with 18' wheel backlash and
+the measured ~5 ms MIT path) which K keeps damping with θ̇ ≤ 1.5?
