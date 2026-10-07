@@ -363,6 +363,12 @@ void MotorTester::run_home(std::size_t m)
   std::string why;
   double travel = 0.0;
   bool blocked = false;
+  if (bus_.feedback(m).zero_ok()) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    st_.running = false;
+    st_.result = "done: zero already resolved (no motion)";
+    return;
+  }
   // phase 0: + (extend) up to kHomeTravelDeg, stall detection; phase 1 (blocked): back off
   for (int phase = 0; phase < 2 && why.empty(); ++phase) {
     const MotorFeedback f0 = bus_.feedback(m);
@@ -370,7 +376,7 @@ void MotorTester::run_home(std::size_t m)
     const double tgt = f0.status.position_deg + sign * kHomeTravelDeg * raw_per_joint_deg;
     const auto t0 = std::chrono::steady_clock::now();
     auto next = t0;
-    double stall_s = 0.0;
+    double stall_s = 0.0, fast_s = 0.0;
     while (true) {
       const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
       if (stop_) {std::lock_guard<std::mutex> lk(mtx_); why = "stopped: " + stop_why_; break;}
@@ -380,7 +386,9 @@ void MotorTester::run_home(std::size_t m)
       if (fb.status.error != 0) {why = std::string("drive fault: ") + cubemars::error_text(fb.status.error); break;}
       if (fb.status.temperature_c > c.max_temperature_c) {why = "over-temperature"; break;}
       const double w = c.erpm_to_joint_vel(fb.status.speed_erpm);
-      if (std::fabs(w) > 0.8) {why = "over-speed guard"; break;}
+      // velocity readings spike at the end stop: over-speed only if it lasts 50 ms
+      fast_s = std::fabs(w) > 1.0 ? fast_s + 1.0 / limits_.rate_hz : 0.0;
+      if (fast_s > 0.05) {why = "over-speed guard"; break;}
       const double moved = (fb.status.position_deg - f0.status.position_deg) / raw_per_joint_deg;
       if (phase == 0) {
         travel = moved;
