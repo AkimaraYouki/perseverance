@@ -34,3 +34,7 @@ K at l = 0.20 [x, v, θ, θ̇]; f = fraction from lowgain to default.
 Raising θ̇ brings back the 15 Hz wheel chatter; raising x/v/θ with θ̇ fixed gives ±8–9° pitch swings at 2–3 Hz
 (less damping). The low-gain table is still the best on hardware. Could you check in sim (with 18' wheel backlash and
 the measured ~5 ms MIT path) which K keeps damping with θ̇ ≤ 1.5?
+
+**Correction (user):** during all gain-step runs the user kept pushing the robot by hand on purpose. Travel and pitch sd
+above are push responses, not drift/instability, so they do NOT rank the gains. Only the >8 Hz wheel-chatter column is
+meaningful (raising θ̇ brings the 15 Hz chatter back). The user's feel for push rejection is pending.
