@@ -32,6 +32,7 @@
 #include "gen2_hardware/motor_bus.hpp"
 #include "gen2_hardware/motor_params.hpp"
 #include "gen2_msgs/msg/controller_state.hpp"
+#include "gen2_sensors/imu_shm.hpp"
 #include "gen2_msgs/msg/motor_state_array.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -120,6 +121,7 @@ public:
     hip_speed_ = declare_parameter("hip_speed_rad_s", 2.0);
     hip_accel_ = declare_parameter("hip_accel_rad_s2", 20.0);
     rt_prio_ = static_cast<int>(declare_parameter("rt_priority", 80));
+    use_shm_ = declare_parameter("imu_shm", true);
     // controller params (wbctrl TUNE names), defaults = Params{}
     gen2_control::Params P;
     P.r_wheel = declare_parameter("leg_table.r_wheel", P.r_wheel);
@@ -264,10 +266,7 @@ private:
   {
     const int64_t t = now_ns();
     if ((t - hb_ns_.load()) * 1e-9 > hb_timeout_) {return "no operator heartbeat (balance/heartbeat)";}
-    {
-      std::lock_guard<std::mutex> lk(imu_m_);
-      if ((t - imu_ns_) * 1e-9 > imu_timeout_) {return "IMU not fresh";}
-    }
+    if (imu_age_ms_ > imu_timeout_ * 1e3) {return "IMU not fresh";}
     for (const auto & kv : idx_) {
       const MotorFeedback fb = bus_->feedback(kv.second);
       const auto & c = bus_->motors()[kv.second];
@@ -353,6 +352,21 @@ private:
       std::lock_guard<std::mutex> lk(imu_m_);
       imu = imu_;
       imu_ns = imu_ns_;
+    }
+    // preferred: shared memory written by iahrs_node (no DDS, stamp = serial line arrival)
+    if (use_shm_ && !shm_.is_open() && t - shm_try_ns_ > 1000000000LL) {
+      shm_try_ns_ = t;
+      if (shm_.open()) {RCLCPP_INFO(get_logger(), "IMU via shared memory %s", gen2_sensors::kImuShmName);}
+    }
+    gen2_sensors::ImuSample sm;
+    if (shm_.read(sm) && (t - sm.rx_mono_ns) * 1e-9 < imu_timeout_) {
+      imu.orientation.w = sm.q[0]; imu.orientation.x = sm.q[1]; imu.orientation.y = sm.q[2]; imu.orientation.z = sm.q[3];
+      imu.angular_velocity.x = sm.gyro[0]; imu.angular_velocity.y = sm.gyro[1]; imu.angular_velocity.z = sm.gyro[2];
+      imu.linear_acceleration.x = sm.acc[0]; imu.linear_acceleration.y = sm.acc[1]; imu.linear_acceleration.z = sm.acc[2];
+      imu_ns = sm.rx_mono_ns;
+      imu_src_shm_ = true;
+    } else {
+      imu_src_shm_ = false;
     }
     imu_age_ms_ = (t - imu_ns) * 1e-6;
     const auto & q = imu.orientation;
@@ -516,6 +530,7 @@ private:
     }
     s.vx_cmd = vx_cmd_; s.wz_cmd = wz_cmd_;
     s.imu_age_ms = imu_age_ms_;
+    s.imu_shm = imu_src_shm_;
     s.loop_dt_max_ms = dt_max_ms_.exchange(0.0);
     s.overruns = overruns_;
     pub_->publish(s);
@@ -554,6 +569,10 @@ private:
   double hip_tau_[2] = {0, 0}, hip_cur_[2] = {0, 0}, wheel_tau_[2] = {0, 0}, wheel_cur_[2] = {0, 0};
   double pitch_ = 0, roll_ = 0, th_kin_ = 0, l_pend_ = 0, imu_age_ms_ = 1e9, vx_cmd_ = 0, wz_cmd_ = 0;
   Output last_;
+  gen2_sensors::ImuShmReader shm_;
+  int64_t shm_try_ns_ = 0;
+  bool use_shm_ = true;
+  std::atomic<bool> imu_src_shm_{false};
   std::atomic<double> dt_max_ms_{0.0};
   std::atomic<uint32_t> overruns_{0};
   std::atomic<bool> run_{true};

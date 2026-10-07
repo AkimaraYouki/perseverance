@@ -23,5 +23,6 @@ float64[2] wheel_cur_cmd
 float64 vx_cmd
 float64 wz_cmd
 float64 imu_age_ms
+bool imu_shm                    # IMU read from shared memory (else DDS /imu/data)
 float64 loop_dt_max_ms          # worst loop period over the last report
 uint32 overruns                 # periods > 2x nominal since start

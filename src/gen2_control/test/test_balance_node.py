@@ -23,7 +23,7 @@ m = yaml.safe_load(open(MOT))['/**']['ros__parameters']['motors']
 ids = {n: m[n]['can_id'] for n in ('wheel_l', 'wheel_r', 'leg_l', 'leg_r')}
 logs = {n: tempfile.TemporaryFile(mode='w+') for n in ids}
 HIP_YAML = os.path.join(tempfile.mkdtemp(), 'hip.yaml')   # a params file: -p does not override balance.yaml
-open(HIP_YAML, 'w').write(f"balance:\n  ros__parameters:\n    hip_mode: {os.environ.get('HIP_MODE', 'mit')}\n")
+open(HIP_YAML, 'w').write(f"balance:\n  ros__parameters:\n    hip_mode: {os.environ.get('HIP_MODE', 'mit')}\n    imu_shm: false\n")
 drives = [subprocess.Popen([sys.executable, FAKE, '--id', str(i), '--rate', '500'], stdout=logs[n], text=True)
           for n, i in ids.items()]
 share = os.path.join(WS, 'install/gen2_control/share/gen2_control/config')

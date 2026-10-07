@@ -24,6 +24,7 @@
 #include <stdexcept>
 
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
+#include "gen2_sensors/imu_shm.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 
@@ -46,6 +47,7 @@ public:
       body_frame_.c_str());
     pub_ = create_publisher<sensor_msgs::msg::Imu>("imu/data", rclcpp::SensorDataQoS());
     raw_pub_ = create_publisher<sensor_msgs::msg::Imu>("imu/data_raw", rclcpp::SensorDataQoS());
+    if (!shm_.open()) {RCLCPP_WARN(get_logger(), "shared memory %s not available", gen2_sensors::kImuShmName);}
     diag_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/diagnostics", 10);
     timer_ = create_wall_timer(1s, [this] {report();});
     th_ = std::thread([this] {loop();});
@@ -176,6 +178,12 @@ private:
     msg.orientation.y = aw * by - ax * bz + ay * bw + az * bx;
     msg.orientation.z = aw * bz + ax * by - ay * bx + az * bw;
     pub_->publish(msg);
+    gen2_sensors::ImuSample sm;
+    sm.rx_mono_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(rx.time_since_epoch()).count();
+    sm.count = cnt;
+    sm.q[0] = msg.orientation.w; sm.q[1] = msg.orientation.x; sm.q[2] = msg.orientation.y; sm.q[3] = msg.orientation.z;
+    for (int i = 0; i < 3; ++i) {sm.gyro[i] = w_b[i]; sm.acc[i] = a_b[i];}
+    shm_.write(sm);
     std::lock_guard<std::mutex> lk(m_);
     if (have_last_) {
       const long dc = cnt - last_cnt_;
@@ -227,6 +235,7 @@ private:
   }
 
   std::string port_, frame_, body_frame_;
+  gen2_sensors::ImuShmWriter shm_;
   double R_[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
   double qbs_[4] = {1, 0, 0, 0};
   double expected_hz_;
