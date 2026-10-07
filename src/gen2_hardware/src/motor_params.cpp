@@ -35,6 +35,13 @@ std::vector<MotorConfig> declare_motor_params(rclcpp::Node & node)
     c.feedback_stale_timeout_s = node.declare_parameter(p + "feedback_stale_timeout_s", 0.1);
     c.command_timeout_s = node.declare_parameter(p + "command_timeout_s", 0.05);
     c.supports_disable_cmd = node.declare_parameter(p + "supports_disable_cmd", false);
+    c.wrap_deg = node.declare_parameter(p + "wrap_deg", 0.0);
+    c.stop_min_deg = node.declare_parameter(p + "stop_min_deg", -1e9);
+    c.stop_max_deg = node.declare_parameter(p + "stop_max_deg", 1e9);
+    c.stop_margin_deg = node.declare_parameter(p + "stop_margin_deg", 2.0);
+    if (c.wrap_deg > 0.0 && !(c.stop_max_deg - c.stop_min_deg < 2.0 * c.wrap_deg)) {
+      throw std::runtime_error("motor '" + n + "': wrap_deg needs measured stop_min_deg/stop_max_deg");
+    }
     c.protocol = node.declare_parameter(p + "protocol", std::string("servo"));
     if (c.protocol != "servo" && c.protocol != "mit_v3" && c.protocol != "mit_legacy") {
       throw std::runtime_error("motor '" + n + "': protocol must be servo|mit_v3|mit_legacy");

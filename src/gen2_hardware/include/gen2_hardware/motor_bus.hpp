@@ -28,6 +28,12 @@ struct MotorFeedback
   uint64_t boot_frames = 0;       // 0x2C "entered servo mode" count (drive reboot indicator)
   bool has_position32 = false;
   double position32_deg = 0.0;
+  // Power-up wrap (MotorConfig::wrap_deg): joint = raw_to_joint_pos(position_deg + unwrap_deg).
+  enum : uint8_t {kZeroAbsolute = 0, kZeroResolved = 1, kZeroAmbiguous = 2, kZeroUnresolved = 3};
+  uint8_t zero_state = kZeroAbsolute;
+  double unwrap_deg = 0.0;
+  bool zero_ok() const {return zero_state <= kZeroResolved;}
+  double raw_unwrapped() const {return status.position_deg + unwrap_deg;}
 };
 
 struct BusStats

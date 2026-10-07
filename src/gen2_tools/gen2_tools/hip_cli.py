@@ -14,12 +14,13 @@ dead-man, over-speed / stale / fault aborts, 0 A at the end -> the leg goes limp
 The CLI starts its own motor_test_node with the source motors.yaml, so saved changes apply at once.
 
   s                       status (M, crank theta, height h, leg length)
+  find l|r|b              resolve the power-up 60 deg zero ambiguity (legs hanging, extends <= 18 deg)
   dir  l|r                direction check: extend +5 deg, you answer if the leg EXTENDED -> fixes sign
   zero l|r                save the current pose as the CAD zero pose (M = 0, theta 45 deg)
   down l|r|b <deg>        extend the leg (wheel goes DOWN / body up)        M += deg
   up   l|r|b <deg>        retract the leg (wheel / link goes UP to the body) M -= deg
   h    l|r|b <mm>         go to motor-axle height h [mm] (192.5 .. 312.5 with R 70 mm)
-  home                    both legs to M = 0
+  home                    find (if needed), then both legs to M = 0
   speed <rad/s>           joint speed for moves (default 0.2, 0.05 .. 2.0)
   q                       quit (Ctrl+C during a move = STOP)
 Until a leg's direction is verified (dir), moves are limited to |M| <= 10 deg.
@@ -70,7 +71,7 @@ def load_cfg():
             for n in LEGS.values() if n in m}
 
 
-def save_cfg(name, direction=None, offset=None, verified=None, note=''):
+def save_cfg(name, direction=None, offset=None, verified=None, note='', stop_shift_deg=None, stop_flip=False):
     txt = open(CFG).read()
     start = txt.index(f'      {name}:\n')
     nxt = re.search(r'\n      [a-z#][^\n]*\n', txt[start + 1:])
@@ -83,6 +84,18 @@ def save_cfg(name, direction=None, offset=None, verified=None, note=''):
     if offset is not None:
         blk = re.sub(r'(\n        position_offset_rad: )[^\n]*',
                      rf'\g<1>{offset:.6f}  # hip_cli {stamp}: CAD zero pose (theta 45 deg)', blk)
+    if stop_shift_deg is not None:    # new zero = old joint angle `shift`: stops move by -shift
+        for key in ('stop_min_deg', 'stop_max_deg'):
+            m = re.search(rf'\n        {key}: (-?[0-9.]+)', blk)
+            if m:
+                blk = blk.replace(m.group(0), f'\n        {key}: {float(m.group(1)) - stop_shift_deg:.1f}', 1)
+    if stop_flip:                     # direction flipped around the same zero: joint -> -joint
+        lo = re.search(r'\n        stop_min_deg: (-?[0-9.]+)', blk)
+        hi = re.search(r'\n        stop_max_deg: (-?[0-9.]+)', blk)
+        if lo and hi:
+            a, b = float(lo.group(1)), float(hi.group(1))
+            blk = blk.replace(lo.group(0), f'\n        stop_min_deg: {-b:.1f}', 1)
+            blk = blk.replace(hi.group(0), f'\n        stop_max_deg: {-a:.1f}', 1)
     if verified is not None:
         blk = re.sub(r'(\n          direction: )(true|false)', rf'\g<1>{str(verified).lower()}', blk)
     with open(CFG, 'w') as f:
@@ -95,6 +108,7 @@ class Ros:
         rclpy.init()
         self.node = rclpy.create_node('hip_cli')
         self.raw = {}
+        self.zero = {}
         self.status = None
         self.node.create_subscription(MotorStateArray, 'motors/state', self._on_state,
                                       qos_profile_sensor_data)
@@ -111,7 +125,9 @@ class Ros:
     def _on_state(self, msg):
         for m in msg.motors:
             if m.name in LEGS.values() and not m.stale:
-                self.raw[m.name] = math.radians(m.raw_position_deg)
+                # raw + power-up unwrap (MotorBus resolves the 60 deg wrap from the measured stops)
+                self.raw[m.name] = math.radians(m.raw_position_deg + m.unwrap_deg)
+                self.zero[m.name] = m.zero_state
 
     def call(self, cli, req, timeout=5.0):
         fut = cli.call_async(req)
@@ -163,9 +179,10 @@ class Cli:
         inside = leg_map.THETA_MIN <= th <= leg_map.THETA_MAX
         h = leg_map.h_of_theta(min(max(th, leg_map.THETA_MIN), leg_map.THETA_MAX))
         v = 'verified' if self.cfg[name]['verified'] else 'NOT verified (|M| <= 10 deg)'
+        z = {0: '', 1: '', 2: '  ZERO AMBIGUOUS (60 deg) -> find', 3: '  ZERO UNRESOLVED'}.get(self.ros.zero.get(name), '')
         return (f'{name}: M {deg(M):+7.2f} deg  theta {deg(th):6.2f} deg  h {h*1000:6.1f} mm'
                 f'  leg {1000*(h - leg_map.R_WHEEL):6.1f} mm{"" if inside else "  (outside 38.0..97.8 deg)"}'
-                f'  | dir {self.cfg[name]["direction"]:+d} {v}')
+                f'  | dir {self.cfg[name]["direction"]:+d} {v}{z}')
 
     def status(self):
         for n in LEGS.values():
@@ -176,6 +193,8 @@ class Cli:
         M = self.M(name)
         if M is None:
             print(f'  {name}: no feedback'); return False
+        if self.ros.zero.get(name, 0) > 1:
+            print(f'  {name}: zero not resolved after power-up -> run "find" first'); return False
         lo, hi = (M_MIN, M_MAX) if self.cfg[name]['verified'] else (-UNVERIFIED_LIMIT, UNVERIFIED_LIMIT)
         if not lo - 1e-6 <= target <= hi + 1e-6:
             print(f'  {name}: target {deg(target):+.1f} deg outside {deg(lo):+.1f} .. {deg(hi):+.1f} deg'); return False
@@ -233,7 +252,7 @@ class Cli:
             save_cfg(name, direction=c['direction'], verified=True)
         else:   # flip the sign and keep the same physical zero pose: offset -> -offset
             save_cfg(name, direction=-c['direction'], offset=-c['offset'], verified=True,
-                     note=' (flipped)')
+                     note=' (flipped)', stop_flip=True)
         print(f'  {name}: direction {"kept" if ans == "y" else "FLIPPED"}, verified')
         self.apply_saved()
 
@@ -241,10 +260,33 @@ class Cli:
         raw = self.ros.raw.get(name)
         if raw is None:
             print('  no feedback'); return
+        if self.ros.zero.get(name, 0) > 1:
+            print('  zero not resolved after power-up -> run "find" first'); return
         if input(f'  Save the CURRENT {name} pose as the CAD zero pose (theta 45 deg)? [yes] ') != 'yes':
             print('  cancelled'); return
-        save_cfg(name, offset=self.cfg[name]['direction'] * raw)
+        shift = deg(self.M(name))     # the measured end stops are joint angles: move them with the zero
+        save_cfg(name, offset=self.cfg[name]['direction'] * raw, stop_shift_deg=shift)
         self.apply_saved()
+
+    def find(self, name):
+        """Resolve the power-up 60 deg wrap: MotorTester 'home' (extend up to 18 deg, back off if blocked)."""
+        if self.ros.zero.get(name, 0) <= 1:
+            print(f'  {name}: zero already resolved'); return True
+        print(f'  {name}: finding zero (extends up to 18 deg slowly; legs must hang free)')
+        r = MotorTest.Request()
+        r.motor, r.mode, r.value, r.duration_s, r.confirm_lifted = name, 'home', 1.0, 10.0, True
+        res = self.ros.call(self.ros.start_cli, r)
+        if res is None or not res.accepted:
+            print(f'  {name}: rejected: {None if res is None else res.message}'); return False
+        time.sleep(0.3)
+        try:
+            while self.ros.status is not None and self.ros.status.running:
+                time.sleep(0.1)
+        except KeyboardInterrupt:
+            self.ros.call(self.ros.stop_cli, Trigger.Request()); print('\n  STOP'); return False
+        time.sleep(0.5)
+        print(f'  -> {self.ros.status.result}')
+        return self.ros.zero.get(name, 0) <= 1
 
     # ---- loop
     def run(self):
@@ -289,11 +331,15 @@ class Cli:
                     if 0.05 <= v <= 2.0:
                         self.speed = v
                     print(f'  speed {self.speed:.2f} rad/s (0.05 .. 2.0)')
+                elif c == 'find' and a and a[0] in ('l', 'r', 'b'):
+                    for n in self.legs(a[0]):
+                        self.find(n)
                 elif c == 'home':
                     for n in LEGS.values():
-                        self.move_to(n, 0.0)
+                        if self.find(n):
+                            self.move_to(n, 0.0)
                 else:
-                    print('  ? (s, dir l|r, zero l|r, up/down l|r|b deg, h l|r|b mm, home, speed rad/s, q)')
+                    print('  ? (s, find l|r|b, dir l|r, zero l|r, up/down l|r|b deg, h l|r|b mm, home, speed rad/s, q)')
             except ValueError as e:
                 print(f'  bad number: {e}')
         self.tn.stop()

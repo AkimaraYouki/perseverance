@@ -184,7 +184,7 @@ private:
     const double age = (mono_now_ns() - fb.mono_ns) * 1e-9;
     std::snprintf(buf, sizeof(buf),
       "[%zu] %-10s raw %8.1f deg  joint %8.2f deg  %7.2f rad/s  %6.2f A  %3d C  err %u(%s)%s",
-      i, c.name.c_str(), fb.status.position_deg, rad2deg(c.raw_to_joint_pos(fb.status.position_deg)),
+      i, c.name.c_str(), fb.status.position_deg, rad2deg(c.raw_to_joint_pos(fb.raw_unwrapped())),
       c.erpm_to_joint_vel(fb.status.speed_erpm), fb.status.current_a, fb.status.temperature_c,
       fb.status.error, cubemars::error_text(fb.status.error),
       age > c.feedback_stale_timeout_s ? "  STALE" : "");

@@ -95,7 +95,8 @@ private:
     else if (rq.mode == "velocity") {mode = TestMode::kVelocity;}
     else if (rq.mode == "position") {mode = TestMode::kPosition;}
     else if (rq.mode == "accel") {mode = TestMode::kAccel;}
-    else {rs.accepted = false; rs.message = "mode must be current|velocity|position|accel"; return;}
+    else if (rq.mode == "home") {mode = TestMode::kHome;}
+    else {rs.accepted = false; rs.message = "mode must be current|velocity|position|accel|home"; return;}
     const std::string err = tester_->start(m, mode, rq.value, rq.duration_s, rq.speed_rad_s,
         rq.accel_rad_s2, rq.pulse_s);
     rs.accepted = err.empty();
@@ -113,7 +114,8 @@ private:
     m.motor = st.motor < bus_->motors().size() ? bus_->motors()[st.motor].name : "";
     m.mode = st.mode == TestMode::kCurrent ? "current" :
       st.mode == TestMode::kVelocity ? "velocity" :
-      st.mode == TestMode::kPosition ? "position" : "accel";
+      st.mode == TestMode::kPosition ? "position" :
+      st.mode == TestMode::kAccel ? "accel" : "home";
     m.value = st.value;
     m.elapsed_s = st.elapsed_s;
     m.duration_s = st.duration_s;

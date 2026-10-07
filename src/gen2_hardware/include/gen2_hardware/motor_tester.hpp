@@ -29,7 +29,13 @@ struct TestLimits
   double rate_hz = 100.0;
 };
 
-enum class TestMode {kCurrent, kVelocity, kPosition, kAccel};
+enum class TestMode {kCurrent, kVelocity, kPosition, kAccel, kHome};
+
+// Home (joints with a power-up wrap, MotorConfig::wrap_deg): resolves an ambiguous zero. Moves the
+// joint towards + (extend) at 0.2 rad/s for up to kHomeTravelDeg. Blocked (|I| > 2.5 A while
+// |w| < 0.03 rad/s for 80 ms, or |I| > 4 A) -> it is at the + end stop: it then backs off
+// kHomeTravelDeg so every process (monitor, controllers) sees a unique candidate. Not blocked ->
+// the move itself leaves the ambiguous band. Ends with 0 A.
 
 // Accel (bidirectional) test for balancing: bang-bang current +I / -I (steps, no ramp). The
 // current flips when the joint speed passes +speed (while +I) or -speed (while -I), or after
@@ -43,6 +49,7 @@ enum class TestMode {kCurrent, kVelocity, kPosition, kAccel};
 // +-3200 deg while the command is absolute multi-turn, so a test is refused when |raw| is near the
 // wrap (set a temporary origin first), and one move is limited to max_position_move_deg.
 constexpr double kPositionWrapGuardDeg = 3000.0;
+constexpr double kHomeTravelDeg = 18.0;
 
 struct TestStatus
 {
@@ -107,6 +114,7 @@ public:
 private:
   void run(uint64_t id, std::size_t m, TestMode mode, double value, double duration,
     double speed, double accel, double pulse);
+  void run_home(std::size_t m);
   void send_zero(std::size_t m);
   void analyse_accel(const std::vector<AccelSample> & samples, const std::vector<double> & flips,
     double kt);

@@ -121,3 +121,33 @@ TEST(SeqLock, StoreLoad)
   EXPECT_EQ(v.a, 3);
   EXPECT_EQ(v.b, 4.5);
 }
+
+#include "gen2_hardware/motor_config.hpp"
+
+// Power-up 60 deg wrap of a 6:1 hip (rotor encoder only), stops measured 2026-10-07 (leg_l).
+TEST(MotorConfig, WrapCandidatesFromStops)
+{
+  gen2_hardware::MotorConfig c;
+  c.direction = 1;
+  c.position_offset_rad = -0.464258;   // raw -26.6 deg = joint 0
+  c.wrap_deg = 60.0;
+  c.stop_min_deg = -13.7;
+  c.stop_max_deg = 58.9;
+  double sh = 0.0;
+  // joint +22.4 (sim IDLE) reported with a +120 deg wrap: raw = 22.4 - 26.6 + 120
+  EXPECT_EQ(c.wrap_candidates(22.4 - 26.6 + 120.0, sh), 1);
+  EXPECT_NEAR(sh, -120.0, 1e-9);
+  // hanging at the extended stop (joint 58.4): also fits as 58.4 - 60 = -1.6 -> ambiguous,
+  // shift = the extended-end candidate
+  EXPECT_EQ(c.wrap_candidates(58.4 - 26.6 + 60.0, sh), 2);
+  EXPECT_NEAR(c.raw_to_joint_pos(58.4 - 26.6 + 60.0 + sh) * 180.0 / M_PI, 58.4, 1e-3);
+  // after home backs off 18 deg: unique again
+  EXPECT_EQ(c.wrap_candidates(40.4 - 26.6 + 60.0, sh), 1);
+  // direction -1 (leg_r): joint = -raw - offset
+  c.direction = -1;
+  c.position_offset_rad = -0.401426;   // raw +23.0 = joint 0
+  c.stop_min_deg = -12.6;
+  c.stop_max_deg = 59.3;
+  EXPECT_EQ(c.wrap_candidates(-(30.0) + 23.0 - 60.0, sh), 1);   // joint 30, raw shifted by -60
+  EXPECT_NEAR(c.raw_to_joint_pos(-(30.0) + 23.0 - 60.0 + sh) * 180.0 / M_PI, 30.0, 1e-3);
+}

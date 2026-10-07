@@ -6,7 +6,13 @@ uint8 can_id
 bool configured                 # false = CubeMars drive seen on the bus but not in motors.yaml:
                                 # raw values only (position_rad = drive degrees in rad, no scaling)
 
-float64 position_rad            # joint side, direction and offset applied
+float64 position_rad            # joint side, direction and offset applied (power-up wrap resolved)
+uint8 ZERO_ABSOLUTE = 0         # no wrap (wheels)
+uint8 ZERO_RESOLVED = 1         # wrap resolved from the measured end stops
+uint8 ZERO_AMBIGUOUS = 2        # two candidates (60 deg apart) fit: position_rad assumes the + end one. Run home.
+uint8 ZERO_UNRESOLVED = 3       # no candidate fits the stops (or no feedback yet)
+uint8 zero_state
+float64 unwrap_deg              # added to raw_position_deg before the joint conversion
 float64 velocity_rad_s          # joint side
 float64 current_a               # motor q-axis current as reported
 float64 torque_nm               # current_a * kt_nm_per_a * direction (estimate)

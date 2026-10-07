@@ -98,6 +98,12 @@
         feedback_stale_timeout_s: 0.02  # uploads 500 Hz
         command_timeout_s: 0.05
         supports_disable_cmd: true      # AK 3.0 mode 15
+        # Power-up 60 deg ambiguity (rotor encoder only, 6:1): resolved from the end stops measured
+        # 2026-10-07 (0.2 rad/s into each stop, |I| > 2.5 A while not moving). CAD: -9.9 .. +55.4.
+        wrap_deg: 60.0
+        stop_min_deg: -13.7         # retracted end (joint deg)
+        stop_max_deg: 58.9          # extended end; legs hang here when the robot is lifted
+        stop_margin_deg: 2.0
         protocol: "servo"           # drives upload servo 0x29 at 500 Hz (2026-10-03); "mit_v3" ready
         mit:                        # manual V3.2.0 §4.2 table (AK60-6); p from the V3 example
           p_max: 12.56
@@ -130,6 +136,12 @@
         feedback_stale_timeout_s: 0.02  # uploads 500 Hz
         command_timeout_s: 0.05
         supports_disable_cmd: true      # AK 3.0 mode 15
+        # Power-up 60 deg ambiguity (rotor encoder only, 6:1): resolved from the end stops measured
+        # 2026-10-07 (0.2 rad/s into each stop, |I| > 2.5 A while not moving). CAD: -9.9 .. +55.4.
+        wrap_deg: 60.0
+        stop_min_deg: -12.6         # retracted end (joint deg)
+        stop_max_deg: 59.3          # extended end; legs hang here when the robot is lifted
+        stop_margin_deg: 2.0
         protocol: "servo"           # drives upload servo 0x29 at 500 Hz (2026-10-03); "mit_v3" ready
         mit:                        # manual V3.2.0 §4.2 table (AK60-6); p from the V3 example
           p_max: 12.56

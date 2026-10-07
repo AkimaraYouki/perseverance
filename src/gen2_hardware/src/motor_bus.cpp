@@ -36,6 +36,9 @@ MotorBus::MotorBus(std::string ifname, std::vector<MotorConfig> motors)
     slots_.push_back(std::make_unique<SeqLock<MotorFeedback>>());
   }
   writer_state_.resize(motors_.size());
+  for (std::size_t i = 0; i < motors_.size(); ++i) {
+    if (motors_[i].wrap_deg > 0.0) {writer_state_[i].zero_state = MotorFeedback::kZeroUnresolved;}
+  }
 }
 
 MotorBus::~MotorBus()
@@ -204,6 +207,20 @@ void MotorBus::rx_loop()
     }
     MotorFeedback & fb = writer_state_[it->second];
     if (auto st = cubemars::decode_status(rx.frame)) {
+      const auto & c = motors_[it->second];
+      // power-up wrap: re-resolve after a drive reboot (boot frame or > 0.5 s without feedback)
+      if (c.wrap_deg > 0.0) {
+        if (!fb.valid || rx.mono_ns - fb.mono_ns > 500000000LL) {
+          fb.zero_state = MotorFeedback::kZeroUnresolved;
+        }
+        if (fb.zero_state != MotorFeedback::kZeroResolved) {
+          double sh = 0.0;
+          const int n = c.wrap_candidates(st->position_deg, sh);
+          fb.zero_state = n == 1 ? MotorFeedback::kZeroResolved :
+            n >= 2 ? MotorFeedback::kZeroAmbiguous : MotorFeedback::kZeroUnresolved;
+          fb.unwrap_deg = sh;   // ambiguous: the extended-end candidate (legs hang there when lifted)
+        }
+      }
       fb.valid = true;
       fb.status = *st;
       fb.mono_ns = rx.mono_ns;
@@ -214,6 +231,7 @@ void MotorBus::rx_loop()
       fb.position32_deg = *p;
     } else if (cubemars::is_boot_frame(rx.frame)) {
       ++fb.boot_frames;
+      if (motors_[it->second].wrap_deg > 0.0) {fb.zero_state = MotorFeedback::kZeroUnresolved;}
     } else {
       ++stats_.rx_unknown;
       continue;

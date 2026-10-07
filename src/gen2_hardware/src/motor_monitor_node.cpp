@@ -88,7 +88,9 @@ private:
         m.stale = m.age_s > c.feedback_stale_timeout_s;
         m.raw_position_deg = fb.status.position_deg;
         m.raw_speed_erpm = fb.status.speed_erpm;
-        m.position_rad = c.raw_to_joint_pos(fb.status.position_deg);
+        m.position_rad = c.raw_to_joint_pos(fb.raw_unwrapped());
+        m.zero_state = fb.zero_state;
+        m.unwrap_deg = fb.unwrap_deg;
         m.velocity_rad_s = c.erpm_to_joint_vel(fb.status.speed_erpm);
         m.current_a = fb.status.current_a;
         m.torque_nm = c.current_to_joint_torque(fb.status.current_a);
@@ -219,6 +221,10 @@ private:
         cubemars::error_text(fb.status.error));
     } else if (fb.status.temperature_c > c.max_temperature_c) {
       s.summary(DiagnosticStatus::WARN, "driver temperature high");
+    } else if (fb.zero_state == MotorFeedback::kZeroAmbiguous) {
+      s.summary(DiagnosticStatus::WARN, "zero ambiguous: home");
+    } else if (fb.zero_state == MotorFeedback::kZeroUnresolved) {
+      s.summary(DiagnosticStatus::WARN, "zero unresolved");
     } else {
       s.summary(DiagnosticStatus::OK, "ok");
     }
@@ -229,7 +235,8 @@ private:
     s.add("age_s", age);
     s.add("rx_count", fb.rx_count);
     s.add("drive_boot_frames", fb.boot_frames);
-    s.add("position_deg", fb.valid ? c.raw_to_joint_pos(fb.status.position_deg) * 180.0 / M_PI : NAN);
+    s.add("position_deg", fb.valid ? c.raw_to_joint_pos(fb.raw_unwrapped()) * 180.0 / M_PI : NAN);
+    s.add("zero", fb.zero_state == 0 ? "absolute" : fb.zero_state == 1 ? "resolved" : fb.zero_state == 2 ? "AMBIGUOUS (home)" : "UNRESOLVED");
     s.add("raw_position_deg", fb.status.position_deg);
     s.add("raw_speed_erpm", fb.status.speed_erpm);
     s.add("current_a", fb.status.current_a);

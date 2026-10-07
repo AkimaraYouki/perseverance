@@ -44,6 +44,11 @@ std::string MotorTester::start(
     if (st_.running) {return "a test is already running";}
   }
   const auto & c = bus_.motors()[m];
+  if (mode == TestMode::kHome) {
+    if (!(c.wrap_deg > 0.0)) {return "home is only for joints with a power-up wrap (wrap_deg)";}
+    value = 1.0;      // unused
+    duration = std::max(duration, 1.0);
+  }
   if (!std::isfinite(value) || std::fabs(value) < 1e-6) {return "value must be non-zero";}
   if (!(duration > 0) || duration > limits_.max_duration_s) {
     return "duration must be in (0, " + std::to_string(limits_.max_duration_s) + "] s";
@@ -87,6 +92,11 @@ std::string MotorTester::start(
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
   const MotorFeedback fb = bus_.feedback(m);
+  if (mode == TestMode::kPosition && !fb.zero_ok()) {
+    return fb.zero_state == MotorFeedback::kZeroAmbiguous ?
+           "joint zero ambiguous after power-up (60 deg wrap): run home first" :
+           "joint zero not resolved (position outside the measured stops?)";
+  }
   if (mode == TestMode::kPosition && c.is_mit()) {
     const double tgt = (fb.status.position_deg + value / c.direction) * M_PI / 180.0;
     if (std::fabs(tgt) > c.mit_ranges.p_max) {
@@ -153,10 +163,11 @@ void MotorTester::run(
   double accel, double pulse)
 {
   (void)id;
+  if (mode == TestMode::kHome) {run_home(m); return;}
   const auto & c = bus_.motors()[m];
   bus_.enable_tx(true);
   const MotorFeedback fb0 = bus_.feedback(m);
-  const double start_pos = c.raw_to_joint_pos(fb0.status.position_deg);
+  const double start_pos = c.raw_to_joint_pos(fb0.raw_unwrapped());
   // joint rad/s -> drive ERPM (inverse of MotorConfig::erpm_to_joint_vel)
   const double erpm_per_rad_s = c.pole_pairs * c.gear_ratio * 60.0 / (2.0 * M_PI);
   const double erpm = mode == TestMode::kVelocity ? value / c.direction * erpm_per_rad_s : 0.0;
@@ -242,6 +253,8 @@ void MotorTester::run(
             mc.kd = c.mit_test_kd;
             break;
           }
+        case TestMode::kHome:   // handled by run_home()
+          break;
       }
       f = mit::encode(c.mit_proto(), c.can_id, c.mit_ranges, mc);
     } else {
@@ -258,6 +271,8 @@ void MotorTester::run(
       case TestMode::kAccel:   // bang-bang, starts with +value (joint direction), no ramp
         f = cubemars::encode_current(c.can_id, sign * value / c.direction);
         break;
+      case TestMode::kHome:   // handled by run_home()
+        break;
     }
     }
     std::string err;
@@ -267,7 +282,7 @@ void MotorTester::run(
       st_.elapsed_s = t;
       st_.peak_current_a = peak_i;
       st_.peak_velocity_rad_s = peak_w;
-      st_.moved_rad = c.raw_to_joint_pos(fb.status.position_deg) - start_pos;
+      st_.moved_rad = c.raw_to_joint_pos(fb.raw_unwrapped()) - start_pos;
     }
     next += period;
     std::this_thread::sleep_until(next);
@@ -277,10 +292,10 @@ void MotorTester::run(
   std::lock_guard<std::mutex> lk(mtx_);
   st_.running = false;
   st_.result = why;
-  st_.moved_rad = c.raw_to_joint_pos(fb1.status.position_deg) - start_pos;
+  st_.moved_rad = c.raw_to_joint_pos(fb1.raw_unwrapped()) - start_pos;
   st_.mean_velocity_rad_s = w_n ? w_sum / w_n : 0.0;
   if (mode == TestMode::kPosition) {
-    st_.position_error_rad = target_joint - c.raw_to_joint_pos(fb1.status.position_deg);
+    st_.position_error_rad = target_joint - c.raw_to_joint_pos(fb1.raw_unwrapped());
   }
   if (mode == TestMode::kAccel) {
     const double span = samples.size() > 1 ? samples.back().t - samples.front().t : 0.0;
@@ -335,6 +350,71 @@ void MotorTester::analyse_accel(
   const double i_abs = std::fabs(st_.current_pos_a) + std::fabs(st_.current_neg_a);
   st_.inertia_est_kgm2 = (std::isfinite(kt) && a_n[0] && a_n[1] && ap + an > 1e-9) ?
     kt * i_abs / (ap + an) : 0.0;
+}
+
+void MotorTester::run_home(std::size_t m)
+{
+  const auto & c = bus_.motors()[m];
+  bus_.enable_tx(true);
+  const double erpm_per_rad_s = c.pole_pairs * c.gear_ratio * 60.0 / (2.0 * M_PI);
+  const double spd = 0.2 * erpm_per_rad_s, acc = limits_.default_accel_rad_s2 * erpm_per_rad_s;
+  const double raw_per_joint_deg = c.raw_deg_per_output_rev / 360.0 / c.direction;
+  const auto period = std::chrono::nanoseconds(static_cast<int64_t>(1e9 / limits_.rate_hz));
+  std::string why;
+  double travel = 0.0;
+  bool blocked = false;
+  // phase 0: + (extend) up to kHomeTravelDeg, stall detection; phase 1 (blocked): back off
+  for (int phase = 0; phase < 2 && why.empty(); ++phase) {
+    const MotorFeedback f0 = bus_.feedback(m);
+    const double sign = phase == 0 ? 1.0 : -1.0;
+    const double tgt = f0.status.position_deg + sign * kHomeTravelDeg * raw_per_joint_deg;
+    const auto t0 = std::chrono::steady_clock::now();
+    auto next = t0;
+    double stall_s = 0.0;
+    while (true) {
+      const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+      if (stop_) {std::lock_guard<std::mutex> lk(mtx_); why = "stopped: " + stop_why_; break;}
+      if (!heartbeat_ok()) {why = "operator heartbeat lost"; break;}
+      const MotorFeedback fb = bus_.feedback(m);
+      if ((mono_now_ns() - fb.mono_ns) * 1e-9 > c.feedback_stale_timeout_s) {why = "feedback stale"; break;}
+      if (fb.status.error != 0) {why = std::string("drive fault: ") + cubemars::error_text(fb.status.error); break;}
+      if (fb.status.temperature_c > c.max_temperature_c) {why = "over-temperature"; break;}
+      const double w = c.erpm_to_joint_vel(fb.status.speed_erpm);
+      if (std::fabs(w) > 0.8) {why = "over-speed guard"; break;}
+      const double moved = (fb.status.position_deg - f0.status.position_deg) / raw_per_joint_deg;
+      if (phase == 0) {
+        travel = moved;
+        stall_s = (std::fabs(fb.status.current_a) > 2.5 && std::fabs(w) < 0.03) ? stall_s + 1.0 / limits_.rate_hz : 0.0;
+        if (stall_s > 0.08 || std::fabs(fb.status.current_a) > 4.0) {blocked = true; break;}
+      }
+      if (std::fabs(moved) >= kHomeTravelDeg - 0.5 && std::fabs(w) < 0.05) {break;}
+      if (t > kHomeTravelDeg / 11.46 + 3.0) {    // 0.2 rad/s = 11.46 deg/s
+        if (phase == 1) {why = "back-off did not finish"; }
+        break;
+      }
+      std::string err;
+      if (!bus_.send(cubemars::encode_pos_spd(c.can_id, tgt, spd, acc), err)) {why = "TX failed: " + err; break;}
+      {
+        std::lock_guard<std::mutex> lk(mtx_);
+        st_.elapsed_s = t;
+        st_.moved_rad = moved * M_PI / 180.0;
+      }
+      next += period;
+      std::this_thread::sleep_until(next);
+    }
+    if (phase == 0 && !blocked) {break;}
+  }
+  send_zero(m);
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  const MotorFeedback fb1 = bus_.feedback(m);
+  std::lock_guard<std::mutex> lk(mtx_);
+  st_.running = false;
+  if (why.empty()) {
+    why = std::string(blocked ? "done: blocked after " : "done: free, moved ") +
+      std::to_string(static_cast<int>(std::round(travel))) + " deg" +
+      (fb1.zero_ok() ? ", zero resolved" : ", zero STILL not resolved");
+  }
+  st_.result = why;
 }
 
 void MotorTester::send_zero(std::size_t m)
