@@ -234,6 +234,30 @@ def build(path):
     fx0 = L + 77 * mm
     fw = R - fx0
     ftop = y - 0.3 * mm
+    lab_y = draw_fig(pg, fx0, ftop)
+    fy = lab_y - 4.2 * mm
+    fig_bottom = caption(pg, fy, [("Fig. 1", "TNRB"), ("  " + FIG_TITLE, "TNR")], fx0, fw, 9)
+
+    # ---- 저자 소속 (아래) -----------------------------------------------------------------------
+    yr = 24 * mm + 3 * 10.5 + 2.5 * mm                              # 본문 영역 아래 24 mm 위로 세 줄
+    c.setLineWidth(0.5)
+    c.line(L, yr, L + 70 * mm, yr)
+    ft = dict(font="KR", size=8, scale=95)
+    for col_x, items in ((L, AFFIL_LEFT), (L + 80 * mm, AFFIL_RIGHT)):
+        yy = yr - 2.6 * mm - 4
+        for mark, s in items:
+            pg.word(col_x + 0.5 * mm, yy, mark, **ft)
+            pg.word(col_x + 4.5 * mm, yy, s, **ft)
+            yy -= 10.5
+    c.showPage()
+    c.save()
+    return dict(body_end_mm=(PH - body_end) / mm, table_bottom_mm=(PH - table_bottom) / mm,
+                fig_bottom_mm=(PH - fig_bottom) / mm, affil_rule_mm=(PH - yr) / mm)
+
+
+def draw_fig(pg, fx0, ftop):
+    """그림 1 (a) 로봇 CAD + (b) 제어 구조 블록도. fx0 = 왼쪽, ftop = 위 (pt). 반환: (a)(b) 글자 기준선."""
+    c = pg.c
     img_w, img_h = 25.6 * mm, 32 * mm
     c.drawImage(os.path.join(HERE, "..", "media", "robot_cad_front.png"), fx0 + 0.5 * mm, ftop - img_h, img_w, img_h, mask="auto")
     lab = dict(font="TNR", size=7.5)
@@ -260,24 +284,20 @@ def build(path):
             for k, s in enumerate(("wheel", "torque") if i == 2 else ("hip", "torque")):
                 pg.word(bx + bw + 3.9 * mm, yb - 2.65 * mm - k * 2.6 * mm, s, **bt)
     pg.word(bx + bw / 2 - pg.width("(b)", **lab) / 2, lab_y, "(b)", **lab)
-    fy = lab_y - 4.2 * mm
-    fig_bottom = caption(pg, fy, [("Fig. 1", "TNRB"), ("  " + FIG_TITLE, "TNR")], fx0, fw, 9)
+    return lab_y
 
-    # ---- 저자 소속 (아래) -----------------------------------------------------------------------
-    yr = 24 * mm + 3 * 10.5 + 2.5 * mm                              # 본문 영역 아래 24 mm 위로 세 줄
-    c.setLineWidth(0.5)
-    c.line(L, yr, L + 70 * mm, yr)
-    ft = dict(font="KR", size=8, scale=95)
-    for col_x, items in ((L, AFFIL_LEFT), (L + 80 * mm, AFFIL_RIGHT)):
-        yy = yr - 2.6 * mm - 4
-        for mark, s in items:
-            pg.word(col_x + 0.5 * mm, yy, mark, **ft)
-            pg.word(col_x + 4.5 * mm, yy, s, **ft)
-            yy -= 10.5
-    c.showPage()
-    c.save()
-    return dict(body_end_mm=(PH - body_end) / mm, table_bottom_mm=(PH - table_bottom) / mm,
-                fig_bottom_mm=(PH - fig_bottom) / mm, affil_rule_mm=(PH - yr) / mm)
+
+FIG_W, FIG_H = 75.2 * mm, 38.6 * mm
+
+
+def build_fig(path):
+    """그림 1 만 (캡션 없이) 따로 — 한글 양식에 넣을 때. 벡터 PDF."""
+    pg = Page.__new__(Page)
+    pg.c = canvas.Canvas(path, pagesize=(FIG_W, FIG_H))
+    pg.c.setTitle("Fig. 1 " + FIG_TITLE)
+    draw_fig(pg, 0.0, FIG_H)
+    pg.c.showPage()
+    pg.c.save()
 
 
 def caption(pg, y, runs, x0, width, size):
@@ -314,3 +334,6 @@ def caption(pg, y, runs, x0, width, size):
 if __name__ == "__main__":
     out = os.path.join(HERE, "extended_abstract_lqr_vmc.pdf")
     print(build(out), out)
+    fig = os.path.join(HERE, "fig1_lqr_vmc.pdf")
+    build_fig(fig)
+    print("그림", fig)
