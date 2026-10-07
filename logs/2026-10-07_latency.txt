@@ -1,0 +1,6 @@
+2026-10-07 latency measurements (robot idle / wheels lifted)
+IMU /imu/data 500 Hz: inter-arrival median 1.99 ms p99 2.67 max 10.14; DDS parse->subscriber median 0.51 p99 1.21 max 4.82 ms
+CAN 0x29 uploads (ids 1-4): 500 Hz, gap median 2.00 p99 2.04 max 2.34 ms
+Wheel current step -> reported current >= 0.3 A: wheel_l median 3.1 (1.6-4.4) ms, wheel_r 3.5 (2.0-5.1) ms
+Wheel current step -> speed change >= 300 ERPM: wheel_l 4.5 (3.9-7.1) ms, wheel_r 5.0 (4.0-7.6) ms
+(includes ~1 ms mean sampling of the 500 Hz feedback)
