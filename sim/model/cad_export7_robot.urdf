@@ -2111,11 +2111,12 @@
     <limit effort="0" velocity="100" lower="-1.5794" upper="0.2127" />
   </joint>
   <!-- Link hex_socket_head_cap_screw_m2_5x0_45_x_4__548e176b1dd6779a4b73a0bbfa9be880 -->
+  <!-- 2026-10-07 바퀴 실측: 휠 + 고무 72.5 g (고무 16.5 g), 관성은 메시 모양 + 실측 질량, izz 는 회전자 1.5733e-3 포함 -->
   <link name="l_wheel">
     <inertial>
       <origin xyz="0.000222893 0.00064525 -0.00519308" rpy="0 0 0" />
-      <mass value="0.0701988" />
-      <inertia ixx="0.000136994" ixy="3.63221e-07" ixz="-4.4217e-08" iyy="0.000137902" iyz="-1.11673e-07" izz="1.839444e-03" />
+      <mass value="0.0725" />
+      <inertia ixx="1.3850e-04" ixy="3.63221e-07" ixz="-4.4217e-08" iyy="1.3850e-04" iyz="-1.11673e-07" izz="1.841440e-03" />
     </inertial>
     <!-- Part hex_socket_head_cap_screw_m2_5x0_45_x_4__548e176b1dd6779a4b73a0bbfa9be880_7 -->
     <visual>
@@ -2784,8 +2785,8 @@
   <link name="r_wheel">
     <inertial>
       <origin xyz="-0.000101651 -0.000674751 -0.00519366" rpy="0 0 0" />
-      <mass value="0.0701988" />
-      <inertia ixx="0.000136889" ixy="1.65308e-07" ixz="1.2423e-08" iyy="0.000138002" iyz="1.1818e-07" izz="1.839440e-03" />
+      <mass value="0.0725" />
+      <inertia ixx="1.3850e-04" ixy="1.65308e-07" ixz="1.2423e-08" iyy="1.3850e-04" iyz="1.1818e-07" izz="1.841440e-03" />
     </inertial>
     <!-- Part hex_socket_head_cap_screw_m2_5x0_45_x_4__548e176b1dd6779a4b73a0bbfa9be880_10 -->
     <visual>

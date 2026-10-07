@@ -216,6 +216,7 @@ cmd_term.cfg.auto_height = cmd_term.cfg.default_height = P.idle_h
 env.action_manager.get_term("wheels").cfg.torque_scale = P.wheel_tau_max   # 바퀴 행동 = 토크 / wheel_tau_max
 env.action_manager.get_term("wheels")._alpha = 1.0                          # 바퀴 20 Hz 필터는 wbctrl 안 (wheel_lpf_hz)
 leg_ids = robot.find_joints(cad.LEG_JOINTS, preserve_order=True)[0]
+print(f"[모델] {cad.USD_PATH}  총질량 {float(robot.data.default_mass[0].sum()):.3f} kg", flush=True)
 wheel_ids = robot.find_joints(cad.WHEEL_JOINTS, preserve_order=True)[0]
 wheel_bodies = robot.find_bodies(["l_wheel", "r_wheel"], preserve_order=True)[0]
 hip_sign = torch.tensor([cad.M_SIGN["L"], cad.M_SIGN["R"]], device=dev)
