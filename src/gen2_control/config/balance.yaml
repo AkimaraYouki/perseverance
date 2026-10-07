@@ -12,6 +12,8 @@ balance:
     heartbeat_timeout_s: 0.5  # operator tool must publish balance/heartbeat
     cmd_timeout_s: 0.5        # cmd_vel watchdog -> 0
     stand_ramp_s: 2.0         # stand: current leg height -> idle_h
+    th_trim_deg: 1.75         # balance-point trim, + = lean back. 2026-10-07 (low-gain LQR, 30 s): 1.5 drifted +0.74 m fwd,
+                              # 2.0 drifted -0.69 m back -> middle 1.75. Recheck after the gains/delay change.
     stand_feedforward: true   # stand: + weight feed-forward (0.5 m g per leg, via dh/dtheta) — current_pd only
     hip_mode: mit             # mit (kd in the drive, kp + ff from here) | servo_pos (drive position loop) | current_pd (host PD, shook at 200 Hz)
     mit_kt_drive: 0.5994      # Kt the AK60-6 drive uses inside MIT (0.5 N·m -> 0.83 A measured 2026-10-07)
