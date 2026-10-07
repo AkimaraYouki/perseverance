@@ -14,5 +14,6 @@ def generate_launch_description():
     tables = os.path.join(c, 'config', 'balance_tables.yaml')
     if os.path.exists(tables):
         files.append(tables)
+        files.append(os.path.join(c, 'config', 'balance_gains_robot.yaml'))   # robot-tuned lqr_k (needs the tables)
     return LaunchDescription([Node(package='gen2_control', executable='balance_node', name='balance',
                                    parameters=files, output='screen')])
