@@ -8,4 +8,4 @@ iahrs:
     frame_id: imu_link
     expected_rate_hz: 500.0
     body_frame_id: base_link
-    mount_rpy_deg: [0.0, 0.0, 0.0]   # imu_link in base_link; set by `ros2 run gen2_tools imu_cal`
+    mount_rpy_deg: [-0.64, -0.46, -0.29]   # imu_cal 2026-10-07: imu_link in base_link
