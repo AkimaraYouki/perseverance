@@ -30,7 +30,7 @@
         pole_pairs: 14.0            # datasheet (matches McParams foc_encoder_ratio 14)
         gear_ratio: 10.0            # datasheet 10:1
         raw_deg_per_output_rev: 360.0  # VERIFY: rotate output one turn by hand in STEP 3
-        direction: 1               # spin test 2026-10-07: + = robot moves FORWARD (sim +y convention)
+        direction: -1              # 2026-10-08 MIT firmware, user on the floor: old +1 drove BACKWARD; + = robot moves FORWARD
         position_offset_rad: 0.0
         # datasheet (user 2026-10-03): rotor inertia 157.33 g·cm² -> x10² = 1.57e-3 kg·m² at the output
         # (measured accel test 2.0–2.6e-3 incl. wheel + friction); backdrive 0.1 N·m; Ke 13.33 V/krpm;
@@ -74,7 +74,7 @@
         pole_pairs: 14.0            # datasheet (matches McParams foc_encoder_ratio 14)
         gear_ratio: 10.0            # datasheet 10:1
         raw_deg_per_output_rev: 360.0  # VERIFY: rotate output one turn by hand in STEP 3
-        direction: -1              # spin test 2026-10-07: + = robot moves FORWARD (sim +y convention)
+        direction: 1               # 2026-10-08 MIT firmware, user on the floor: old -1 drove BACKWARD; + = robot moves FORWARD
         position_offset_rad: 0.0
         # datasheet (user 2026-10-03): rotor inertia 157.33 g·cm² -> x10² = 1.57e-3 kg·m² at the output
         # (measured accel test 2.0–2.6e-3 incl. wheel + friction); backdrive 0.1 N·m; Ke 13.33 V/krpm;
