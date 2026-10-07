@@ -89,7 +89,7 @@ class WBController:
         m = np.ones(n, bool) if mask is None else np.asarray(mask, bool)
         z = lambda name: np.where(m, 0.0, getattr(self, name, np.zeros(n)))  # noqa: E731
         for k in ("t_phase", "x_err", "t_un", "t_ld", "g_vf", "g_i", "g_ref", "bump_t", "bump_quiet", "vf", "rf",
-                  "th_bias", "v_prev", "t_takeoff"):
+                  "th_bias", "v_prev", "t_takeoff", "vh"):
             setattr(self, k, z(k))
         self.phase = np.where(m, DRIVE, getattr(self, "phase", np.zeros(n, int))).astype(int)
         self.next_edge = np.where(m, 0, getattr(self, "next_edge", np.zeros(n, int))).astype(int)
@@ -104,6 +104,7 @@ class WBController:
         self.db_e = np.where(m[:, None], 0.0, getattr(self, "db_e", np.zeros((n, 2))))    # 데드밴드 시그마-델타 누적 오차
         if mask is None:
             self.q.clear()
+            self.eq = collections.deque(maxlen=16)                 # 시뮬 전용: 바퀴 엔코더 지연 버퍼
         self.dbg, self.jump_blocked = {}, [""] * n           # 화면·기록용 (제어에는 안 씀)
 
     # --- 센서 ------------------------------------------------------------------------------------
@@ -125,11 +126,28 @@ class WBController:
             return f.truth_th, S["gy"], f.l_pend, f.truth_v, S["gz"]
         th = S["pitch"] + f.th_kin
         wabs = f.w_wheel_abs + self.rng.normal(0, P.enc_vel_noise, f.w_wheel_abs.shape) if P.enc_vel_noise > 0 else f.w_wheel_abs
+        ed = getattr(P, "enc_delay_ms", 0.0)
+        if ed > 0:                                                 # 시뮬 전용 (실기 0): 바퀴 엔코더가 몸통보다 늦게 움직임 (감속기 백래시, 2026-10-07 톡 치기 9–26 ms)
+            if not hasattr(self, "eq"):
+                self.eq = collections.deque(maxlen=16)
+            self.eq.append(np.array(wabs, float))
+            wabs = self.eq[max(0, len(self.eq) - 1 - int(round(ed / (DT * 1000))))]
         on = f.tau_hip >= P.contact_tau_min                       # 땅 짚은 바퀴만
         cnt = on.sum(1)
         v_raw = R_WHEEL * (wabs * on).sum(1) / np.maximum(cnt, 1)
         a = 1.0 - math.exp(-2 * math.pi * P.v_lpf_hz * DT) if P.v_lpf_hz > 0 else 1.0
         self.vf = np.where(cnt > 0, self.vf + a * (v_raw - self.vf), self.vf)   # 둘 다 뜸 -> 직전 추정 유지
+        fc = getattr(P, "v_fuse_hz", 0.0)
+        if fc > 0:
+            # 상보 필터 (2026-10-07): 바퀴 엔코더는 백래시로 10–25 ms 늦다 -> fc 아래는 바퀴, 위는 IMU 전후 가속 적분.
+            # IMU 는 몸통 (고관절 근처) 에 있어 몸통 속도 v_h 를 적분하고, 바퀴축 속도 = v_h - h·피치 각속도 (h = 고관절~바퀴축)
+            a_m = np.broadcast_to(np.asarray(f.a_fwd, float), (self.n,))
+            a_m = a_m + self.rng.normal(0.0, P.imu_acc_noise, self.n) - 9.81 * np.sin(self.bias[:, 0])   # 시뮬: 잡음 + 기울기 치우침이 남긴 중력
+            hb = f.h.mean(1)
+            self.vh = self.vh + a_m * DT
+            k = 1.0 - math.exp(-2 * math.pi * fc * DT)
+            self.vh = np.where(cnt > 0, self.vh + k * (v_raw - (self.vh - hb * S["gy"])), self.vh)
+            return th, S["gy"], f.l_pend, self.vh - hb * S["gy"], S["gz"]
         return th, S["gy"], f.l_pend, self.vf, S["gz"]
 
     # --- 한 스텝 ----------------------------------------------------------------------------------

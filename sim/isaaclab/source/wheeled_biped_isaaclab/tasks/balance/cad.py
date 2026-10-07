@@ -222,7 +222,9 @@ def set_wheel_model(robot, wheel_ids, fric_static, fric_dyn, viscous=0.0, deadba
     n, k = robot.num_instances, len(wheel_ids)
     full = lambda x: (torch.as_tensor(x, dtype=torch.float32).expand(n, k).clone() if torch.as_tensor(x).ndim < 2
                       else torch.as_tensor(x, dtype=torch.float32)).to(robot.device)  # noqa: E731
-    robot.write_joint_friction_coefficient_to_sim(full(fric_static), full(fric_dyn), full(viscous), joint_ids=wheel_ids)
+    fs, fd = full(fric_static), full(fric_dyn)
+    fd = torch.minimum(fd, fs)                                         # PhysX: 정지 >= 운동 이어야 한다 (어기면 설정 자체를 거부, 2026-10-07)
+    robot.write_joint_friction_coefficient_to_sim(fs, fd, full(viscous), joint_ids=wheel_ids)
     robot.actuators["wheels"].deadband[:] = full(deadband)                 # 숫자 또는 (환경, 바퀴) — 로봇마다
     if armature > 0:
         robot.write_joint_armature_to_sim(full(armature), joint_ids=wheel_ids)
