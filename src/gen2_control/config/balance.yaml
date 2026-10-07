@@ -13,7 +13,6 @@ balance:
     cmd_timeout_s: 0.5        # cmd_vel watchdog -> 0
     stand_ramp_s: 2.0         # stand: current leg height -> idle_h
     th_trim_deg: 1.9          # balance-point trim, + = lean back. 2026-10-08 hands-off 20 s (MIT wheels, robot LQR): 2.0 -> bias adapt ran to -1.4 deg; 1.9 -> bias stays ~0
-                              # 2.0 drifted -0.69 m back -> middle 1.75. Recheck after the gains/delay change.
     stand_feedforward: true   # stand: + weight feed-forward (0.5 m g per leg, via dh/dtheta) — current_pd only
     hip_mode: mit             # mit (kd in the drive, kp + ff from here) | servo_pos (drive position loop) | current_pd (host PD, shook at 200 Hz)
     mit_kt_drive: 0.5994      # Kt the AK60-6 drive uses inside MIT (0.5 N·m -> 0.83 A measured 2026-10-07)
@@ -35,5 +34,9 @@ balance:
       db_comp: 2              # 0 off, 1 boost, 2 sigma
       db_comp_nm: 0.65
       wheel_lpf_hz: 20.0
-      bal_adapt: 0.3
+      bal_adapt: 0.3          # user 2026-10-08 (0.1 / 0 tried: 0 stops the bias walk but parks ~0.17 m off)
       contact_tau_min: 0.8
+      roll_kp: 0.0            # 2026-10-07: roll PI (sim gains) oscillated on the robot -> off until retuned
+      roll_ki: 0.0
+      roll_kd: 0.0
+      turn_lean: 0.0          # needs the roll loop
