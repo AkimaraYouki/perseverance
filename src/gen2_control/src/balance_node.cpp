@@ -133,6 +133,10 @@ public:
     P.wheel_lpf_hz = declare_parameter("tune.wheel_lpf_hz", P.wheel_lpf_hz);
     P.bal_adapt = declare_parameter("tune.bal_adapt", P.bal_adapt);
     P.contact_tau_min = declare_parameter("tune.contact_tau_min", P.contact_tau_min);
+    P.roll_kp = declare_parameter("tune.roll_kp", P.roll_kp);
+    P.roll_ki = declare_parameter("tune.roll_ki", P.roll_ki);
+    P.roll_kd = declare_parameter("tune.roll_kd", P.roll_kd);
+    P.turn_lean = declare_parameter("tune.turn_lean", P.turn_lean);
     P.m_pend = model_ok_ ? m_pend_ : P.m_pend;
     params_ = P;
     if (model_ok_) {core_ = std::make_unique<gen2_control::WBCore>(P, lqr_);}
