@@ -200,6 +200,7 @@ hip_sign = torch.tensor([cad.M_SIGN["L"], cad.M_SIGN["R"]], device=dev)
 wsign = torch.tensor(cad.WHEEL_SIGN, device=dev)
 nonwheel = [i for i in range(robot.num_bodies) if i not in wheel_bodies]
 legs_act, wheels_act = robot.actuators["legs"], robot.actuators["wheels"]
+HIP = cad.HipHostP()
 R = cad.R_WHEEL
 origins = env.scene.env_origins.clone()
 
@@ -336,11 +337,16 @@ with torch.inference_mode():
         if pol is None:
             cmd.set(torch.full((N,), float(vx), device=dev), torch.zeros(N, device=dev), torch.full((N,), P.idle_h, device=dev),
                     mode=torch.ones(N, device=dev))
-            legs_act.stiffness[:] = torch.tensor(kps, device=dev, dtype=torch.float32)
-            legs_act.damping[:] = torch.tensor(kds, device=dev, dtype=torch.float32)
             M = d.joint_pos[:, leg_ids]
-            robot.set_joint_effort_target(hip_sign * torch.tensor(ff, device=dev, dtype=torch.float32)[:, None]
-                                          * cad.dh_from_M(M).to(torch.float32), joint_ids=leg_ids)
+            ffj = hip_sign * torch.tensor(ff, device=dev, dtype=torch.float32)[:, None] * cad.dh_from_M(M).to(torch.float32)
+            if getattr(P, "hip_host_p", False):                     # 실기 고관절 구조: P 는 200 Hz 호스트 (지연 피드백), D 만 드라이브
+                HIP.apply(robot, leg_ids, legs_act, torch.tensor(acts[:, 0:2], device=dev, dtype=torch.float32),
+                          torch.full((N,), float(P.idle_h), device=dev), torch.tensor(kps[:, 0], device=dev, dtype=torch.float32),
+                          torch.tensor(kds[:, 0], device=dev, dtype=torch.float32), ffj, round(P.delay_ms / 5.0))
+            else:
+                legs_act.stiffness[:] = torch.tensor(kps, device=dev, dtype=torch.float32)
+                legs_act.damping[:] = torch.tensor(kds, device=dev, dtype=torch.float32)
+                robot.set_joint_effort_target(ffj, joint_ids=leg_ids)
         if "hand" in spec:                                          # 가상 손 (전 로봇 동시)
             tg, tr, roll_deg = spec["hand"]
             if tg <= t < tr:

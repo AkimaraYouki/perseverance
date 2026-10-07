@@ -105,6 +105,8 @@ class WBController:
         if mask is None:
             self.q.clear()
             self.eq = collections.deque(maxlen=16)                 # 시뮬 전용: 바퀴 엔코더 지연 버퍼
+        self.uq = collections.deque([np.zeros(n)] * 32, maxlen=32) if mask is None else \
+            collections.deque([np.where(m, 0.0, u) for u in self.uq], maxlen=32)   # 실제 낸 바퀴 토크 합 기록 (지연 보상 예측)
         self.dbg, self.jump_blocked = {}, [""] * n           # 화면·기록용 (제어에는 안 씀)
 
     # --- 센서 ------------------------------------------------------------------------------------
@@ -244,7 +246,12 @@ class WBController:
             v_ref = np.where(guard, np.where(v_now * vx >= 0, v_now * (1.0 - 0.6 * cut), vx), v_ref)
             x_err = np.where(guard, 0.0, x_err)
         x_err = np.clip(x_err + (v_now - v_ref) * DT, -0.3, 0.3)
-        tau_w = lqr_torque(self.lqr, l_p, x_err, v_now - v_ref, th - th_ref, thd)
+        pk = int(round(getattr(P, "pred_ms", 0.0) / (DT * 1000)))
+        if pk > 0 and hasattr(self.lqr, "A"):                   # 지연 보상: 이미 낸 토크로 지연만큼 앞 상태를 예측해 LQR 에 넣는다
+            x_p, v_p, th_p, thd_p = self._predict(l_p, x_err, v_now, th, thd, v_ref, pk)
+            tau_w = lqr_torque(self.lqr, l_p, x_p, v_p - v_ref, th_p - th_ref, thd_p)
+        else:
+            tau_w = lqr_torque(self.lqr, l_p, x_err, v_now - v_ref, th - th_ref, thd)
         self.dbg = dict(v_ref=v_ref, v_lim=v_lim, vm=vm, brake=v_lim < vm - 0.02, bump=bump_t > 0.0, x_err=x_err)
         if getattr(P, "turn_limit", True):                 # 바깥 바퀴 <= 모터 x wheel_margin 이 되게 회전 상한 (climb_test TUNE turn_limit)
             # 속도는 명령(스틱)으로 본다: 실제 속도로 보면 자갈길에서 추정이 튀어 상한이 출렁여 넘어짐 (stones_turn 16/16 -> 14/16,
@@ -331,6 +338,7 @@ class WBController:
         if lpf > 0:
             self.wf = self.wf + (1.0 - math.exp(-2.0 * math.pi * lpf * DT)) * (act[:, 2:] - self.wf)
             act[:, 2:] = self.wf
+        self.uq.append((act[:, 2] + act[:, 3]) * P.wheel_tau_max)  # 실제 낼 바퀴 토크 합 (필터 뒤) — 예측기 입력
         # 드라이브 데드밴드 보상 (TUNE db_comp, climb_test 기본 sigma, 없으면 off): 드라이브가 |지령| < 문턱 을 0 으로 버리는 경우 (AK45-10 0.5 A 미만 안 돎 가설 b).
         #   boost: db_comp_eps < |τ| < db_comp_nm 인 지령을 ±db_comp_nm 로 올려 보낸다 (작은 토크는 크게, 더 작은 건 버림)
         #   sigma: 문턱 아래 지령은 0 과 ±db_comp_nm 를 섞어 보내 평균이 τ 가 되게 (시그마-델타, 남은 오차를 다음 주기로 넘김)
@@ -355,6 +363,23 @@ class WBController:
             k = np.maximum(0, len(self.q) - 1 - dly)
             act = np.stack([self.q[k[i]][i] for i in range(n)]) if n < 64 else self._gather(k)
         return act, leg_kp, leg_kd, ffF, dict(th=th, thd=thd, v=v_now, pitch=S["pitch"], roll=S["roll"], **self.dbg)
+
+    def _predict(self, l, x_err, v, th, thd, v_ref, k):
+        """진자 모델 (lqr_vmc.wip_model, 진자 길이 격자 보간) 을 최근 k 스텝 동안 낸 바퀴 토크 합으로 앞으로 적분 (Smith 예측).
+        상태 [x_err, v, θ, θ̇] -> 지연 k·DT 뒤의 예측. 실기도 같은 식 (자기가 낸 토크 기록만 쓴다)."""
+        g = self.lqr.l_grid
+        i = np.clip(np.searchsorted(g, l) - 1, 0, len(g) - 2)
+        w = np.clip((l - g[i]) / (g[i + 1] - g[i]), 0.0, 1.0)
+        A = self.lqr.A[i] * (1 - w)[:, None, None] + self.lqr.A[i + 1] * w[:, None, None]
+        B = self.lqr.B[i] * (1 - w)[:, None] + self.lqr.B[i + 1] * w[:, None]
+        s = np.stack([x_err, v, th, thd], 1).astype(float)
+        h = DT / 2
+        for u in list(self.uq)[-k:]:
+            for _ in range(2):
+                ds = np.einsum("nij,nj->ni", A, s) + B * u[:, None]
+                ds[:, 0] = s[:, 1] - v_ref
+                s = s + h * ds
+        return s[:, 0], s[:, 1], s[:, 2], s[:, 3]
 
     def _gather(self, k):
         Q = np.stack(self.q)                                       # (len, N, 4)

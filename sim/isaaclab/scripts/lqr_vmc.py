@@ -44,7 +44,10 @@ class WheelLQR:
 
     def __init__(self, m, I, m_w, I_w, R, q=(2.0, 5.0, 100.0, 5.0), r=1.0, l_grid=np.linspace(0.12, 0.40, 15)):
         self.l_grid = l_grid
-        self.K = np.array([lqr_gain(*wip_model(m, l, I, m_w, I_w, R), np.diag(q), np.array([[r]]))[0] for l in l_grid])
+        AB = [wip_model(m, l, I, m_w, I_w, R) for l in l_grid]
+        self.A = np.array([a for a, _ in AB])                   # (L, 4, 4) 지연 보상 예측용 (wbctrl pred_ms)
+        self.B = np.array([b[:, 0] for _, b in AB])             # (L, 4)
+        self.K = np.array([lqr_gain(a, b, np.diag(q), np.array([[r]]))[0] for a, b in AB])
 
     def gain(self, l):
         return np.array([np.interp(l, self.l_grid, self.K[:, j]) for j in range(4)])

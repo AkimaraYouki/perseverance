@@ -223,6 +223,7 @@ hip_sign = torch.tensor([cad.M_SIGN["L"], cad.M_SIGN["R"]], device=dev)
 wsign = torch.tensor(cad.WHEEL_SIGN, device=dev)
 nonwheel = [i for i in range(robot.num_bodies) if i not in wheel_bodies]
 legs_act, wheels_act = robot.actuators["legs"], robot.actuators["wheels"]
+HIP = cad.HipHostP()
 R = cad.R_WHEEL
 
 # --- 명목 모델 (제어기가 믿는 값) + LQR — pv robust 와 같은 계산 ----------------------------------------------
@@ -342,11 +343,17 @@ with torch.inference_mode():
         ff = np.where(alive, ffF, 0.0)
         cmd_term.set(torch.tensor(vx, device=dev, dtype=torch.float32), torch.zeros(N, device=dev), torch.full((N,), P.idle_h, device=dev),
                      mode=torch.ones(N, device=dev)) if args.cmd == "course" else None
-        legs_act.stiffness[:] = torch.tensor(np.where(alive, kp, 0.0), device=dev, dtype=torch.float32)[:, None]
-        legs_act.damping[:] = torch.tensor(np.where(alive, kd, 0.0), device=dev, dtype=torch.float32)[:, None]
         M = d.joint_pos[:, leg_ids]
-        robot.set_joint_effort_target(hip_sign * torch.tensor(ff, device=dev, dtype=torch.float32)[:, None] * cad.dh_from_M(M).to(torch.float32),
-                                      joint_ids=leg_ids)
+        ffj = hip_sign * torch.tensor(ff, device=dev, dtype=torch.float32)[:, None] * cad.dh_from_M(M).to(torch.float32)
+        kp_a, kd_a = np.where(alive, kp, 0.0), np.where(alive, kd, 0.0)
+        if getattr(P, "hip_host_p", False):                         # 실기 고관절 구조: P 는 200 Hz 호스트 (지연 피드백), D 만 드라이브
+            HIP.apply(robot, leg_ids, legs_act, torch.tensor(acts[:, 0:2], device=dev, dtype=torch.float32),
+                      torch.full((N,), float(P.idle_h), device=dev), torch.tensor(kp_a, device=dev, dtype=torch.float32),
+                      torch.tensor(kd_a, device=dev, dtype=torch.float32), ffj, round(P.delay_ms / 5.0))
+        else:
+            legs_act.stiffness[:] = torch.tensor(kp_a, device=dev, dtype=torch.float32)[:, None]
+            legs_act.damping[:] = torch.tensor(kd_a, device=dev, dtype=torch.float32)[:, None]
+            robot.set_joint_effort_target(ffj, joint_ids=leg_ids)
         here = to(torch.cdist(d.root_pos_w[:, :2], org).argmin(1) % nc)    # 지금 서 있는 칸의 종류 (열)
         wfr = np.abs(f.w_wheel_joint).max(1) / (18.85 * kv)
         tilt = np.degrees(np.arccos(np.clip(-f.g_b[:, 2], -1, 1)))

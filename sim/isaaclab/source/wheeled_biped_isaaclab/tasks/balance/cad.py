@@ -190,6 +190,30 @@ class CADWheelActionCfg(JointEffortActionCfg):
     torque_scale: float = 1.5
 
 
+
+class HipHostP:
+    """실기 고관절 구조 (2026-10-08, 실기 balance_node hip_mode mit): P 항 kp·(M* − M) 은 200 Hz 호스트가 **지연된 피드백**으로
+    계산해 t_ff 로 보내고, D 항만 드라이브가 빠르게 (여기선 물리 주기) 한다. 시뮬 기본 (IdealPD 가 P·D 모두 물리 주기, 지연 없음) 과 다르다.
+    도구 (climb_test·robust_suite·harsh_eval) 가 TUNE hip_host_p 일 때 매 제어 스텝 apply() 를 부른다."""
+
+    def __init__(self):
+        import collections
+        self.hist = collections.deque(maxlen=16)
+
+    def reset(self):
+        self.hist.clear()
+
+    def apply(self, robot, leg_ids, legs_act, a_legs, h_ref, kp, kd, ff_joint, delay_steps, leg_scale=0.12):
+        """a_legs (N,2) 다리 행동 (wbctrl, 지연 큐 지난 것), h_ref (N,), kp/kd (N,), ff_joint (N,2) 자중 보상 관절 토크."""
+        M = robot.data.joint_pos[:, leg_ids]
+        self.hist.append(M.clone())
+        M_fb = self.hist[max(0, len(self.hist) - 1 - int(delay_steps))]
+        hj = torch.clamp(h_ref[:, None] + torch.clamp(a_legs, -1.0, 1.0) * leg_scale, 0.1225, 0.2425)
+        tau_p = kp[:, None] * (M_from_hj(hj) - M_fb)
+        legs_act.stiffness[:] = 0.0
+        legs_act.damping[:] = kd[:, None].expand_as(legs_act.damping) if legs_act.damping.dim() == 2 else kd
+        robot.set_joint_effort_target((ff_joint + tau_p).to(torch.float32), joint_ids=leg_ids)
+
 # --- 바퀴 모터 + 축 마찰 (2026-10-03 실측: AK45-10 은 0.4 A 이하 지령에 전혀 안 돈다) ----------------------
 class DCMotorFric(DCMotor):
     """DC 모터 + 드라이브 데드밴드: |지령| <= deadband 이면 0 (드라이브가 작은 전류 지령을 무시하는 경우의 모델 —
