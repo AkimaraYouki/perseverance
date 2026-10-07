@@ -144,6 +144,13 @@ public:
     P.roll_kd = declare_parameter("tune.roll_kd", P.roll_kd);
     P.turn_lean = declare_parameter("tune.turn_lean", P.turn_lean);
     P.m_pend = model_ok_ ? m_pend_ : P.m_pend;
+    // wheels in MIT (legacy AK45-10 firmware): no 0.5 A deadband -> no sigma-delta compensation
+    for (const auto & c : motors) {
+      if ((c.name == "wheel_l" || c.name == "wheel_r") && c.protocol == "mit_legacy" && P.db_comp != 0) {
+        P.db_comp = 0;
+        RCLCPP_INFO(get_logger(), "wheels in MIT: deadband compensation off");
+      }
+    }
     params_ = P;
     if (model_ok_) {core_ = std::make_unique<gen2_control::WBCore>(P, lqr_);}
 
@@ -262,17 +269,34 @@ private:
   // ------------------------------------------------------------------ mode requests
   std::string request(Mode m)
   {
-    std::lock_guard<std::mutex> lk(mode_m_);
-    if (m == Mode::kDisarmed) {
-      want_ = Mode::kDisarmed;
-      return "ok: disarm";
+    bool wake = false;
+    {
+      std::lock_guard<std::mutex> lk(mode_m_);
+      if (m == Mode::kDisarmed) {
+        want_ = Mode::kDisarmed;
+        return "ok: disarm";
+      }
+      if (m == Mode::kBalance && !model_ok_) {return "refused: model tables missing (sim/model/balance_tables.yaml)";}
+      if (mode_ == Mode::kFault) {return "refused: in fault (" + fault_ + "), disarm first";}
+      wake = mode_ == Mode::kDisarmed;
     }
-    if (m == Mode::kBalance && !model_ok_) {return "refused: model tables missing (sim/model/balance_tables.yaml)";}
-    if (mode_ == Mode::kFault) {return "refused: in fault (" + fault_ + "), disarm first";}
-    const std::string why = arm_check();
-    if (!why.empty()) {last_refusal_ = why; return "refused: " + why;}
-    want_ = m;
-    return std::string("ok: ") + mode_name(m);
+    // MIT wheels: wake them without holding the mode lock (the 200 Hz loop takes it every step)
+    if (wake) {
+      const std::string w = wake_mit();
+      if (!w.empty()) {std::lock_guard<std::mutex> lk(mode_m_); last_refusal_ = w; return "refused: " + w;}
+    }
+    std::string why;
+    {
+      std::lock_guard<std::mutex> lk(mode_m_);
+      why = arm_check();
+      if (why.empty()) {
+        want_ = m;
+        return std::string("ok: ") + mode_name(m);
+      }
+      last_refusal_ = why;
+    }
+    if (wake) {zero_all(); bus_->enable_tx(false);}    // undo the wake (zero_all sleeps: not under the lock)
+    return "refused: " + why;
   }
 
   std::string arm_check()
@@ -306,14 +330,58 @@ private:
     if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {RCLCPP_WARN(get_logger(), "mlockall failed");}
   }
 
+  // zero torque frame for any protocol
+  gen2_hardware::cubemars::Frame zero_frame(const gen2_hardware::MotorConfig & c) const
+  {
+    if (c.protocol == "mit_legacy") {
+      return gen2_hardware::mit::encode(gen2_hardware::mit::Proto::kLegacy, c.can_id, c.mit_ranges, {});
+    }
+    return gen2_hardware::cubemars::encode_current(c.can_id, 0.0);
+  }
+
   void zero_all()
   {
     if (!bus_ || !bus_->tx_enabled()) {return;}
     std::string err;
     for (int r = 0; r < 10; ++r) {
-      for (const auto & kv : idx_) {bus_->send(gen2_hardware::cubemars::encode_current(bus_->motors()[kv.second].can_id, 0.0), err);}
+      for (const auto & kv : idx_) {bus_->send(zero_frame(bus_->motors()[kv.second]), err);}
       std::this_thread::sleep_for(2ms);
     }
+    for (const auto & kv : idx_) {     // MIT wheels: leave motor mode
+      const auto & c = bus_->motors()[kv.second];
+      if (c.protocol == "mit_legacy") {bus_->send(gen2_hardware::mit::exit(c.can_id), err);}
+    }
+  }
+
+  // MIT wheels reply only to commands: enter motor mode (zero gains) and wait for fresh feedback
+  std::string wake_mit()
+  {
+    std::vector<std::size_t> ids;
+    for (const auto & kv : idx_) {
+      if (bus_->motors()[kv.second].protocol == "mit_legacy") {ids.push_back(kv.second);}
+    }
+    if (ids.empty()) {return "";}
+    bus_->enable_tx(true);
+    std::string err;
+    for (auto i : ids) {bus_->send(gen2_hardware::mit::enter(bus_->motors()[i].can_id), err);}
+    for (int k = 0; k < 20; ++k) {
+      std::this_thread::sleep_for(5ms);
+      bool all = true;
+      for (auto i : ids) {
+        bus_->send(zero_frame(bus_->motors()[i]), err);
+        const auto fb = bus_->feedback(i);
+        all = all && fb.valid && (now_ns() - fb.mono_ns) * 1e-9 < 0.02;
+      }
+      if (all) {return "";}
+    }
+    std::string who;
+    for (auto i : ids) {
+      const auto fb = bus_->feedback(i);
+      if (!fb.valid || (now_ns() - fb.mono_ns) * 1e-9 >= 0.02) {who += bus_->motors()[i].name + " ";}
+    }
+    for (auto i : ids) {bus_->send(gen2_hardware::mit::exit(bus_->motors()[i].can_id), err);}
+    if (mode_ == Mode::kDisarmed || mode_ == Mode::kFault) {bus_->enable_tx(false);}
+    return "MIT wheel(s) not answering: " + who;
   }
 
   void enter(Mode m, const std::string & why = "")
@@ -537,7 +605,14 @@ private:
       const auto & cw = bus_->motors()[idx_.at(names[2 + k])];
       const double wc = cw.joint_torque_to_current(wheel_tau[k]);
       wheel_tau_[k] = wheel_tau[k]; wheel_cur_[k] = wc;
-      bus_->send(gen2_hardware::cubemars::encode_current(cw.can_id, wc), err);
+      if (cw.protocol == "mit_legacy") {
+        // torque command, drive converts with its own Kt; limit = current_limit x Kt
+        gen2_hardware::mit::Command mc;
+        mc.t = wc * cw.kt_nm_per_a;      // = clamped joint torque in the drive frame (wc already has the sign)
+        bus_->send(gen2_hardware::mit::encode(gen2_hardware::mit::Proto::kLegacy, cw.can_id, cw.mit_ranges, mc), err);
+      } else {
+        bus_->send(gen2_hardware::cubemars::encode_current(cw.can_id, wc), err);
+      }
     }
   }
 

@@ -13,7 +13,16 @@
       wheel_l:
         model: "AK45-10"
         can_id: 2                   # LEFT wheel (user 2026-10-07: original IDs kept)
-        protocol: "servo"
+        protocol: "mit_legacy"      # 2026-10-08: AK45-10 MIT firmware (replies to every command, 0.33 ms;
+                                    # no 0.5 A deadband). Servo firmware had the deadband.
+        mit:                        # CMESC_MIT_APP_AK45_10.bin (desktop disassembly 2026-10-08)
+          p_max: 12.56
+          v_max: 20.0
+          t_max: 8.0
+          kp_max: 500.0
+          kd_max: 5.0
+          test_kp: 5.0
+          test_kd: 0.2
         # CubeMars AK45-10 KV75 datasheet (user-supplied 2026-09-24): 24 V rated, 14 pole pairs,
         # 10:1, Kt 0.127 N·m/A (rotor side), rated 2.5 N·m @ 2.1 A, peak 7 N·m @ 5 A,
         # no-load 180 rpm, rated 150 rpm (output). Drive AppParams l_current_max is 35 A — far
@@ -48,7 +57,16 @@
       wheel_r:
         model: "AK45-10"
         can_id: 1                   # RIGHT wheel (user 2026-10-02 / 2026-10-07)
-        protocol: "servo"
+        protocol: "mit_legacy"      # 2026-10-08: AK45-10 MIT firmware (replies to every command, 0.33 ms;
+                                    # no 0.5 A deadband). Servo firmware had the deadband.
+        mit:                        # CMESC_MIT_APP_AK45_10.bin (desktop disassembly 2026-10-08)
+          p_max: 12.56
+          v_max: 20.0
+          t_max: 8.0
+          kp_max: 500.0
+          kd_max: 5.0
+          test_kp: 5.0
+          test_kd: 0.2
         # CubeMars AK45-10 KV75 datasheet (user-supplied 2026-09-24): 24 V rated, 14 pole pairs,
         # 10:1, Kt 0.127 N·m/A (rotor side), rated 2.5 N·m @ 2.1 A, peak 7 N·m @ 5 A,
         # no-load 180 rpm, rated 150 rpm (output). Drive AppParams l_current_max is 35 A — far

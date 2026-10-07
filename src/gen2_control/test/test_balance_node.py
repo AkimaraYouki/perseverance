@@ -21,11 +21,13 @@ MOT = os.path.join(WS, 'src/gen2_hardware/config/motors.yaml')
 FAKE = os.path.join(WS, 'src/gen2_hardware/test/fake_cubemars_drive.py')
 m = yaml.safe_load(open(MOT))['/**']['ros__parameters']['motors']
 ids = {n: m[n]['can_id'] for n in ('wheel_l', 'wheel_r', 'leg_l', 'leg_r')}
+proto = {n: m[n].get('protocol', 'servo') for n in ids}
+FAKE_PROTO = {n: ('mit_legacy' if p == 'mit_legacy' else 'servo') for n, p in proto.items()}
 logs = {n: tempfile.TemporaryFile(mode='w+') for n in ids}
 HIP_YAML = os.path.join(tempfile.mkdtemp(), 'hip.yaml')   # a params file: -p does not override balance.yaml
 open(HIP_YAML, 'w').write(f"balance:\n  ros__parameters:\n    hip_mode: {os.environ.get('HIP_MODE', 'mit')}\n    imu_shm: false\n")
-drives = [subprocess.Popen([sys.executable, FAKE, '--id', str(i), '--rate', '500'], stdout=logs[n], text=True)
-          for n, i in ids.items()]
+drives = [subprocess.Popen([sys.executable, FAKE, '--id', str(i), '--rate', '500', '--proto', FAKE_PROTO[n]],
+                          stdout=logs[n], text=True) for n, i in ids.items()]
 share = os.path.join(WS, 'install/gen2_control/share/gen2_control/config')
 node = subprocess.Popen(['ros2', 'run', 'gen2_control', 'balance_node', '--ros-args',
                          '--params-file', MOT, '--params-file', os.path.join(share, 'leg_table.yaml'),
@@ -73,7 +75,18 @@ def check(name, ok, detail=''):
 
 def drive_cmds(name, fn=None):
     logs[name].seek(0)
-    return [l for l in logs[name].read().splitlines() if l.startswith('CMD') and (fn is None or l.startswith(f'CMD fn={fn} '))]
+    lines = [l for l in logs[name].read().splitlines() if l.startswith('CMD')]
+    if fn == 'mit':
+        return [l for l in lines if l.startswith('CMD mit')]
+    return [l for l in lines if fn is None or l.startswith(f'CMD fn={fn} ')]
+
+
+def ended_at_zero(name):
+    c = drive_cmds(name)
+    if FAKE_PROTO[name] == 'mit_legacy':
+        z = drive_cmds(name, 'mit')
+        return bool(c) and c[-1] == 'CMD special FD' and bool(z) and abs(float(z[-1].split('t=')[1])) < 0.01
+    return bool(c) and c[-1].startswith('CMD fn=1 ') and c[-1].endswith('target=0.000')
 
 
 try:
@@ -94,16 +107,16 @@ try:
           f'{s.mode} wheel {list(s.wheel_cur_cmd)}')
     HIP_FN = {'mit': 8, 'servo_pos': 6, 'current_pd': 1}[os.environ.get('HIP_MODE', 'mit')]
     check(f'hips get fn={HIP_FN} commands ({os.environ.get("HIP_MODE", "mit")}), wheels get current',
-          all(drive_cmds(k, HIP_FN) for k in ('leg_l', 'leg_r')) and all(drive_cmds(k, 1) for k in ('wheel_l', 'wheel_r')),
-          str({k: (len(drive_cmds(k, HIP_FN)), len(drive_cmds(k, 1))) for k in ids}))
+          all(drive_cmds(k, HIP_FN) for k in ('leg_l', 'leg_r')) and
+          all(drive_cmds(k, 'mit' if FAKE_PROTO[k] == 'mit_legacy' else 1) for k in ('wheel_l', 'wheel_r')),
+          str({k: (len(drive_cmds(k, HIP_FN)), len(drive_cmds(k, 'mit')), len(drive_cmds(k, 1))) for k in ids}))
     check('loop timing (no overruns, worst period < 15 ms)', s.overruns == 0 and s.loop_dt_max_ms < 15,
           f'overruns {s.overruns}, worst {s.loop_dt_max_ms:.1f} ms')
     state['hb'] = False; spin(1.0)
     s = st['m']
     check('heartbeat loss -> fault', s.mode == 'fault' and 'heartbeat' in s.fault, f'{s.mode}: {s.fault}')
     check('fault -> last command to every drive is 0 A',
-          all(drive_cmds(k) and drive_cmds(k)[-1].startswith('CMD fn=1 ') and drive_cmds(k)[-1].endswith('target=0.000') for k in ids),
-          str({k: drive_cmds(k)[-1][-14:] if drive_cmds(k) else None for k in ids}))
+          all(ended_at_zero(k) for k in ids), str({k: drive_cmds(k)[-1][-24:] if drive_cmds(k) else None for k in ids}))
     state['hb'] = True; spin(0.3)
     check('fault latches (stand refused until disarm)', not call('stand').success)
     call('disarm'); spin(0.3)
