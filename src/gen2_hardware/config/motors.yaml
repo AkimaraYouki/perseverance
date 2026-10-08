@@ -143,7 +143,7 @@
         gear_ratio: 6.0             # AK60-6 = 6:1
         raw_deg_per_output_rev: 360.0  # VERIFY (scale check)
         direction: -1              # hip_cli 2026-10-07: + = leg extends (sim M)
-        position_offset_rad: -0.401426  # hip_cli 2026-10-07 CAD zero (theta 45 deg). 2026-10-08: +30.55 after a slip, back to this after the next boot (sitting read +18.5 = 30 deg high)
+        position_offset_rad: -0.382227  # 2026-10-08: legs folded on the retract stops read L -12.00 / R -10.90 -> R shifted -1.10 deg to match L (user: L = truth); was -0.401426
         kt_nm_per_a: 0.81           # PROVISIONAL 2026-10-07: product page 0.135 x 6 (manual table 0.5994 is 35 % off;
                                     # hanging-leg test -> 0.67–0.82). Confirm with the weight-difference test.
         current_limit_a: 10.0       # datasheet peak current 10.3 A @24 V (x 0.81 = 8.1 N·m), desktop 2026-10-07
@@ -157,8 +157,8 @@
         # Power-up 60 deg ambiguity (rotor encoder only, 6:1): resolved from the end stops measured
         # 2026-10-07 (0.2 rad/s into each stop, |I| > 2.5 A while not moving). CAD: -9.9 .. +55.4.
         wrap_deg: 60.0
-        stop_min_deg: -12.6         # retracted end (joint deg)
-        stop_max_deg: 59.3          # extended end; legs hang here when the robot is lifted
+        stop_min_deg: -13.7         # retracted end (joint deg; -12.6 before the -1.10 deg re-zero, = L now)
+        stop_max_deg: 58.2          # extended end (59.3 before the -1.10 deg re-zero)
         stop_margin_deg: 2.0
         protocol: "servo"           # drives upload servo 0x29 at 500 Hz (2026-10-03); "mit_v3" ready
         mit:                        # manual V3.2.0 §4.2 table (AK60-6); p from the V3 example
