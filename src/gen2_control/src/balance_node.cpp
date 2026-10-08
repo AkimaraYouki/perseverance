@@ -102,6 +102,11 @@ public:
     imu_timeout_ = declare_parameter("imu_timeout_s", 0.05);
     motor_timeout_ = declare_parameter("motor_timeout_s", 0.05);
     hb_timeout_ = declare_parameter("heartbeat_timeout_s", 0.5);
+    // operator link lost while balancing: stop (vx, wz = 0) -> after link_sit_after_s sit down and keep
+    // balancing low -> disarm after link_disarm_s (desktop 2026-10-08: 0 A at once tips the robot over)
+    link_stop_ = declare_parameter("link_loss_stop", true);
+    link_sit_after_s_ = declare_parameter("link_sit_after_s", 2.0);
+    link_disarm_s_ = declare_parameter("link_disarm_s", 30.0);
     cmd_timeout_ = declare_parameter("cmd_timeout_s", 0.5);
     stand_ramp_s_ = declare_parameter("stand_ramp_s", 2.0);
     stand_ff_ = declare_parameter("stand_feedforward", true);
@@ -215,7 +220,7 @@ public:
         [this](std_srvs::srv::Trigger::Request::ConstSharedPtr, std_srvs::srv::Trigger::Response::SharedPtr rs) {
           std::lock_guard<std::mutex> lk(mode_m_);
           if (mode_ != Mode::kStand && mode_ != Mode::kBalance) {rs->success = false; rs->message = "not standing"; return;}
-          sit_ = true; sit_t_ = 0.0;
+          sit_ = true; sit_t_ = 0.0; sit_hold_ = false;
           rs->success = true; rs->message = "ok: sitting down";
         });
     sit_s_ = declare_parameter("sit_s", 3.0);
@@ -397,6 +402,7 @@ private:
 
   void enter(Mode m, const std::string & why = "")
   {
+    link_lost_ = false; sit_hold_ = false;
     if (m == Mode::kFault || m == Mode::kDisarmed) {
       zero_all();
       bus_->enable_tx(false);
@@ -541,19 +547,45 @@ private:
           if (sat_s_[k] > sat_time_s_) {why = std::string(names[k]) + (sit_ ? " blocked while sitting" : " current saturated");}
         }
         if (why.empty() && imu_age_ms_ > imu_timeout_ * 1e3) {why = "IMU stale";}
-        if (why.empty() && (t - hb_ns_.load()) * 1e-9 > hb_timeout_) {why = "operator heartbeat lost";}
+        const bool hb_ok = (t - hb_ns_.load()) * 1e-9 <= hb_timeout_;
+        if (why.empty() && !hb_ok) {
+          if (mode_ == Mode::kBalance && link_stop_) {
+            if (!link_lost_) {
+              link_lost_ = true; t_lost_ = t;
+              last_refusal_ = "operator link lost: stop, sit, disarm in " + std::to_string(static_cast<int>(link_disarm_s_)) + " s";
+              RCLCPP_WARN(get_logger(), "%s", last_refusal_.c_str());
+            }
+            const double lost_s = (t - t_lost_) * 1e-9;
+            if (!sit_ && lost_s > link_sit_after_s_) {
+              sit_ = true; sit_t_ = 0.0; sit_hold_ = true;
+              last_refusal_ = "operator link lost: sitting, balancing low";
+              RCLCPP_WARN(get_logger(), "%s", last_refusal_.c_str());
+            }
+            if (lost_s > link_disarm_s_) {
+              RCLCPP_WARN(get_logger(), "operator link lost for %.0f s: disarm", lost_s);
+              enter(Mode::kDisarmed); want_ = Mode::kDisarmed;
+            }
+          } else {
+            why = "operator heartbeat lost";
+          }
+        }
+        if (hb_ok && link_lost_) {
+          link_lost_ = false; last_refusal_.clear();
+          RCLCPP_INFO(get_logger(), "operator link back%s", sit_hold_ ? " (staying low: sit or disarm to finish)" : "");
+        }
         if (why.empty() && (std::fabs(pitch_) > max_tilt_ || std::fabs(roll_) > max_tilt_)) {why = "tilt limit (fell)";}
         if (!why.empty()) {enter(Mode::kFault, why); want_ = Mode::kFault;}
       }
     }
     if (mode_ != Mode::kStand && mode_ != Mode::kBalance) {return;}
+    if (link_lost_) {vx = wz = 0.0; vx_cmd_ = 0.0; wz_cmd_ = 0.0;}
     t_mode_ += 1.0 / rate_hz_;
     double sit_u = -1.0;     // < 0: not sitting; 0..1 ramp to the lowest height
     if (sit_) {
       if (sit_t_ == 0.0) {for (int k = 0; k < 2; ++k) {sit_from_[k] = M_[k];} sit_h0_ = h_set_ > 0 ? h_set_ : params_.idle_h;}
       sit_t_ += 1.0 / rate_hz_;
       sit_u = std::min(1.0, sit_t_ / sit_s_);
-      if (sit_t_ > sit_s_ + 0.5) {
+      if (sit_t_ > sit_s_ + 0.5 && !sit_hold_) {
         std::lock_guard<std::mutex> lk(mode_m_);
         enter(Mode::kDisarmed);
         want_ = Mode::kDisarmed;
@@ -708,7 +740,9 @@ private:
   double h_set_ = -1.0, h_rate_ = 0.05, sit_h0_ = 0.0;
   rclcpp::Subscription<gen2_msgs::msg::MotorStateArray>::SharedPtr ms_sub_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_stand_, srv_bal_, srv_dis_, srv_sit_;
-  bool sit_ = false;
+  bool sit_ = false, sit_hold_ = false, link_lost_ = false, link_stop_ = true;
+  int64_t t_lost_ = 0;
+  double link_sit_after_s_ = 2.0, link_disarm_s_ = 30.0;
   double sit_t_ = 0.0, sit_s_ = 3.0, sit_from_[2] = {0, 0};
   rclcpp::Publisher<gen2_msgs::msg::ControllerState>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr pub_timer_;

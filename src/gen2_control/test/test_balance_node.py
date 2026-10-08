@@ -25,7 +25,7 @@ proto = {n: m[n].get('protocol', 'servo') for n in ids}
 FAKE_PROTO = {n: ('mit_legacy' if p == 'mit_legacy' else 'servo') for n, p in proto.items()}
 logs = {n: tempfile.TemporaryFile(mode='w+') for n in ids}
 HIP_YAML = os.path.join(tempfile.mkdtemp(), 'hip.yaml')   # a params file: -p does not override balance.yaml
-open(HIP_YAML, 'w').write(f"balance:\n  ros__parameters:\n    hip_mode: {os.environ.get('HIP_MODE', 'mit')}\n    imu_shm: false\n")
+open(HIP_YAML, 'w').write(f"balance:\n  ros__parameters:\n    hip_mode: {os.environ.get('HIP_MODE', 'mit')}\n    imu_shm: false\n    link_disarm_s: 6.0\n")
 # hips power up at joint 20 deg: inside the stops with no 60 deg twin (an end-stop band would be ambiguous)
 POS0 = {n: (m[n]['direction'] * (20.0 + math.degrees(m[n]['position_offset_rad'])) if n.startswith('leg') else 0.0)
         for n in ids}
@@ -138,6 +138,18 @@ try:
     s = st['m']
     check('balance accepted with model tables, LQR running', r.success and s.mode == 'balance' and s.l_pend > 0.1,
           f'{r.message}, mode {s.mode}, l_pend {s.l_pend:.3f}, th_kin {s.th_kin:+.3f}')
+    state['hb'] = False; spin(1.0)
+    s = st['m']
+    check('link lost in balance -> keeps balancing, stopped (no fault)', s.mode == 'balance' and 'link lost' in s.fault and
+          s.vx_cmd == 0.0, f'{s.mode}: {s.fault}')
+    spin(4.5)
+    s = st['m']
+    check('link lost > 2 s -> sits down and keeps balancing low', s.mode == 'balance' and 'sitting' in s.fault,
+          f'{s.mode}: {s.fault}')
+    spin(1.5)
+    s = st['m']
+    check('link lost > link_disarm_s -> disarmed (not fault)', s.mode == 'disarmed', f'{s.mode}: {s.fault}')
+    state['hb'] = True; spin(0.3)
     call('disarm'); call('stand'); spin(0.3)
     drives[0].send_signal(signal.SIGUSR1); spin(0.3)       # first drive stops uploading
     s = st['m']
