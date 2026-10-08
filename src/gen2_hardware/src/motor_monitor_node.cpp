@@ -1,5 +1,6 @@
 // STEP 3: read-only motor state monitor. Never transmits on the bus.
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <deque>
@@ -50,6 +51,12 @@ public:
           });
     }
     bus_->start();
+    // Legacy-MIT drives (AK45-10 wheels) answer only to commands: query them at 2 Hz with a
+    // zero-torque EXIT frame while nobody commands the bus, so they show up after boot.
+    mit_ping_timer_ = create_wall_timer(std::chrono::milliseconds(500), [this] {
+          std::string err;
+          commander_ = bus_->ping_idle_mit(err) < 0;
+        });
     last_counts_.assign(motors.size(), 0);
     rates_.assign(motors.size(), 0.0);
 
@@ -85,7 +92,7 @@ private:
         m.header.stamp = fb.realtime_ns > 0 ?
           static_cast<builtin_interfaces::msg::Time>(rclcpp::Time(fb.realtime_ns)) : arr.header.stamp;
         m.age_s = (now - fb.mono_ns) * 1e-9;
-        m.stale = m.age_s > c.feedback_stale_timeout_s;
+        m.stale = m.age_s > stale_limit(c);
         m.raw_position_deg = fb.status.position_deg;
         m.raw_speed_erpm = fb.status.speed_erpm;
         m.position_rad = c.raw_to_joint_pos(fb.raw_unwrapped());
@@ -214,7 +221,7 @@ private:
     const double age = fb.valid ? (now - fb.mono_ns) * 1e-9 : std::numeric_limits<double>::infinity();
     if (!fb.valid) {
       s.summary(DiagnosticStatus::ERROR, "no feedback (powered? id? servo upload enabled?)");
-    } else if (age > c.feedback_stale_timeout_s) {
+    } else if (age > stale_limit(c)) {
       s.summary(DiagnosticStatus::ERROR, "feedback stale");
     } else if (fb.status.error != 0) {
       s.summary(DiagnosticStatus::ERROR, std::string("drive fault: ") +
@@ -248,7 +255,16 @@ private:
       (c.verified_kt ? "kt" : ""));
   }
 
+  // Idle legacy-MIT drives are only polled at 2 Hz (see mit_ping_timer_); a commander streams.
+  double stale_limit(const MotorConfig & c) const
+  {
+    return c.protocol == "mit_legacy" && !commander_ ?
+           std::max(c.feedback_stale_timeout_s, 1.5) : c.feedback_stale_timeout_s;
+  }
+
   std::unique_ptr<MotorBus> bus_;
+  rclcpp::TimerBase::SharedPtr mit_ping_timer_;
+  bool commander_ = false;   // refreshed at 2 Hz by mit_ping_timer_ (/proc/locks)
   std::set<uint8_t> diag_ids_;
   double unconfigured_stale_s_ = 0.5;
   double unconfigured_forget_s_ = 30.0;

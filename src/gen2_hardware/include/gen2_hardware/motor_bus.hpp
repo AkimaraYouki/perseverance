@@ -75,6 +75,13 @@ public:
   // Two motor_test_nodes on one bus would both answer the same start request and drive the motor
   // twice; motor_cli + a controller would fight. Returns false (err names the holder's PID) if taken.
   bool claim_commander(std::string & err);
+  // True when some process (this one included) holds the commander lock. Read from /proc/locks,
+  // so checking never takes the lock and cannot make a starting commander fail.
+  bool commander_active() const;
+  // For read-only monitors: legacy-MIT drives answer only to commands, so an idle bus shows no
+  // feedback. Sends each mit_legacy drive the motor-mode EXIT frame (no torque; it is answered
+  // with a status reply). Skipped (returns -1) while a commander is active. Returns frames sent.
+  int ping_idle_mit(std::string & err);
   bool is_commander() const {return lock_fd_ >= 0;}
   // Adopt a wrap shift resolved elsewhere (e.g. the monitor process, which may have seen the joint pass
   // through the unambiguous band). Applied by the RX thread only while this process is not resolved.

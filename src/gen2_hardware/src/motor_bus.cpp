@@ -1,13 +1,18 @@
 #include "gen2_hardware/motor_bus.hpp"
+#include "gen2_hardware/cubemars_mit.hpp"
 
 #include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/file.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <sstream>
 
 namespace gen2_hardware
@@ -71,6 +76,39 @@ bool MotorBus::claim_commander(std::string & err)
   if (::ftruncate(fd, 0) != 0 || ::pwrite(fd, pid.data(), pid.size(), 0) < 0) {}  // PID is informational
   lock_fd_ = fd;
   return true;
+}
+
+bool MotorBus::commander_active() const
+{
+  if (lock_fd_ >= 0) {return true;}
+  struct stat st{};
+  if (::stat(("/run/lock/gen2_can_" + ifname_ + ".lock").c_str(), &st) != 0) {return false;}
+  std::ifstream f("/proc/locks");
+  std::string line;
+  while (std::getline(f, line)) {
+    char kind[16] = {0};
+    unsigned int maj = 0, min = 0;
+    unsigned long ino = 0;  // NOLINT(runtime/int): /proc/locks format
+    if (std::sscanf(line.c_str(), "%*d: %15s %*s %*s %*d %x:%x:%lu", kind, &maj, &min, &ino) == 4 &&
+      std::strcmp(kind, "FLOCK") == 0 && maj == major(st.st_dev) && min == minor(st.st_dev) &&
+      ino == static_cast<unsigned long>(st.st_ino))  // NOLINT(runtime/int)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+int MotorBus::ping_idle_mit(std::string & err)
+{
+  if (commander_active()) {return -1;}
+  if (!tx_sock_.is_open() && !tx_sock_.open(ifname_, err)) {return 0;}
+  int n = 0;
+  for (const auto & c : motors_) {
+    if (c.protocol != "mit_legacy") {continue;}
+    if (tx_sock_.write_ext(mit::exit(c.can_id), err)) {++n;} else {tx_sock_.close(); break;}
+  }
+  return n;
 }
 
 std::vector<uint8_t> MotorBus::unconfigured_ids() const
