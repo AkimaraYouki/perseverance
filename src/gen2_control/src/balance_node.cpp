@@ -231,6 +231,17 @@ public:
     srv_stand_ = srv("balance/stand", Mode::kStand);
     srv_bal_ = srv("balance/balance", Mode::kBalance);
     srv_dis_ = srv("balance/disarm", Mode::kDisarmed);
+    // START: (home if a hip zero is ambiguous) -> stand -> balance as soon as the body is upright
+    srv_start_ = create_service<std_srvs::srv::Trigger>("balance/start",
+        [this](std_srvs::srv::Trigger::Request::ConstSharedPtr, std_srvs::srv::Trigger::Response::SharedPtr rs) {
+          rs->message = request(Mode::kStand, true);
+          rs->success = rs->message.rfind("ok", 0) == 0;
+        });
+    home_tau_ = declare_parameter("home_tau_nm", 0.4);
+    home_kd_ = declare_parameter("home_kd", 0.3);
+    home_timeout_s_ = declare_parameter("home_timeout_s", 3.0);
+    auto_tilt_ = declare_parameter("start_balance_tilt_deg", 5.0) * M_PI / 180.0;
+    auto_wait_s_ = declare_parameter("start_balance_wait_s", 10.0);
     // sit: lower the body slowly to the lowest leg height (balance keeps running), then disarm
     srv_sit_ = create_service<std_srvs::srv::Trigger>("balance/sit",
         [this](std_srvs::srv::Trigger::Request::ConstSharedPtr, std_srvs::srv::Trigger::Response::SharedPtr rs) {
@@ -304,7 +315,7 @@ private:
   }
 
   // ------------------------------------------------------------------ mode requests
-  std::string request(Mode m)
+  std::string request(Mode m, bool start = false)
   {
     bool wake = false;
     {
@@ -325,9 +336,15 @@ private:
     std::string why;
     {
       std::lock_guard<std::mutex> lk(mode_m_);
-      why = arm_check();
+      why = arm_check(start);
+      if (why.empty() && start && hip_mode_ != "mit" && !hips_zero_ok()) {why = "home needs hip_mode mit";}
       if (why.empty()) {
         want_ = m;
+        last_refusal_.clear();
+        if (start) {
+          start_ = true; homing_ = !hips_zero_ok(); start_t_ = 0.0;
+          return homing_ ? "ok: start (home -> stand -> balance)" : "ok: start (stand -> balance)";
+        }
         return std::string("ok: ") + mode_name(m);
       }
       last_refusal_ = why;
@@ -336,7 +353,13 @@ private:
     return "refused: " + why;
   }
 
-  std::string arm_check()
+  bool hips_zero_ok() const
+  {
+    for (const char * n : {"leg_l", "leg_r"}) {if (!bus_->feedback(idx_.at(n)).zero_ok()) {return false;}}
+    return true;
+  }
+
+  std::string arm_check(bool start = false)
   {
     const int64_t t = now_ns();
     if ((t - hb_ns_.load()) * 1e-9 > hb_timeout_) {return "no operator heartbeat (balance/heartbeat)";}
@@ -346,7 +369,7 @@ private:
       const auto & c = bus_->motors()[kv.second];
       if (!fb.valid || (t - fb.mono_ns) * 1e-9 > motor_timeout_) {return kv.first + ": feedback not fresh";}
       if (fb.status.error) {return kv.first + ": drive fault";}
-      if (!fb.zero_ok()) {return kv.first + ": joint zero not resolved (hip_cli find)";}
+      if (!fb.zero_ok() && !(start && (kv.first == "leg_l" || kv.first == "leg_r"))) {return kv.first + ": joint zero not resolved (press START to home)";}
       if (fb.status.temperature_c > c.max_temperature_c) {return kv.first + ": over-temperature";}
     }
     if (std::fabs(pitch_) > start_tilt_ || std::fabs(roll_) > start_tilt_) {
@@ -424,6 +447,7 @@ private:
   void enter(Mode m, const std::string & why = "")
   {
     link_lost_ = false; sit_hold_ = false;
+    if (m != Mode::kStand) {start_ = false; homing_ = false;}
     if (m == Mode::kFault || m == Mode::kDisarmed) {
       zero_all();
       bus_->enable_tx(false);
@@ -513,7 +537,7 @@ private:
         if (!fb[i].valid || (t - fb[i].mono_ns) * 1e-9 > motor_timeout_) {bad = std::string(names[i]) + " feedback stale";}
         else if (fb[i].status.error) {bad = std::string(names[i]) + " drive fault " + std::to_string(fb[i].status.error);}
         else if (fb[i].status.temperature_c > c.max_temperature_c) {bad = std::string(names[i]) + " over-temperature";}
-        else if (i < 2 && !fb[i].zero_ok()) {bad = std::string(names[i]) + " zero not resolved";}
+        else if (i < 2 && !fb[i].zero_ok() && !homing_) {bad = std::string(names[i]) + " zero not resolved";}
       }
       // AK45-10 MIT replies can freeze (2026-10-08: blocked wheel + torque reversals -> replies keep coming
       // with the same position and torque, commands ignored for ~1 min, error 0). Fault when the reply
@@ -616,6 +640,49 @@ private:
       }
     }
     if (mode_ != Mode::kStand && mode_ != Mode::kBalance) {return;}
+    if (start_ && mode_ == Mode::kStand) {
+      start_t_ += 1.0 / rate_hz_;
+      if (homing_) {
+        // both hips pushed gently toward the retract stop; stalled = |Md| < 0.05 rad/s for 0.3 s
+        const bool still = std::fabs(Md[0]) < 0.05 && std::fabs(Md[1]) < 0.05;
+        home_still_ = still && start_t_ > 0.3 ? home_still_ + 1.0 / rate_hz_ : 0.0;
+        if (home_still_ > 0.3) {
+          for (int k = 0; k < 2; ++k) {
+            const std::size_t mi = idx_.at(names[k]);
+            const auto & c = bus_->motors()[mi];
+            if (fb[k].zero_ok() || !(c.wrap_deg > 0)) {continue;}
+            // candidate whose joint angle is closest to the retract stop
+            double best = 1e9, sh = 0.0;
+            for (int w = -12; w <= 12; ++w) {
+              const double j = c.raw_to_joint_pos(fb[k].status.position_deg + w * c.wrap_deg) * 180.0 / M_PI;
+              if (std::fabs(j - c.stop_min_deg) < std::fabs(best - c.stop_min_deg)) {best = j; sh = w * c.wrap_deg;}
+            }
+            bus_->adopt_unwrap(mi, sh);
+            RCLCPP_INFO(get_logger(), "%s: homed on the retract stop (%.1f deg, unwrap %+.0f)", names[k], best, sh);
+          }
+          homing_ = false; home_done_ = true; start_t_ = 0.0;
+        } else if (start_t_ > home_timeout_s_) {
+          std::lock_guard<std::mutex> lk(mode_m_);
+          enter(Mode::kFault, "home: hips did not settle on the retract stop"); want_ = Mode::kFault;
+          return;
+        }
+      } else if (home_done_) {
+        // zero adopted by the bus thread on the next reply: restart the stand ramp from the true angle
+        if (fb[0].zero_ok() && fb[1].zero_ok()) {
+          home_done_ = false; t_mode_ = 0.0;
+          for (int k = 0; k < 2; ++k) {M_start_[k] = M[k];}
+        }
+      } else if (t_mode_ > stand_ramp_s_) {
+        if (std::fabs(pitch_) < auto_tilt_ && std::fabs(roll_) < auto_tilt_) {
+          std::lock_guard<std::mutex> lk(mode_m_);
+          if (want_ == Mode::kStand) {want_ = Mode::kBalance; RCLCPP_INFO(get_logger(), "start: upright -> balance");}
+        } else if (start_t_ > stand_ramp_s_ + auto_wait_s_) {
+          start_ = false;
+          std::lock_guard<std::mutex> lk(mode_m_);
+          last_refusal_ = "start: body not upright within " + std::to_string(static_cast<int>(auto_wait_s_)) + " s (still standing)";
+        }
+      }
+    }
     if (link_lost_) {vx = wz = 0.0; vx_cmd_ = 0.0; wz_cmd_ = 0.0;}
     t_mode_ += 1.0 / rate_hz_;
     double sit_u = -1.0;     // < 0: not sitting; 0..1 ramp to the lowest height
@@ -675,12 +742,12 @@ private:
         // drive: t = t_ff + kd_drive * (0 - w_drive); it converts with its own Kt (0.6) -> scale by kt_drive / kt
         const double kt = std::isfinite(c.kt_nm_per_a) ? c.kt_nm_per_a : mit_kt_drive_;
         const double sc = mit_kt_drive_ / kt;
-        double tau = kp * (M_tgt[k] - M[k]) + ffF * interp(th[k], leg_th_, leg_dh_);
+        double tau = homing_ || home_done_ ? -home_tau_ : kp * (M_tgt[k] - M[k]) + ffF * interp(th[k], leg_th_, leg_dh_);
         const double tmax = c.current_limit_a * kt;
         tau = std::clamp(tau, -tmax, tmax);
         gen2_hardware::mit::Command mc;
         mc.t = tau * c.direction * sc;
-        mc.kd = kd * sc;
+        mc.kd = (homing_ || home_done_ ? home_kd_ : kd) * sc;
         bus_->send(gen2_hardware::mit::encode(gen2_hardware::mit::Proto::kV3, c.can_id, c.mit_ranges, mc), err);
         hip_tau_[k] = tau; hip_cur_[k] = fb[k].status.current_a;
       } else {
@@ -866,6 +933,9 @@ private:
   double frz_p_[2] = {1e9, 1e9}, frz_i_[2] = {1e9, 1e9}, frz_lo_[2] = {0, 0}, frz_hi_[2] = {0, 0};
   int64_t frz_ns_[2] = {0, 0};
   double frozen_s_ = 0.15, frozen_cmd_nm_ = 0.15;
+  bool start_ = false, homing_ = false, home_done_ = false;
+  double start_t_ = 0.0, home_still_ = 0.0, home_tau_ = 0.4, home_kd_ = 0.3, home_timeout_s_ = 3.0, auto_tilt_ = 0.087, auto_wait_s_ = 10.0;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_start_;
   bool sit_ = false, sit_hold_ = false, link_lost_ = false, link_stop_ = true;
   int64_t t_lost_ = 0;
   double link_sit_after_s_ = 2.0, link_disarm_s_ = 30.0;

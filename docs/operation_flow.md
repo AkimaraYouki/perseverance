@@ -67,3 +67,19 @@ flowchart TD
   앉은 자세면 이미 접힘 끝이라 바로 끝, 들고 있으면 다리가 접히며 끝에 닿음.
 - `pad_teleop`: sensor_msgs/Joy → cmd_vel/teleop, balance/height, balance/heartbeat (20 Hz, Joy 가 0.5 s 끊기면 멈춤), 서비스 호출.
 - 데스크톱 (Humble) 은 표준 메시지 (Joy, Twist, Float64, Empty, Trigger) 만 쓴다. 상태 표시는 ControllerState (gen2_msgs) — 안 보이면 표시만 빠짐.
+
+## 4. 실행 (2026-10-08 구현 완료)
+로봇:
+```
+ros2 launch gen2_control balance.launch.py      # balance_node + cmd_mux (sudo prlimit 로 rtprio 필요 시 gen2 서비스로)
+```
+데스크톱 (Humble, 패드):
+```
+ros2 run joy joy_node                     # ros-humble-joy
+ros2 run gen2_tools pad_teleop            # 패드 배치가 다르면 --ros-args -p vx_axis:=1 -p wz_axis:=3 ...
+```
+데스크톱 / SSH (키보드): `ros2 run gen2_tools balance_cli`
+- START / g → (영점 애매하면 HOME: 고관절 −0.4 N·m 접기, 멈춤 0.3 s → 접힘 끝으로 확정, 3 s 넘으면 fault) → STAND 2 s 램프 →
+  pitch·roll ≤ 5° 이면 스스로 BALANCE (10 s 안에 못 세우면 STAND 유지 + 안내).
+- 시험: 가상 CAN itest 20/20 (START → stand → 자동 balance), pad_teleop 가짜 Joy 시험 (START·BACK 엣지, 스틱, A 정지, LB+RB 0.5 s 해제, Joy 끊김 → heartbeat 0.5 s 뒤 멈춤).
+- HOME 은 실기 확인 전 (가상 드라이브에 기계 끝이 없어 시험 못 함).

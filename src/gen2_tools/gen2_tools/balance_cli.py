@@ -4,9 +4,10 @@
 Sends balance/heartbeat at 20 Hz while running (balance_node stops and sits if this console stops) and
 cmd_vel/teleop (cmd_mux forwards it to cmd_vel with the LiDAR safety limit; run balance.launch.py).
 Keys (no Enter needed):
-  t        stand   (hips hold the IDLE height, wheels off)  — hold the robot!
-  b        balance (wheel LQR + leg VMC)
-  SPACE/x  DISARM  (0 A everywhere)        q  quit (disarms)
+  g        START: (home hips if needed) -> stand -> balance by itself once upright — hold the robot upright!
+  x        sit down slowly, then disarm
+  SPACE    DISARM  (0 A everywhere — the robot drops)        q  quit (disarms)
+  t / b    stand only / balance only (tests)
   w / s    forward / backward speed +-0.1 m/s     a / d   turn left / right +-0.3 rad/s
   r / f    body height +-10 mm (balance only, 133..233 mm)
   0        zero the speed / turn command
@@ -34,7 +35,7 @@ def main():
     hp = n.create_publisher(Float64, 'balance/height', 10)
     st = {'m': None}
     n.create_subscription(ControllerState, 'controller/state', lambda m: st.__setitem__('m', m), 10)
-    cli = {k: n.create_client(Trigger, f'balance/{k}') for k in ('stand', 'balance', 'disarm')}
+    cli = {k: n.create_client(Trigger, f'balance/{k}') for k in ('stand', 'balance', 'disarm', 'start', 'sit')}
     vx, wz, h = 0.0, 0.0, 0.1825
     run = [True]
 
@@ -67,8 +68,12 @@ def main():
                 c = sys.stdin.read(1)
                 if c == 'q':
                     break
-                if c in (' ', 'x'):
+                if c == ' ':
                     vx = wz = 0.0; msg = call('disarm')
+                elif c == 'g':
+                    vx = wz = 0.0; msg = call('start')
+                elif c == 'x':
+                    vx = wz = 0.0; msg = call('sit')
                 elif c == 't':
                     msg = call('stand')
                 elif c == 'b':

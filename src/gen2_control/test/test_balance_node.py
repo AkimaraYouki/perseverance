@@ -45,7 +45,7 @@ imu_pub = n.create_publisher(Imu, 'imu/data', rclpy.qos.qos_profile_sensor_data)
 hb = n.create_publisher(Empty, 'balance/heartbeat', 10)
 st = {'m': None}
 n.create_subscription(ControllerState, 'controller/state', lambda x: st.__setitem__('m', x), 10)
-srv = {k: n.create_client(Trigger, f'balance/{k}') for k in ('stand', 'balance', 'disarm')}
+srv = {k: n.create_client(Trigger, f'balance/{k}') for k in ('stand', 'balance', 'disarm', 'start')}
 state = {'pitch': 0.0, 'imu': True, 'hb': True}
 res = []
 
@@ -156,6 +156,14 @@ try:
     s = st['m']
     check('motor feedback stale -> fault', s.mode == 'fault' and 'stale' in s.fault, f'{s.mode}: {s.fault}')
     drives[0].send_signal(signal.SIGUSR1)
+    call('disarm'); state['pitch'] = 0.0; spin(0.5)
+    r = call('start'); spin(1.0)
+    s = st['m']
+    check('START (zeros resolved) -> stand first', r.success and s.mode == 'stand', f'{r.message}, {s.mode}')
+    spin(2.5)
+    s = st['m']
+    check('START -> balance by itself once the ramp is done and the body is upright', s.mode == 'balance', f'{s.mode}: {s.fault}')
+    call('disarm'); spin(0.5)
     spin(1.5)
     logs_ = sorted(os.listdir(STEPDIR))
     rows = sum(len(open(os.path.join(STEPDIR, f)).read().splitlines()) - 1 for f in logs_)
