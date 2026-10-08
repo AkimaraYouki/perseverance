@@ -17,6 +17,12 @@
 
 <sub>Isaac Lab, 실시간 1×. 실기와 같은 제어기, 실측 바퀴 마찰·모델 오차·센서 잡음 포함 (`pv demo <scene> --record`).</sub>
 
+<p align="center">
+  <img src="docs/media/real_balance.gif" height="460" alt="실기 밸런싱 테스트">
+</p>
+<p align="center"><sub><b>실기 밸런싱 테스트 (2026-10-08)</b> — LQR + VMC, MIT 바퀴, 200 Hz. 손으로 밀어도 제자리에서 균형을 되찾는다.
+원본: <a href="docs/video/밸런싱테스트.mp4"><code>docs/video/밸런싱테스트.mp4</code></a></sub></p>
+
 ---
 
 ## 1. 연구 질문
