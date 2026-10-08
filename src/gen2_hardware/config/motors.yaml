@@ -143,7 +143,7 @@
         gear_ratio: 6.0             # AK60-6 = 6:1
         raw_deg_per_output_rev: 360.0  # VERIFY (scale check)
         direction: -1              # hip_cli 2026-10-07: + = leg extends (sim M)
-        position_offset_rad: 0.131772   # 2026-10-08: link slipped +30.55 deg on the output after a 9.9 A push (end stops re-measured; was -0.401426)
+        position_offset_rad: -0.401426  # hip_cli 2026-10-07 CAD zero (theta 45 deg). 2026-10-08: +30.55 after a slip, back to this after the next boot (sitting read +18.5 = 30 deg high)
         kt_nm_per_a: 0.81           # PROVISIONAL 2026-10-07: product page 0.135 x 6 (manual table 0.5994 is 35 % off;
                                     # hanging-leg test -> 0.67–0.82). Confirm with the weight-difference test.
         current_limit_a: 10.0       # datasheet peak current 10.3 A @24 V (x 0.81 = 8.1 N·m), desktop 2026-10-07
