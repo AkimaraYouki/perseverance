@@ -85,6 +85,8 @@ TUNE = dict(
                          #   밀림에도 걸린다. 점프 착지 뒤 1 s 는 안 봄. HUD SPEED 줄에 BUMP
     bump_rate=1.5, bump_acc=4.0, bump_hold_s=2.0, bump_vmax=0.45,
     yaw_kd=0.5,          # 회전: 좌우 바퀴 토크 차 = yaw_kd x (명령 - 실제 yaw rate) [N·m·s/rad]
+    yaw_ki=0.0,          # 회전 적분 [N·m/rad] (0 = 끔): 회전 속도 오차를 적분해 차동 토크에 더함 = 방향각 오차 비례. 실기 제자리 회전 (2026-10-08)
+    yaw_i_max=0.5,       # 회전 적분 한계 [N·m]
     vmc_kp=60.0,         # 다리 가상 스프링 [N·m/rad, 관절] (바퀴에서 약 4.5 kN/m. 30 은 좌우 수평이 못 따라가 넘어짐). 자중은 피드포워드로 따로 받친다
     vmc_kd=1.0,          # 다리 가상 댐퍼 [N·m·s/rad]
     turn_lean=1.0,       # 회전 중 안쪽 기울기 비율: roll 목표 = atan(turn_lean x v x wz / g) (Ascento lean 모드). 0 = 수평 유지

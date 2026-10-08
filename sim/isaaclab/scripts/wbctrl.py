@@ -89,7 +89,7 @@ class WBController:
         m = np.ones(n, bool) if mask is None else np.asarray(mask, bool)
         z = lambda name: np.where(m, 0.0, getattr(self, name, np.zeros(n)))  # noqa: E731
         for k in ("t_phase", "x_err", "t_un", "t_ld", "g_vf", "g_i", "g_ref", "bump_t", "bump_quiet", "vf", "rf",
-                  "th_bias", "v_prev", "t_takeoff", "vh"):
+                  "th_bias", "v_prev", "t_takeoff", "vh", "yaw_i"):
             setattr(self, k, z(k))
         self.phase = np.where(m, DRIVE, getattr(self, "phase", np.zeros(n, int))).astype(int)
         self.next_edge = np.where(m, 0, getattr(self, "next_edge", np.zeros(n, int))).astype(int)
@@ -259,7 +259,10 @@ class WBController:
             v_cmd = np.minimum(np.abs(vx), vm)
             wz_lim = np.maximum(0.5, (P.wheel_margin * w_max * R_WHEEL - v_cmd) / HALF_TRACK)
             wz = np.where(ctl, np.clip(wz, -wz_lim, wz_lim), wz)
-        tau_y = P.yaw_kd * (wz - wz_now)
+        e_y = wz - wz_now
+        yi = getattr(P, "yaw_ki", 0.0)                           # 회전 적분 (2026-10-08 실기 제자리 회전: yaw_kd 를 낮추면 바퀴 정지마찰에 막힘)
+        self.yaw_i = np.where(ctl & (yi > 0), np.clip(self.yaw_i + yi * e_y * DT, -P.yaw_i_max, P.yaw_i_max), 0.0) if yi > 0 else self.yaw_i
+        tau_y = P.yaw_kd * e_y + (self.yaw_i if yi > 0 else 0.0)
         act[:, 2] = np.where(ctl, np.clip((0.5 * tau_w - tau_y) / P.wheel_tau_max, -1.0, 1.0), 0.0)
         act[:, 3] = np.where(ctl, np.clip((0.5 * tau_w + tau_y) / P.wheel_tau_max, -1.0, 1.0), 0.0)
         self.g_vf, self.g_i, self.g_ref = (np.where(ctl, a, b) for a, b in ((g_vf, self.g_vf), (g_i, self.g_i), (g_ref, self.g_ref)))
