@@ -1,9 +1,12 @@
 # PERSEVERANCE Gen2 — 4절 링크 바퀴형 이족 로봇
 
 <p align="center">
-  <img src="docs/media/robot_cad_front.png" height="300" alt="PERSEVERANCE Gen2 CAD, 정면">
-  <img src="docs/media/robot_cad_inside.png" height="300" alt="PERSEVERANCE Gen2 CAD, 전장부">
+  <img src="docs/media/real_balance.gif" height="320" alt="실기 밸런싱 테스트">
+  <img src="docs/media/robot_cad_front.png" height="320" alt="PERSEVERANCE Gen2 CAD, 정면">
+  <img src="docs/media/robot_cad_inside.png" height="320" alt="PERSEVERANCE Gen2 CAD, 전장부">
 </p>
+<p align="center"><sub><b>왼쪽: 실기 밸런싱 테스트 (2026-10-08)</b> — LQR + VMC, MIT 바퀴, 200 Hz. 손으로 밀어도 제자리에서 균형을 되찾는다
+(<a href="docs/video/밸런싱테스트.mp4">원본 영상</a>). 가운데·오른쪽: CAD.</sub></p>
 
 **LQR 과 가상 모델 제어(VMC)를 이용한 4절 링크 바퀴형 이족 로봇의 균형 및 주행 제어**
 *Balance and locomotion control of a wheeled bipedal robot with four-bar legs using LQR and virtual model control.*
@@ -16,12 +19,6 @@
 | ![rough](docs/media/sim_rough.gif) | ![steer](docs/media/sim_steer.gif) | ![jump](docs/media/sim_jump.gif) |
 
 <sub>Isaac Lab, 실시간 1×. 실기와 같은 제어기, 실측 바퀴 마찰·모델 오차·센서 잡음 포함 (`pv demo <scene> --record`).</sub>
-
-<p align="center">
-  <img src="docs/media/real_balance.gif" height="460" alt="실기 밸런싱 테스트">
-</p>
-<p align="center"><sub><b>실기 밸런싱 테스트 (2026-10-08)</b> — LQR + VMC, MIT 바퀴, 200 Hz. 손으로 밀어도 제자리에서 균형을 되찾는다.
-원본: <a href="docs/video/밸런싱테스트.mp4"><code>docs/video/밸런싱테스트.mp4</code></a></sub></p>
 
 ---
 
