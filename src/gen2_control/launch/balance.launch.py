@@ -16,4 +16,7 @@ def generate_launch_description():
         files.append(tables)
         files.append(os.path.join(c, 'config', 'balance_gains_robot.yaml'))   # robot-tuned lqr_k (needs the tables)
     return LaunchDescription([Node(package='gen2_control', executable='balance_node', name='balance',
-                                   parameters=files, output='screen')])
+                                   parameters=files, output='screen'),
+                              # cmd_vel/teleop + cmd_vel/auto -> LiDAR safety -> cmd_vel
+                              Node(package='gen2_tools', executable='cmd_mux', name='cmd_mux',
+                                   parameters=[os.path.join(c, 'config', 'cmd_mux.yaml')], output='screen')])

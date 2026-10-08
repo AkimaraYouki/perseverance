@@ -23,5 +23,6 @@ setup(
         'hip_cli = gen2_tools.hip_cli:main',
         'imu_cal = gen2_tools.imu_cal:main',
         'balance_cli = gen2_tools.balance_cli:main',
+        'cmd_mux = gen2_tools.cmd_mux:main',
     ]},
 )

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Operator console for gen2_control balance_node.
 
-Sends balance/heartbeat at 20 Hz while running (the node faults if this console stops) and cmd_vel.
+Sends balance/heartbeat at 20 Hz while running (balance_node stops and sits if this console stops) and
+cmd_vel/teleop (cmd_mux forwards it to cmd_vel with the LiDAR safety limit; run balance.launch.py).
 Keys (no Enter needed):
   t        stand   (hips hold the IDLE height, wheels off)  — hold the robot!
   b        balance (wheel LQR + leg VMC)
@@ -29,7 +30,7 @@ def main():
     rclpy.init()
     n = rclpy.create_node('balance_cli')
     hb = n.create_publisher(Empty, 'balance/heartbeat', 10)
-    cmd = n.create_publisher(Twist, 'cmd_vel', 10)
+    cmd = n.create_publisher(Twist, 'cmd_vel/teleop', 10)   # via cmd_mux (LiDAR safety) to balance_node
     hp = n.create_publisher(Float64, 'balance/height', 10)
     st = {'m': None}
     n.create_subscription(ControllerState, 'controller/state', lambda m: st.__setitem__('m', m), 10)
