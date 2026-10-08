@@ -31,7 +31,7 @@ WBCore::WBCore(const Params & p, const LqrTable & lqr)
 
 void WBCore::reset()
 {
-  x_err_ = t_un_ = t_ld_ = g_vf_ = g_i_ = g_ref_ = vf_ = rf_ = th_bias_ = v_prev_ = roll_i_ = 0.0;
+  x_err_ = t_un_ = t_ld_ = g_vf_ = g_i_ = g_ref_ = vf_ = rf_ = th_bias_ = v_prev_ = roll_i_ = yaw_i_ = 0.0;
   lift_on_ = false;
   wf_[0] = wf_[1] = db_e_[0] = db_e_[1] = 0.0;
 }
@@ -98,7 +98,8 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
     const double wz_lim = std::max(0.5, (P.wheel_margin * w_max * P.r_wheel - v_cmd) / kHalfTrack);
     wz = clip(wz, -wz_lim, wz_lim);
   }
-  const double tau_y = P.yaw_kd * (wz - wz_now);
+  yaw_i_ = clip(yaw_i_ + P.yaw_ki * (wz - wz_now) * kDt, -P.yaw_i_max, P.yaw_i_max);
+  const double tau_y = P.yaw_kd * (wz - wz_now) + yaw_i_;
   double act[4] = {0, 0, 0, 0};
   act[2] = clip((0.5 * tau_w - tau_y) / P.wheel_tau_max, -1.0, 1.0);
   act[3] = clip((0.5 * tau_w + tau_y) / P.wheel_tau_max, -1.0, 1.0);
@@ -121,7 +122,7 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
       act[2 + k] = clip(-P.lift_wheel_kd * f.w_wheel_joint[k] / P.wheel_tau_max, -1.0, 1.0);
       act[k] = (P.idle_h - h_ref) / 0.12;
     }
-    roll_i_ = 0.0; x_err_ = 0.0; g_i_ = g_ref_ = g_vf_ = 0.0;
+    roll_i_ = 0.0; x_err_ = 0.0; g_i_ = g_ref_ = g_vf_ = 0.0; yaw_i_ = 0.0;
   }
   const bool drv = !lift_on_;
   const double roll_ref = clip(std::atan(P.turn_lean * g_ref_ * wz / 9.81), -20.0 * M_PI / 180.0, 20.0 * M_PI / 180.0);

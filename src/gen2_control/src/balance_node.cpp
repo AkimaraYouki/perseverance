@@ -145,6 +145,8 @@ public:
     P.roll_kd = declare_parameter("tune.roll_kd", P.roll_kd);
     P.turn_lean = declare_parameter("tune.turn_lean", P.turn_lean);
     P.yaw_kd = declare_parameter("tune.yaw_kd", P.yaw_kd);
+    P.yaw_ki = declare_parameter("tune.yaw_ki", P.yaw_ki);
+    P.yaw_i_max = declare_parameter("tune.yaw_i_max", P.yaw_i_max);
     P.m_pend = model_ok_ ? m_pend_ : P.m_pend;
     // wheels in MIT (legacy AK45-10 firmware): no 0.5 A deadband -> no sigma-delta compensation
     for (const auto & c : motors) {

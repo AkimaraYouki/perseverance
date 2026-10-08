@@ -12,7 +12,8 @@ balance:
     heartbeat_timeout_s: 0.5  # operator tool must publish balance/heartbeat
     cmd_timeout_s: 0.5        # cmd_vel watchdog -> 0
     stand_ramp_s: 2.0         # stand: current leg height -> idle_h
-    th_trim_deg: 1.9          # balance-point trim, + = lean back. 2026-10-08 hands-off 20 s (MIT wheels, robot LQR): 2.0 -> bias adapt ran to -1.4 deg; 1.9 -> bias stays ~0
+    th_trim_deg: 3.7          # balance-point trim, + = lean back. 2026-10-08: with Kx -3 the robot parked 0.15-0.2 m ahead at ~-2 deg;
+                              # desktop: theta_err = -(Kx/Ktheta) x -> 1.8 deg short -> 3.7 (1.9 before)
     stand_feedforward: true   # stand: + weight feed-forward (0.5 m g per leg, via dh/dtheta) — current_pd only
     hip_mode: mit             # mit (kd in the drive, kp + ff from here) | servo_pos (drive position loop) | current_pd (host PD, shook at 200 Hz)
     mit_kt_drive: 0.5994      # Kt the AK60-6 drive uses inside MIT (0.5 N·m -> 0.83 A measured 2026-10-07)
@@ -31,6 +32,8 @@ balance:
       vmax_kmh: 3.5
       fric_comp_nm: 0.0       # 2026-10-08 MIT wheels: 0.11 (velocity-sign Coulomb comp) drove a 12-15 Hz wheel chatter; 0 = quiet
       yaw_kd: 0.15            # 2026-10-08 MIT wheels: 0.5 (sim) gave a 13 Hz L/R torque chatter; 0.15 quiet
+      yaw_ki: 1.0             # desktop 2026-10-08 (sim): kd 0.15 alone stalls on stiction (0.02 rad/s of 0.5); + ki 1.0 -> 0.44-0.48, pivot 4-6 cm
+      yaw_i_max: 0.5
       db_comp: 2              # 0 off, 1 boost, 2 sigma
       db_comp_nm: 0.65
       wheel_lpf_hz: 20.0
