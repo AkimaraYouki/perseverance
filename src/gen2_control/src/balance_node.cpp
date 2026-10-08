@@ -119,6 +119,8 @@ public:
     // operator link lost while balancing: stop (vx, wz = 0) -> after link_sit_after_s sit down and keep
     // balancing low -> disarm after link_disarm_s (desktop 2026-10-08: 0 A at once tips the robot over)
     link_stop_ = declare_parameter("link_loss_stop", true);
+    frozen_s_ = declare_parameter("wheel_frozen_s", 0.15);
+    frozen_cmd_nm_ = declare_parameter("wheel_frozen_cmd_nm", 0.15);
     link_sit_after_s_ = declare_parameter("link_sit_after_s", 2.0);
     link_disarm_s_ = declare_parameter("link_disarm_s", 30.0);
     cmd_timeout_ = declare_parameter("cmd_timeout_s", 0.5);
@@ -513,6 +515,22 @@ private:
         else if (fb[i].status.temperature_c > c.max_temperature_c) {bad = std::string(names[i]) + " over-temperature";}
         else if (i < 2 && !fb[i].zero_ok()) {bad = std::string(names[i]) + " zero not resolved";}
       }
+      // AK45-10 MIT replies can freeze (2026-10-08: blocked wheel + torque reversals -> replies keep coming
+      // with the same position and torque, commands ignored for ~1 min, error 0). Fault when the reply
+      // stays bit-identical for frozen_s while the commanded torque moved by more than frozen_cmd_nm.
+      if (i >= 2 && mode_ == Mode::kBalance) {
+        const int w = i - 2;
+        const double cmd = wheel_tau_[w];
+        if (fb[i].status.position_deg == frz_p_[w] && fb[i].status.current_a == frz_i_[w]) {
+          frz_lo_[w] = std::min(frz_lo_[w], cmd); frz_hi_[w] = std::max(frz_hi_[w], cmd);
+          if (bad.empty() && (t - frz_ns_[w]) * 1e-9 > frozen_s_ && frz_hi_[w] - frz_lo_[w] > frozen_cmd_nm_) {
+            bad = std::string(names[i]) + " replies frozen (drive ignores commands)";
+          }
+        } else {
+          frz_p_[w] = fb[i].status.position_deg; frz_i_[w] = fb[i].status.current_a; frz_ns_[w] = t;
+          frz_lo_[w] = frz_hi_[w] = cmd;
+        }
+      }
     }
     double th[2], Md[2];
     double * M = M_;
@@ -845,6 +863,9 @@ private:
   double h_set_ = -1.0, h_rate_ = 0.05, sit_h0_ = 0.0;
   rclcpp::Subscription<gen2_msgs::msg::MotorStateArray>::SharedPtr ms_sub_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_stand_, srv_bal_, srv_dis_, srv_sit_;
+  double frz_p_[2] = {1e9, 1e9}, frz_i_[2] = {1e9, 1e9}, frz_lo_[2] = {0, 0}, frz_hi_[2] = {0, 0};
+  int64_t frz_ns_[2] = {0, 0};
+  double frozen_s_ = 0.15, frozen_cmd_nm_ = 0.15;
   bool sit_ = false, sit_hold_ = false, link_lost_ = false, link_stop_ = true;
   int64_t t_lost_ = 0;
   double link_sit_after_s_ = 2.0, link_disarm_s_ = 30.0;
