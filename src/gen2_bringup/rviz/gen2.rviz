@@ -1,0 +1,61 @@
+# C-WANG RViz (run on the desktop: rviz2 -d gen2.rviz). Until the robot publishes TF the fixed frame is
+# the LiDAR's own frame "laser" (x = robot front, verified 2026-10-08). Camera needs
+# ros-jazzy-image-transport-plugins on the desktop (topic is JPEG compressed).
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 0.25
+      Plane Cell Count: 16
+      Reference Frame: <Fixed Frame>
+    - Class: rviz_default_plugins/Axes
+      Name: LiDAR axes
+      Enabled: true
+      Length: 0.2
+      Radius: 0.01
+      Reference Frame: laser
+    - Class: rviz_default_plugins/LaserScan
+      Name: LiDAR
+      Enabled: true
+      Topic:
+        Value: /scan
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 5
+      Style: Points
+      Size (Pixels): 4
+      Color Transformer: Intensity
+      Decay Time: 0
+    - Class: rviz_default_plugins/Image
+      Name: Camera
+      Enabled: true
+      Topic:
+        Value: /camera/image_raw
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 1
+      Transport Hint: compressed
+  Global Options:
+    Fixed Frame: laser
+    Frame Rate: 30
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Measure
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Top
+      Scale: 150
+      X: 0
+      Y: 0
+      Angle: 0
+Window Geometry:
+  Width: 1400
+  Height: 900
