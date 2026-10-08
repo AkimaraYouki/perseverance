@@ -163,6 +163,9 @@ try:
     spin(2.5)
     s = st['m']
     check('START -> balance by itself once the ramp is done and the body is upright', s.mode == 'balance', f'{s.mode}: {s.fault}')
+    r = call('start'); spin(0.5)
+    s = st['m']
+    check('START again while balancing is ignored (stays in balance)', r.success and s.mode == 'balance', f'{r.message}, {s.mode}')
     call('disarm'); spin(0.5)
     spin(1.5)
     logs_ = sorted(os.listdir(STEPDIR))

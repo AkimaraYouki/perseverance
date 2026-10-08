@@ -328,6 +328,10 @@ private:
       }
       if (m == Mode::kBalance && !model_ok_) {return "refused: model tables missing (sim/model/balance_tables.yaml)";}
       if (mode_ == Mode::kFault) {return "refused: in fault (" + fault_ + "), disarm first";}
+      // START while already up must not drop to stand (wheels off -> the robot falls, seen 2026-10-08)
+      if (start && (mode_ == Mode::kBalance || want_ == Mode::kBalance || (mode_ == Mode::kStand && start_))) {
+        return "ok: already running";
+      }
       wake = mode_ == Mode::kDisarmed;
     }
     // MIT wheels: wake them without holding the mode lock (the 200 Hz loop takes it every step)
