@@ -75,6 +75,9 @@ TUNE = dict(
     bal_adapt=0.3,       # 균형점 자동 보정 [1/s]: 서 있거나 일정 속도일 때 추정 진자각 평균을 천천히 학습해 뺀다
                          #   (무게중심 오차 2 cm = 약 4.6 deg, IMU 바이어스도 같이). 0 = 끔
     bal_adapt_max_deg=8.0, # 보정 한계 [deg]
+    bal_adapt_mode="theta",  # theta: 멈춰 섰을 때 진자각 평균을 배움 (지금 실기) | torque: 토크 평형으로 무게중심 치우침 추정 (움직일 때도, 2026-10-08)
+    bal_adapt_acc_hz=2.0,    # torque: 바퀴축 가속 저역통과 [Hz]
+    bal_adapt_acc_max=0.3,   # torque: 이보다 크게 가속하는 동안은 학습 안 함 [m/s^2]
     brake_kp=1.0,        # 최고 속도 초과 브레이크 P: 한계 = 최고 - (kp x 초과 + 적분). 켜고 끄지 않고 부드럽게 조인다
     brake_ki=5.5,        # 브레이크 I [1/s]: 내리막에서 필요한 제동량을 찾아가고, 속도가 내려가면 서서히 풀린다
     speed_lpf_hz=4.0,    # 브레이크가 보는 속도 필터 [Hz]

@@ -36,7 +36,7 @@ def load_tune():
 
 
 TUNE = load_tune()
-SCEN = ("flat_stop", "turn", "ridges", "ramp", "jump", "hand10", "hand20", "stones8", "oneside8", "stones_turn", "fast_turn")
+SCEN = ("flat_stop", "turn", "ridges", "ramp", "jump", "hand10", "hand20", "stones8", "oneside8", "stones_turn", "fast_turn", "com_hold")
 ap = argparse.ArgumentParser()
 ap.add_argument("--scenario", choices=SCEN, required=True)
 ap.add_argument("--n", type=int, default=8)
@@ -87,6 +87,7 @@ spec = dict(
     oneside8=dict(sec=14.0, v=0.4, gen=("oneside_stones", 0.08)),     # 왼쪽 바퀴 차선만 둥근 돌 8 cm (두 바퀴 높이 다름)
     stones_turn=dict(sec=12.0, v=P.vmax_kmh / 3.6, gen=("stones", 0.08), wz_const=2.5),   # 자갈길 최고 속도 급회전 (패드에서 넘어진 상황)
     fast_turn=dict(sec=12.0, v=P.vmax_kmh / 3.6, turns=(2.0, 1.5, 1.5)),   # 평지 최고 속도: 2 s 직진 뒤 스틱 끝 회전 1.5 s / 직진 1.5 s 좌우 번갈아 (패드, 2026-09-28)
+    com_hold=dict(sec=30.0, v=0.3, stop_at=12.0),                   # 무게중심 적응 (2026-10-08, 기본 세트 밖): 0.3 m/s 12 s 뒤 18 s 서 있기
 )[SC]
 
 
@@ -260,7 +261,7 @@ dt = env.step_dt
 steps = int(spec["sec"] / dt)
 fell_t = [None] * N
 xmax = np.full(N, -9.0)
-rec = [dict(pitch=[], roll=[], v=[]) for _ in range(N)]
+rec = [dict(pitch=[], roll=[], v=[], therr=[], x=[], tb=[]) for _ in range(N)]
 grab = None
 t0 = time.time()
 with torch.inference_mode():
@@ -336,6 +337,9 @@ with torch.inference_mode():
             for i in np.flatnonzero(alive):
                 rec[i]["pitch"].append(math.degrees(info["pitch"][i])); rec[i]["roll"].append(math.degrees(info["roll"][i]))
                 rec[i]["v"].append(float(vt_[i]))
+                rec[i]["therr"].append(math.degrees(float(info["th"][i] - tht_[i])))   # 보정 뒤 진자각 - 참값 (평형각 정렬 오차)
+                rec[i]["tb"].append(math.degrees(float(info["th_bias"][i])))
+                rec[i]["x"].append(float(wx[i]))
                 xmax[i] = max(xmax[i], wx[i])
         if pol is None:
             cmd.set(torch.full((N,), float(vx), device=dev), torch.zeros(N, device=dev), torch.full((N,), P.idle_h, device=dev),
@@ -395,13 +399,17 @@ for i in range(N):
     rows.append(dict(i=i, ok=bool(ok), fell_t=fell_t[i], xmax=round(float(xmax[i]), 2), dr=dr[i],
                      pitch95=round(float(np.percentile(pr, 95)), 1) if len(pr) else None,
                      roll95=round(float(np.percentile(rr, 95)), 1) if len(rr) else None,
-                     jumps=CTRL.jumps[i] if pol is None else []))
+                     jumps=CTRL.jumps[i] if pol is None else [],
+                     # 평형각 정렬 오차 [deg]: 마지막 3 s 평균 (보정 뒤 진자각 - 참값), 서 있는 동안 위치 표류 [m]: 마지막 10 s 의 x 범위
+                     therr_end=round(float(np.mean(rec[i]["therr"][-600:])), 2) if len(rec[i]["therr"]) else None,
+                     th_bias_end=round(float(rec[i]["tb"][-1]), 2) if len(rec[i]["tb"]) else None,
+                     x_wander=round(float(np.ptp(rec[i]["x"][-2000:])), 3) if len(rec[i]["x"]) else None))
 npass = sum(r["ok"] for r in rows)
 wall = time.time() - t0
 print(f"\n[{SC}] 통과 {npass}/{N}   (시뮬 {spec['sec']:.0f} s, 실제 {wall:.0f} s)", flush=True)
 for r in rows:
     print(f"  #{r['i']} {'통과' if r['ok'] else '실패'}  넘어짐 {r['fell_t']}  x최대 {r['xmax']:.2f}  pitch95 {r['pitch95']}  roll95 {r['roll95']}  "
-          f"| 질량 x{r['dr']['mass']} 무게중심 x{r['dr']['com_x_cm']:+.1f} z{r['dr']['com_z_cm']:+.1f} cm 모터 x{r['dr']['wheel_motor']}", flush=True)
+          f"정렬오차 {r['therr_end']}° bias {r['th_bias_end']}° 표류 {r['x_wander']} m | 질량 x{r['dr']['mass']} 무게중심 x{r['dr']['com_x_cm']:+.1f} z{r['dr']['com_z_cm']:+.1f} cm 모터 x{r['dr']['wheel_motor']}", flush=True)
 out = args.out or os.path.expanduser(f"~/pv_out/robust/{SC}.json")
 os.makedirs(os.path.dirname(out), exist_ok=True)
 json.dump(dict(scenario=SC, n=N, seed=args.seed, npass=npass, tune={k: getattr(args, k) for k in TUNE}, rows=rows),

@@ -90,7 +90,7 @@ class WBController:
         m = np.ones(n, bool) if mask is None else np.asarray(mask, bool)
         z = lambda name: np.where(m, 0.0, getattr(self, name, np.zeros(n)))  # noqa: E731
         for k in ("t_phase", "x_err", "t_un", "t_ld", "g_vf", "g_i", "g_ref", "bump_t", "bump_quiet", "vf", "rf",
-                  "th_bias", "v_prev", "t_takeoff", "vh", "yaw_i"):
+                  "th_bias", "v_prev", "t_takeoff", "vh", "yaw_i", "acc_f"):
             setattr(self, k, z(k))
         self.phase = np.where(m, DRIVE, getattr(self, "phase", np.zeros(n, int))).astype(int)
         self.next_edge = np.where(m, 0, getattr(self, "next_edge", np.zeros(n, int))).astype(int)
@@ -168,10 +168,23 @@ class WBController:
         # 균형점 자동 보정: 멈춰 서 있고 흔들림이 작을 때 (참 진자각 = 0 이어야 하는 순간) 추정 진자각을 천천히 학습
         # (경사를 일정 속도로 오를 땐 앞으로 숙이는 게 정상이라 그걸 오차로 배우면 안 됨 — pv robust 경사로 2/8)
         acc_ = (v_now - self.v_prev) / DT; self.v_prev = v_now  # noqa: E702
-        ad = ((P.bal_adapt > 0) & (self.phase == DRIVE) & ~self.lift_on & (np.abs(acc_) < 0.3) & (np.abs(thd) < 0.3)
-              & (np.abs(v_now) < 0.05) & (np.abs(vx) < 0.02))
         lim = math.radians(P.bal_adapt_max_deg)
-        self.th_bias = np.where(ad, np.clip(self.th_bias + P.bal_adapt * DT * (th - self.th_bias), -lim, lim), self.th_bias)
+        if getattr(P, "bal_adapt_mode", "theta") == "torque":
+            # COM 추정 (2026-10-08): 정상 상태의 몸통 토크 평형 m·g·l·sin θ_true = τ_w + m·l·a  ->  θ_true = asin(τ_w/(m g l)) + a/g.
+            # τ_w = 직전에 낸 바퀴 토크 합 (몸통이 받는 반작용), a = 바퀴축 가속 (속도 미분 저역통과).
+            # 측정 진자각 - θ_true = 평형각 치우침 (무게중심·IMU 장착 오차) 을 저역통과로 배운다.
+            # 'theta' 와 달리 정지마찰로 바퀴가 토크를 문 채 서 있어도, 일정 속도로 달려도 맞다 -> 움직이는 동안에도 학습.
+            ka = 1.0 - math.exp(-2 * math.pi * P.bal_adapt_acc_hz * DT)
+            self.acc_f = self.acc_f + ka * (acc_ - self.acc_f)
+            tau_prev = self.uq[-1]
+            th_true = np.arcsin(np.clip(tau_prev / (self.m_pend * 9.81 * np.maximum(l_p, 0.05)), -0.5, 0.5)) + self.acc_f / 9.81
+            ad = ((P.bal_adapt > 0) & (self.phase == DRIVE) & ~self.lift_on & (np.abs(self.acc_f) < P.bal_adapt_acc_max)
+                  & (np.abs(thd) < 0.3) & (np.abs(wz_now) < 0.5))
+            self.th_bias = np.where(ad, np.clip(self.th_bias + P.bal_adapt * DT * ((th - th_true) - self.th_bias), -lim, lim), self.th_bias)
+        else:
+            ad = ((P.bal_adapt > 0) & (self.phase == DRIVE) & ~self.lift_on & (np.abs(acc_) < 0.3) & (np.abs(thd) < 0.3)
+                  & (np.abs(v_now) < 0.05) & (np.abs(vx) < 0.02))
+            self.th_bias = np.where(ad, np.clip(self.th_bias + P.bal_adapt * DT * (th - self.th_bias), -lim, lim), self.th_bias)
         th = th - self.th_bias
         w_max = W_WHEEL_MAX * motor_scale
         a_r = 1.0 - math.exp(-2 * math.pi * P.roll_rate_lpf_hz * DT) if P.roll_rate_lpf_hz > 0 else 1.0
@@ -367,7 +380,7 @@ class WBController:
             dly = int(round(P.delay_ms / 5.0)) + (self.rng.random(n) < P.jitter_ms / 5.0)
             k = np.maximum(0, len(self.q) - 1 - dly)
             act = np.stack([self.q[k[i]][i] for i in range(n)]) if n < 64 else self._gather(k)
-        return act, leg_kp, leg_kd, ffF, dict(th=th, thd=thd, v=v_now, pitch=S["pitch"], roll=S["roll"], **self.dbg)
+        return act, leg_kp, leg_kd, ffF, dict(th=th, thd=thd, v=v_now, th_bias=self.th_bias.copy(), pitch=S["pitch"], roll=S["roll"], **self.dbg)
 
     def _predict(self, l, x_err, v, th, thd, v_ref, k):
         """진자 모델 (lqr_vmc.wip_model, 진자 길이 격자 보간) 을 최근 k 스텝 동안 낸 바퀴 토크 합으로 앞으로 적분 (Smith 예측).
