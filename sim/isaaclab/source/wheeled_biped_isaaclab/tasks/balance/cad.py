@@ -204,7 +204,7 @@ class HipHostP:
     def reset(self):
         self.hist.clear()
 
-    def apply(self, robot, leg_ids, legs_act, a_legs, h_ref, kp, kd, ff_joint, delay_steps, leg_scale=0.12):
+    def apply(self, robot, leg_ids, legs_act, a_legs, h_ref, kp, kd, ff_joint, delay_steps, leg_scale=0.12, tau_max=None):
         """a_legs (N,2) 다리 행동 (wbctrl, 지연 큐 지난 것), h_ref (N,), kp/kd (N,), ff_joint (N,2) 자중 보상 관절 토크."""
         M = robot.data.joint_pos[:, leg_ids]
         self.hist.append(M.clone())
@@ -213,7 +213,10 @@ class HipHostP:
         tau_p = kp[:, None] * (M_from_hj(hj) - M_fb)
         legs_act.stiffness[:] = 0.0
         legs_act.damping[:] = kd[:, None].expand_as(legs_act.damping) if legs_act.damping.dim() == 2 else kd
-        robot.set_joint_effort_target((ff_joint + tau_p).to(torch.float32), joint_ids=leg_ids)
+        tau = ff_joint + tau_p
+        if tau_max:                                      # 실기 balance_node: P 항 + 자중 FF 를 current_limit x Kt 로 자름 (kd 는 드라이브가 따로)
+            tau = torch.clamp(tau, -tau_max, tau_max)
+        robot.set_joint_effort_target(tau.to(torch.float32), joint_ids=leg_ids)
 
 # --- 바퀴 모터 + 축 마찰 (2026-10-03 실측: AK45-10 은 0.4 A 이하 지령에 전혀 안 돈다) ----------------------
 class DCMotorFric(DCMotor):

@@ -352,7 +352,7 @@ with torch.inference_mode():
         if getattr(P, "hip_host_p", False):                         # 실기 고관절 구조: P 는 200 Hz 호스트 (지연 피드백), D 만 드라이브
             HIP.apply(robot, leg_ids, legs_act, torch.tensor(acts[:, 0:2], device=dev, dtype=torch.float32),
                       torch.full((N,), float(P.idle_h), device=dev), torch.tensor(kp_a, device=dev, dtype=torch.float32),
-                      torch.tensor(kd_a, device=dev, dtype=torch.float32), ffj, round(P.delay_ms / 5.0))
+                      torch.tensor(kd_a, device=dev, dtype=torch.float32), ffj, round(P.delay_ms / 5.0), tau_max=P.hip_cmd_max_nm)
         else:
             legs_act.stiffness[:] = torch.tensor(kp_a, device=dev, dtype=torch.float32)[:, None]
             legs_act.damping[:] = torch.tensor(kd_a, device=dev, dtype=torch.float32)[:, None]

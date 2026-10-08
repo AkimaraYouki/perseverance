@@ -209,6 +209,8 @@ TUNE = dict(
                          #   시뮬 전용: 바퀴 엔코더 지연 [ms] (실기 톡 치기 9–26 ms, 감속기 백래시 근사). 실기 제어기엔 없음
     hip_host_p=True,     # 실기 (2026-10-08 기본값): 고관절 MIT, kd 드라이브 / kp 호스트 200 Hz. 이상 = False.
                          #   고관절을 실기 구조로 (2026-10-08): P 항은 200 Hz 호스트가 지연된 피드백으로, D 만 드라이브. 끄면 IdealPD (P·D 물리 주기)
+    hip_cmd_max_nm=8.1,  # 실기 balance_node 고관절 MIT: P 항 + 자중 FF 상한 = current_limit 10 A x Kt 0.81 (잠정) [N·m]. 0 = 없음
+    wheel_cmd_max_nm=6.35,  # 실기 balance_node 바퀴 지령 상한 = current_limit 5 A x Kt 1.27 [N·m]. 0 = 없음 (wheel_tau_max 7 까지)
     pred_ms=0.0,         # 지연 보상 예측 [ms] (0 = 끔): 최근 낸 바퀴 토크로 진자 상태를 이만큼 앞으로 적분해 LQR 에 넣음 (실기도). 실기 루프 지연 15–20 ms (2026-10-07)
     delay_ms=10.0,       # 실기: 보낸 바퀴 토크 -> 응답 토크 2 스텝 (10 ms, 200 Hz 기록 2026-10-08), 센서 -> 바퀴 전류 ~9 ms. 이상 = 5.
                          #   제어 지연: 센서 -> 명령 적용 [ms] (200 Hz 한 주기 = 5 ms)
@@ -1161,7 +1163,7 @@ def episode():
             ffj = hip_sign * float(ffF) * cad.dh_from_M(M).to(torch.float32)
             if args.hip_host_p:                                   # 실기 고관절 구조: P 는 200 Hz 호스트 (지연 피드백), D 만 드라이브
                 HIP.apply(robot, leg_ids, legs_act, act[:, 0:2], torch.tensor([h_ref], device=dev), torch.tensor([float(kp_)], device=dev),
-                          torch.tensor([float(kd_)], device=dev), ffj, round(args.delay_ms / 5.0))
+                          torch.tensor([float(kd_)], device=dev), ffj, round(args.delay_ms / 5.0), tau_max=args.hip_cmd_max_nm)
             else:
                 legs_act.stiffness[:] = float(kp_); legs_act.damping[:] = float(kd_)
                 robot.set_joint_effort_target(ffj, joint_ids=leg_ids)

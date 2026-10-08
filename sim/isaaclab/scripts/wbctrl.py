@@ -374,6 +374,11 @@ class WBController:
                 self.db_e = np.clip(v - out, -db, db)
                 act[:, 2:] = np.clip(out, -1.0, 1.0)
 
+        # 실기 balance_node 가 드라이브로 보낼 때 거는 바퀴 토크 상한 (current_limit 5 A x Kt 1.27 = 6.35 N·m). 0 = 없음
+        wc = getattr(P, "wheel_cmd_max_nm", 0.0)
+        if wc > 0:
+            act[:, 2:] = np.clip(act[:, 2:], -wc / P.wheel_tau_max, wc / P.wheel_tau_max)
+
         # 제어 지연 (+ 가끔 한 주기 더) — 로봇마다 따로
         if P.delay_ms > 0 or P.jitter_ms > 0:
             self.q.append(act.copy())
