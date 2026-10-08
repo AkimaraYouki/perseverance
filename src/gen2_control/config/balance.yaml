@@ -12,8 +12,8 @@ balance:
     heartbeat_timeout_s: 0.5  # operator tool must publish balance/heartbeat
     cmd_timeout_s: 0.5        # cmd_vel watchdog -> 0
     stand_ramp_s: 2.0         # stand: current leg height -> idle_h
-    th_trim_deg: 3.7          # balance-point trim, + = lean back. 2026-10-08: with Kx -3 the robot parked 0.15-0.2 m ahead at ~-2 deg;
-                              # desktop: theta_err = -(Kx/Ktheta) x -> 1.8 deg short -> 3.7 (1.9 before)
+    th_trim_deg: -1.2         # balance-point trim, + = lean back. 0 = CAD COM (th_kin). 2026-10-08 after the IMU was re-seated (user):
+                              # 0 -> bias adapt +1.1, max 0.61 m; -1.0 -> bias -0.45, max 0.09 m; user picked -1.2
     stand_feedforward: true   # stand: + weight feed-forward (0.5 m g per leg, via dh/dtheta) — current_pd only
     hip_mode: mit             # mit (kd in the drive, kp + ff from here) | servo_pos (drive position loop) | current_pd (host PD, shook at 200 Hz)
     mit_kt_drive: 0.5994      # Kt the AK60-6 drive uses inside MIT (0.5 N·m -> 0.83 A measured 2026-10-07)
