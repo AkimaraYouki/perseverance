@@ -39,15 +39,34 @@ def wip_model(m, l, I, m_w, I_w, R):
     return A, B
 
 
+def load_gain_table(path):
+    """ROS 파라미터 yaml 안의 lqr_l, lqr_k 를 읽는다 (yaml 모듈 없이: 한 줄 리스트)."""
+    import os
+    out = {}
+    for line in open(os.path.expanduser(path)):
+        for k in ("lqr_l", "lqr_k"):
+            if line.strip().startswith(k + ":"):
+                out[k] = np.array([float(x) for x in line.split("[", 1)[1].split("]")[0].split(",")])
+    assert len(out) == 2 and len(out["lqr_k"]) == 4 * len(out["lqr_l"]), f"{path}: lqr_l / lqr_k 를 못 읽음"
+    return out
+
+
 class WheelLQR:
     """진자 길이 l 격자마다 K 를 미리 구해 두고 선형 보간 (Ascento: 다리 높이 10 개)."""
 
-    def __init__(self, m, I, m_w, I_w, R, q=(2.0, 5.0, 100.0, 5.0), r=1.0, l_grid=np.linspace(0.12, 0.40, 15)):
+    def __init__(self, m, I, m_w, I_w, R, q=(2.0, 5.0, 100.0, 5.0), r=1.0, l_grid=np.linspace(0.12, 0.40, 15), table=None):
+        """table: 실기 이득 표 yaml (balance_gains_robot.yaml 형식: lqr_l, lqr_k) 경로. 주면 q, r 대신 그 K 를 쓴다."""
+        if table:
+            tab = load_gain_table(table)
+            l_grid = tab["lqr_l"]
         self.l_grid = l_grid
         AB = [wip_model(m, l, I, m_w, I_w, R) for l in l_grid]
         self.A = np.array([a for a, _ in AB])                   # (L, 4, 4) 지연 보상 예측용 (wbctrl pred_ms)
         self.B = np.array([b[:, 0] for _, b in AB])             # (L, 4)
         self.K = np.array([lqr_gain(a, b, np.diag(q), np.array([[r]]))[0] for a, b in AB])
+        if table:
+            self.K = tab["lqr_k"].reshape(-1, 4)
+            print(f"[LQR] 실기 이득 표 {table} | K(0.20) = {np.round(self.gain(0.20), 3).tolist()}")
 
     def gain(self, l):
         return np.array([np.interp(l, self.l_grid, self.K[:, j]) for j in range(4)])

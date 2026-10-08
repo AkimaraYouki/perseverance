@@ -34,9 +34,11 @@ TUNE = dict(
     ctrl="lqr",
     lqr_qx=2.0, lqr_qv=5.0, lqr_qth=100.0, lqr_qthd=5.0,   # LQR 상태 가중 [진행거리 m, 속도 m/s, 진자각 rad, 각속도 rad/s]
     lqr_r=1.0,           # LQR 입력 가중 (두 바퀴 토크 합 N·m)
+    lqr_table="~/perseverance/src/gen2_control/config/balance_gains_robot.yaml",  # 실기 이득 표 그대로 (2026-10-08 기본값, git pull 로 따라감). "" = 위 Q, R 로 계산 (이상)
     lqr_mx=1.0, lqr_mv=1.0, lqr_mth=1.0, lqr_mthd=1.0,   # LQR 이득 성분별 배율 [x, v, θ, θ̇] (실기 이득 재현용, 기본 1)
     wheel_tau_max=7.0,   # 바퀴 토크 한계 [N·m] (AK45-10 피크)
-    fric_comp_nm=0.11,   # 바퀴 마찰 보상 [N·m]: 바퀴마다 fric_comp_nm x tanh(관절 속도 / fric_comp_w) 를 토크에 더함. 0 = 끔. 운동 마찰 실측 0.11 (2026-10-06)
+    fric_comp_nm=0.0,    # 실기 (2026-10-08): MIT 바퀴에서 0.11 은 12–15 Hz 떨림 -> 0. 이상 = 0.11.
+                         #   바퀴 마찰 보상 [N·m]: 바퀴마다 fric_comp_nm x tanh(관절 속도 / fric_comp_w) 를 토크에 더함. 0 = 끔. 운동 마찰 실측 0.11 (2026-10-06)
                          #   운동 마찰과 같은 크기로 (2026-10-03 pv robust 마찰 켬: 보상 0 -> 74/88, 0.25 -> 87/88 = 마찰 없음 88/88 수준,
                          #   점프 16 대 마찰 없음 12/16 vs 보상 13/16). 0.4 (과보상) 는 점프 5/8
     fric_comp_w=0.5,     # 마찰 보상 속도 폭 [rad/s]
@@ -86,17 +88,23 @@ TUNE = dict(
                          #   연달아 나오는 턱(삼각형길)은 첫 턱이 예고. 가혹 평가 4096 대 0.8 m/s: 삼각형길 88 -> 94 %, 합계 96.9 -> 97.6 % (2026-09-27).
                          #   밀림에도 걸린다. 점프 착지 뒤 1 s 는 안 봄. HUD SPEED 줄에 BUMP
     bump_rate=1.5, bump_acc=4.0, bump_hold_s=2.0, bump_vmax=0.45,
-    yaw_kd=0.5,          # 회전: 좌우 바퀴 토크 차 = yaw_kd x (명령 - 실제 yaw rate) [N·m·s/rad]
-    yaw_ki=0.0,          # 회전 적분 [N·m/rad] (0 = 끔): 회전 속도 오차를 적분해 차동 토크에 더함 = 방향각 오차 비례. 실기 제자리 회전 (2026-10-08)
+    yaw_kd=0.15,         # 실기 (2026-10-08): 0.5 는 13 Hz 좌우 떨림 -> 0.15. 이상 = 0.5.
+                         #   회전: 좌우 바퀴 토크 차 = yaw_kd x (명령 - 실제 yaw rate) [N·m·s/rad]
+    yaw_ki=1.0,          # 실기 (2026-10-08): kd 0.15 만으론 정지마찰에 막힘 -> ki 1.0. 이상 = 0.
+                         #   회전 적분 [N·m/rad] (0 = 끔): 회전 속도 오차를 적분해 차동 토크에 더함 = 방향각 오차 비례. 실기 제자리 회전 (2026-10-08)
     yaw_i_max=0.5,       # 회전 적분 한계 [N·m]
     vmc_kp=60.0,         # 다리 가상 스프링 [N·m/rad, 관절] (바퀴에서 약 4.5 kN/m. 30 은 좌우 수평이 못 따라가 넘어짐). 자중은 피드포워드로 따로 받친다
     vmc_kd=1.0,          # 다리 가상 댐퍼 [N·m·s/rad]
-    turn_lean=1.0,       # 회전 중 안쪽 기울기 비율: roll 목표 = atan(turn_lean x v x wz / g) (Ascento lean 모드). 0 = 수평 유지
+    turn_lean=0.0,       # 실기 (2026-10-08) 0. 이상 = 1.0.
+                         #   회전 중 안쪽 기울기 비율: roll 목표 = atan(turn_lean x v x wz / g) (Ascento lean 모드). 0 = 수평 유지
                          #   (수평으로 붙잡으면 원심력에 바깥으로 넘어짐: 0.6 m/s + 1 rad/s 평지 33 % 넘어짐, 2026-09-26)
-    roll_kp=1.5,         # (3/30/0.6 은 센서 잡음 + 지연에서 다리가 흔들려 회전 중 바퀴가 뜸 -> 1.5/15/0.3, pv robust 52/56, 2026-09-26)         # roll 수평 P: 좌우 다리 길이 차 += roll_kp x 0.198 x sin(roll)
-    roll_ki=15.0,        # roll 수평 I [1/s]
+    roll_kp=0.5,         # 실기 (2026-10-08): 1.5/15/0.3 은 실기 25 Hz 진동 -> 0.5/3/0. 이상 = 1.5.
+                         #   (3/30/0.6 은 센서 잡음 + 지연에서 다리가 흔들려 회전 중 바퀴가 뜸 -> 1.5/15/0.3, pv robust 52/56, 2026-09-26)         # roll 수평 P: 좌우 다리 길이 차 += roll_kp x 0.198 x sin(roll)
+    roll_ki=3.0,         # 실기 0.5/3/0. 이상 = 15.
+                         #   roll 수평 I [1/s]
     roll_rate_lpf_hz=8.0,  # roll D 항에 넣는 roll 각속도 저역통과 [Hz]. 필터 없이 D 0.6 + 지연 5 ms 면 다리가 발진 (3 mm/스텝 떨림 -> 넘어짐)
-    roll_kd=0.3,         # roll 각속도 D [s]: 좌우 다리 길이 차 += roll_kd x 0.198 x roll rate (흔들림 감쇠)
+    roll_kd=0.0,         # 실기 0. 이상 = 0.3.
+                         #   roll 각속도 D [s]: 좌우 다리 길이 차 += roll_kd x 0.198 x roll rate (흔들림 감쇠)
     land_sf_min=0.4,     # 접지 판정에 IMU 비력 > 이 값 [g] 도 요구 (0 = 안 봄). 자유낙하 중 다리 토크 오판 방지용
     roll_leak=0.5,       # roll 적분 누설 [1/s] (약 2 s 에 걸쳐 0 쪽으로 — 한계에 붙어 있지 않게)
     lift_detect_s=0.3,   # (0.05 면 돌 위에서 잠깐 뜨는 것도 들림으로 봐 균형이 꺼짐) 두 다리 모두 무하중(고관절 토크 < contact_tau_min)이 이만큼 [s] -> 들림: 균형 끄고 바퀴만 멈춤, 적분 비움
@@ -589,7 +597,7 @@ def build_lqr():
     iyy = robot.root_physx_view.get_inertias()[0][:, 4].to(dev)
     rel = cp - c
     I = float((iyy[_nonwheel] + _mass[_nonwheel] * (rel[:, 0] ** 2 + rel[:, 2] ** 2)).sum())
-    lqr = lqr_vmc.WheelLQR(_m_pend, I, _m_w, _I_w, R, q=(args.lqr_qx, args.lqr_qv, args.lqr_qth, args.lqr_qthd), r=args.lqr_r)
+    lqr = lqr_vmc.WheelLQR(_m_pend, I, _m_w, _I_w, R, q=(args.lqr_qx, args.lqr_qv, args.lqr_qth, args.lqr_qthd), r=args.lqr_r, table=args.lqr_table or None)
     return I
 
 

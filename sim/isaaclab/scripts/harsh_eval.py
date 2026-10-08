@@ -237,7 +237,7 @@ iyy = robot.root_physx_view.get_inertias()[0][:, 4].to(dev)
 rel = d.body_com_pos_w[0, nonwheel] - c0
 I_pend = float((iyy[nonwheel] + m_nom[nonwheel] * (rel[:, 0] ** 2 + rel[:, 2] ** 2)).sum())
 lqr = lqr_vmc.WheelLQR(m_pend, I_pend, float(m_nom[wheel_bodies].sum()), 2 * (cad.WHEEL_IZZ + P.wheel_armature), R,
-                       q=(P.lqr_qx, P.lqr_qv, P.lqr_qth, P.lqr_qthd), r=P.lqr_r)
+                       q=(P.lqr_qx, P.lqr_qv, P.lqr_qth, P.lqr_qthd), r=P.lqr_r, table=P.lqr_table or None)
 
 # --- 로봇 오차 (로봇마다, pv robust 와 같은 분포) ---------------------------------------------------------------
 g = np.random.default_rng(args.seed)
