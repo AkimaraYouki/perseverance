@@ -317,6 +317,8 @@ private:
   // ------------------------------------------------------------------ mode requests
   std::string request(Mode m, bool start = false)
   {
+    in_request_ = true;
+    struct Done {std::atomic<bool> & f; ~Done() {f = false;}} done{in_request_};
     bool wake = false;
     {
       std::lock_guard<std::mutex> lk(mode_m_);
@@ -639,7 +641,19 @@ private:
         if (!why.empty()) {enter(Mode::kFault, why); want_ = Mode::kFault;}
       }
     }
-    if (mode_ != Mode::kStand && mode_ != Mode::kBalance) {return;}
+    if (mode_ != Mode::kStand && mode_ != Mode::kBalance) {
+      // idle: keep the legacy-MIT wheels visible (they answer only to commands) — zero-torque EXIT at 2 Hz
+      if (mode_ == Mode::kDisarmed && want_ == Mode::kDisarmed && !in_request_ && t - idle_ping_ns_ > 500000000LL) {
+        idle_ping_ns_ = t;
+        bus_->enable_tx(true);
+        for (const auto & kv : idx_) {
+          const auto & c = bus_->motors()[kv.second];
+          if (c.protocol == "mit_legacy") {bus_->send(gen2_hardware::mit::exit(c.can_id), err_ping_);}
+        }
+        bus_->enable_tx(false);
+      }
+      return;
+    }
     if (start_ && mode_ == Mode::kStand) {
       start_t_ += 1.0 / rate_hz_;
       if (homing_) {
@@ -934,6 +948,9 @@ private:
   int64_t frz_ns_[2] = {0, 0};
   double frozen_s_ = 0.15, frozen_cmd_nm_ = 0.15;
   bool start_ = false, homing_ = false, home_done_ = false;
+  int64_t idle_ping_ns_ = 0;
+  std::atomic<bool> in_request_{false};
+  std::string err_ping_;
   double start_t_ = 0.0, home_still_ = 0.0, home_tau_ = 0.4, home_kd_ = 0.3, home_timeout_s_ = 3.0, auto_tilt_ = 0.087, auto_wait_s_ = 10.0;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_start_;
   bool sit_ = false, sit_hold_ = false, link_lost_ = false, link_stop_ = true;

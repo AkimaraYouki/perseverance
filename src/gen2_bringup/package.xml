@@ -6,11 +6,17 @@
   <maintainer email="choding860@gmail.com">parksudo</maintainer>
   <license>Proprietary</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>gen2_control</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>gen2_control</exec_depend>
   <exec_depend>gen2_sensor_hub</exec_depend>
+  <exec_depend>gen2_control</exec_depend>
   <exec_depend>gen2_hardware</exec_depend>
+  <exec_depend>gen2_control</exec_depend>
   <exec_depend>gen2_status_display</exec_depend>
+  <exec_depend>gen2_control</exec_depend>
   <exec_depend>gen2_camera</exec_depend>
+  <exec_depend>gen2_control</exec_depend>
   <exec_depend>gen2_sensors</exec_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

@@ -69,10 +69,9 @@ flowchart TD
 - 데스크톱 (Humble) 은 표준 메시지 (Joy, Twist, Float64, Empty, Trigger) 만 쓴다. 상태 표시는 ControllerState (gen2_msgs) — 안 보이면 표시만 빠짐.
 
 ## 4. 실행 (2026-10-08 구현 완료)
-로봇:
-```
-ros2 launch gen2_control balance.launch.py      # balance_node + cmd_mux (sudo prlimit 로 rtprio 필요 시 gen2 서비스로)
-```
+로봇: **부팅 때 자동** — `gen2-balance.service` (gen2_bringup/systemd, enable 됨) 가 control.launch.py = balance_node (DISARMED, 0 A) + cmd_mux 를
+rtprio 95 로 띄운다. DISARMED 동안 AK45 바퀴에 2 Hz 로 0 토크 EXIT 프레임을 보내 모니터·LCD 에 바퀴가 보이게 한다.
+hip_cli · 모터 시험 전에는 `sudo systemctl stop gen2-balance` (CAN 명령은 한 프로세스만).
 데스크톱 (Humble, 패드):
 ```
 ros2 run joy joy_node                     # ros-humble-joy

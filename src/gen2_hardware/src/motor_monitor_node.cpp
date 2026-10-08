@@ -258,8 +258,8 @@ private:
   // Idle legacy-MIT drives are only polled at 2 Hz (see mit_ping_timer_); a commander streams.
   double stale_limit(const MotorConfig & c) const
   {
-    return c.protocol == "mit_legacy" && !commander_ ?
-           std::max(c.feedback_stale_timeout_s, 1.5) : c.feedback_stale_timeout_s;
+    // a commander that is not driving (balance_node disarmed) pings at 2 Hz too
+    return c.protocol == "mit_legacy" ? std::max(c.feedback_stale_timeout_s, 1.5) : c.feedback_stale_timeout_s;
   }
 
   std::unique_ptr<MotorBus> bus_;

@@ -1,0 +1,22 @@
+# Install: sudo cp gen2-balance.service /etc/systemd/system/ && sudo systemctl enable --now gen2-balance
+# Before hip_cli / motor tests: sudo systemctl stop gen2-balance (only one CAN commander).
+[Unit]
+Description=Gen2 control stack (balance_node disarmed + cmd_mux) — armed by the operator (START)
+After=gen2-bench.service can0-up.service
+Wants=gen2-bench.service can0-up.service
+
+[Service]
+Type=simple
+User=parksudo
+Environment=GEN2_WS=/home/parksudo/gen2_ws
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+ExecStart=/home/parksudo/gen2_ws/install/gen2_bringup/lib/gen2_bringup/gen2_run.sh control.launch.py
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
