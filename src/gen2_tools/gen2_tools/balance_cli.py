@@ -7,6 +7,7 @@ Keys (no Enter needed):
   b        balance (wheel LQR + leg VMC)
   SPACE/x  DISARM  (0 A everywhere)        q  quit (disarms)
   w / s    forward / backward speed +-0.1 m/s     a / d   turn left / right +-0.3 rad/s
+  r / f    body height +-10 mm (balance only, 133..233 mm)
   0        zero the speed / turn command
 Unplugging the battery is the hardware E-stop.
 """
@@ -20,7 +21,7 @@ import tty
 import rclpy
 from gen2_msgs.msg import ControllerState
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Empty
+from std_msgs.msg import Empty, Float64
 from std_srvs.srv import Trigger
 
 
@@ -29,10 +30,11 @@ def main():
     n = rclpy.create_node('balance_cli')
     hb = n.create_publisher(Empty, 'balance/heartbeat', 10)
     cmd = n.create_publisher(Twist, 'cmd_vel', 10)
+    hp = n.create_publisher(Float64, 'balance/height', 10)
     st = {'m': None}
     n.create_subscription(ControllerState, 'controller/state', lambda m: st.__setitem__('m', m), 10)
     cli = {k: n.create_client(Trigger, f'balance/{k}') for k in ('stand', 'balance', 'disarm')}
-    vx, wz = 0.0, 0.0
+    vx, wz, h = 0.0, 0.0, 0.1825
     run = [True]
 
     def tick():
@@ -40,6 +42,7 @@ def main():
             hb.publish(Empty())
             t = Twist(); t.linear.x, t.angular.z = vx, wz
             cmd.publish(t)
+            hp.publish(Float64(data=h))
             time.sleep(0.05)
     threading.Thread(target=rclpy.spin, args=(n,), daemon=True).start()
     threading.Thread(target=tick, daemon=True).start()
@@ -77,6 +80,8 @@ def main():
                     wz = round(wz + 0.3, 2)
                 elif c == 'd':
                     wz = round(wz - 0.3, 2)
+                elif c in ('r', 'f'):
+                    h = round(min(0.2325, max(0.1325, h + (0.01 if c == 'r' else -0.01))), 4)
                 elif c == '0':
                     vx = wz = 0.0
             m = st['m']
@@ -85,7 +90,7 @@ def main():
             else:
                 line = (f'{m.mode:8s} pitch {m.pitch*57.3:+5.1f} roll {m.roll*57.3:+5.1f} v {m.v:+.2f} '
                         f'h {m.h[0]*1000:5.1f}/{m.h[1]*1000:5.1f} hipI {m.hip_cur_cmd[0]:+5.2f}/{m.hip_cur_cmd[1]:+5.2f} '
-                        f'whlI {m.wheel_cur_cmd[0]:+5.2f}/{m.wheel_cur_cmd[1]:+5.2f} cmd {vx:+.1f} {wz:+.1f} '
+                        f'whlI {m.wheel_cur_cmd[0]:+5.2f}/{m.wheel_cur_cmd[1]:+5.2f} cmd {vx:+.1f} {wz:+.1f} h {h*1000:.0f} '
                         f'{m.fault[:40]}')
             print(f'\r{line}  | {msg[:50]}' + ' ' * 5, end='', flush=True)
     finally:

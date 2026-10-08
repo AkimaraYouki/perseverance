@@ -32,6 +32,7 @@
 #include "gen2_hardware/motor_bus.hpp"
 #include "gen2_hardware/motor_params.hpp"
 #include "gen2_msgs/msg/controller_state.hpp"
+#include "std_msgs/msg/float64.hpp"
 #include "gen2_sensors/imu_shm.hpp"
 #include "gen2_msgs/msg/motor_state_array.hpp"
 #include "geometry_msgs/msg/twist.hpp"
@@ -192,6 +193,12 @@ public:
         });
     hb_sub_ = create_subscription<std_msgs::msg::Empty>("balance/heartbeat", 10,
         [this](std_msgs::msg::Empty::ConstSharedPtr) {hb_ns_ = now_ns();});
+    // body height command [m] (balance mode): clamped to the leg table, followed at height_rate_m_s
+    h_rate_ = declare_parameter("height_rate_m_s", 0.05);
+    h_sub_ = create_subscription<std_msgs::msg::Float64>("balance/height", 10,
+        [this](std_msgs::msg::Float64::ConstSharedPtr m) {
+          if (std::isfinite(m->data)) {h_cmd_ = std::clamp(m->data, gen2_control::kHMin + 0.01, gen2_control::kHMax - 0.01);}
+        });
     auto srv = [this](const char * name, Mode m) {
         return create_service<std_srvs::srv::Trigger>(name,
                  [this, m](std_srvs::srv::Trigger::Request::ConstSharedPtr,
@@ -406,6 +413,7 @@ private:
       t_mode_ = 0.0;
       for (int k = 0; k < 2; ++k) {M_start_[k] = M_[k]; osc_t_[k].clear(); osc_sign_[k] = 0; sat_s_[k] = 0.0;}
       sit_ = false;
+      h_set_ = params_.idle_h; h_cmd_ = -1.0;
       if (core_) {core_->reset();}
     }
     mode_ = m;
@@ -542,7 +550,7 @@ private:
     t_mode_ += 1.0 / rate_hz_;
     double sit_u = -1.0;     // < 0: not sitting; 0..1 ramp to the lowest height
     if (sit_) {
-      if (sit_t_ == 0.0) {for (int k = 0; k < 2; ++k) {sit_from_[k] = M_[k];}}
+      if (sit_t_ == 0.0) {for (int k = 0; k < 2; ++k) {sit_from_[k] = M_[k];} sit_h0_ = h_set_ > 0 ? h_set_ : params_.idle_h;}
       sit_t_ += 1.0 / rate_hz_;
       sit_u = std::min(1.0, sit_t_ / sit_s_);
       if (sit_t_ > sit_s_ + 0.5) {
@@ -568,7 +576,10 @@ private:
       ffF = stand_ff_ ? 0.5 * (model_ok_ ? m_pend_ : params_.m_pend) * 9.81 : 0.0;
     } else {
       // sitting: the leg mid height ramps from IDLE to the lowest height while the LQR keeps balancing
-      const double h_mid = sit_u >= 0 ? params_.idle_h + sit_u * (kHMinSit - params_.idle_h) : -1.0;
+      const double hc = h_cmd_.load() > 0 ? h_cmd_.load() : params_.idle_h;
+      const double dh = h_rate_ / rate_hz_;
+      h_set_ = h_set_ > 0 ? h_set_ + std::clamp(hc - h_set_, -dh, dh) : params_.idle_h;
+      const double h_mid = sit_u >= 0 ? sit_h0_ + sit_u * (kHMinSit - sit_h0_) : h_set_;
       const Output o = core_->step(f, sit_u >= 0 ? 0.0 : vx, sit_u >= 0 ? 0.0 : wz, params_.idle_h, h_mid);
       last_ = o;
       for (int k = 0; k < 2; ++k) {
@@ -692,6 +703,9 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr hb_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr h_sub_;
+  std::atomic<double> h_cmd_{-1.0};   // < 0: idle_h
+  double h_set_ = -1.0, h_rate_ = 0.05, sit_h0_ = 0.0;
   rclcpp::Subscription<gen2_msgs::msg::MotorStateArray>::SharedPtr ms_sub_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_stand_, srv_bal_, srv_dis_, srv_sit_;
   bool sit_ = false;
