@@ -39,7 +39,7 @@ balance:
       wheel_lpf_hz: 20.0
       bal_adapt: 0.3          # user 2026-10-08 (0.1 / 0 tried: 0 stops the bias walk but parks ~0.17 m off)
       contact_tau_min: 0.8
-      roll_kp: 0.0            # 2026-10-07: roll PI (sim gains) oscillated on the robot -> off until retuned
-      roll_ki: 0.0
+      roll_kp: 0.5            # 2026-10-08 desktop step 1 (sim 1.5/15/0.3 oscillated at 25 Hz on 10-07): flat + side pushes + one wheel on a ramp
+      roll_ki: 3.0            # (43 mm leg difference, ~2 deg left by roll_leak) — no oscillation, hip current 10-100 Hz unchanged
       roll_kd: 0.0
       turn_lean: 0.0          # needs the roll loop
