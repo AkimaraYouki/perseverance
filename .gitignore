@@ -7,3 +7,4 @@ docs/vendor/*.txt
 firmware/**/build/
 # full ESP32 flash dump may contain device-specific NVS data: keep it local only
 firmware/backup/
+logs/steps/

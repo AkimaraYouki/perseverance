@@ -152,6 +152,8 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
       if (!lifted) {act[2 + k] = clip(act[2 + k] + comp / P.wheel_tau_max, -1.0, 1.0);}
     }
   }
+  o.tau_lqr = tau_w; o.tau_yaw = tau_y;
+  for (int k = 0; k < 2; ++k) {o.wheel_pre_lpf[k] = act[2 + k] * P.wheel_tau_max;}
   // --- wheel torque LPF, then drive deadband compensation (sigma-delta)
   if (P.wheel_lpf_hz > 0) {
     const double a = lpf_a(P.wheel_lpf_hz);

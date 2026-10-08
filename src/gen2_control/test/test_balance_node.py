@@ -24,8 +24,9 @@ ids = {n: m[n]['can_id'] for n in ('wheel_l', 'wheel_r', 'leg_l', 'leg_r')}
 proto = {n: m[n].get('protocol', 'servo') for n in ids}
 FAKE_PROTO = {n: ('mit_legacy' if p == 'mit_legacy' else 'servo') for n, p in proto.items()}
 logs = {n: tempfile.TemporaryFile(mode='w+') for n in ids}
+STEPDIR = tempfile.mkdtemp()
 HIP_YAML = os.path.join(tempfile.mkdtemp(), 'hip.yaml')   # a params file: -p does not override balance.yaml
-open(HIP_YAML, 'w').write(f"balance:\n  ros__parameters:\n    hip_mode: {os.environ.get('HIP_MODE', 'mit')}\n    imu_shm: false\n    link_disarm_s: 6.0\n")
+open(HIP_YAML, 'w').write(f"balance:\n  ros__parameters:\n    hip_mode: {os.environ.get('HIP_MODE', 'mit')}\n    imu_shm: false\n    link_disarm_s: 6.0\n    step_log_dir: {STEPDIR}\n")
 # hips power up at joint 20 deg: inside the stops with no 60 deg twin (an end-stop band would be ambiguous)
 POS0 = {n: (m[n]['direction'] * (20.0 + math.degrees(m[n]['position_offset_rad'])) if n.startswith('leg') else 0.0)
         for n in ids}
@@ -155,6 +156,10 @@ try:
     s = st['m']
     check('motor feedback stale -> fault', s.mode == 'fault' and 'stale' in s.fault, f'{s.mode}: {s.fault}')
     drives[0].send_signal(signal.SIGUSR1)
+    spin(1.5)
+    logs_ = sorted(os.listdir(STEPDIR))
+    rows = sum(len(open(os.path.join(STEPDIR, f)).read().splitlines()) - 1 for f in logs_)
+    check('200 Hz step log: one CSV per arm, rows written', len(logs_) >= 3 and rows > 500, f'{len(logs_)} files, {rows} rows')
 finally:
     os.killpg(node.pid, signal.SIGINT)
     try:

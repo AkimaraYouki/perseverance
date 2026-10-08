@@ -15,6 +15,10 @@
 #include <sys/mman.h>
 
 #include <algorithm>
+#include <array>
+#include <cstdio>
+#include <ctime>
+#include <filesystem>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -63,6 +67,16 @@ double interp(double x, const std::vector<double> & xs, const std::vector<double
   return ys[i - 1] + u * (ys[i] - ys[i - 1]);
 }
 enum class Mode {kDisarmed, kStand, kBalance, kFault};
+
+// One 200 Hz control step (stand/balance), written to CSV by a non-RT thread (desktop request 2026-10-08)
+struct StepRec
+{
+  uint64_t step; int64_t t_ns; int session; int mode;
+  double dt_ms, imu_age_ms, pitch, roll, gx, gy, gz, th, thd, th_kin, th_bias, x_err, v, v_ref, vx, wz;
+  double h[2], M[2], Md[2], h_tgt[2], hip_tau[2], hip_cur_fb[2], hip_age_ms[2];
+  double w_wheel[2], tau_lqr, tau_yaw, wheel_pre_lpf[2], wheel_tau[2], wheel_tau_fb[2], wheel_age_ms[2];
+};
+constexpr std::size_t kRing = 8192;   // 41 s at 200 Hz
 constexpr double kHMinSit = gen2_control::kHMin + 0.003;   // just above the lowest table height
 const char * mode_name(Mode m)
 {
@@ -226,6 +240,9 @@ public:
     sit_s_ = declare_parameter("sit_s", 3.0);
     pub_ = create_publisher<gen2_msgs::msg::ControllerState>("controller/state", 10);
     pub_timer_ = create_wall_timer(10ms, [this] {publish();});
+    step_log_ = declare_parameter("step_log", true);
+    step_log_dir_ = declare_parameter("step_log_dir", std::string(std::getenv("HOME") ? std::getenv("HOME") : "/tmp") + "/gen2_ws/logs/steps");
+    if (step_log_) {log_th_ = std::thread([this] {log_writer();});}
     th_ = std::thread([this] {loop();});
     RCLCPP_INFO(get_logger(), "balance_node ready (model %s): modes disarmed/stand%s",
       model_ok_ ? "loaded" : "MISSING", model_ok_ ? "/balance" : " only");
@@ -235,6 +252,8 @@ public:
   {
     run_ = false;
     if (th_.joinable()) {th_.join();}
+    log_run_ = false;
+    if (log_th_.joinable()) {log_th_.join();}
     zero_all();
   }
 
@@ -415,6 +434,7 @@ private:
     } else {
       RCLCPP_INFO(get_logger(), "mode -> %s", mode_name(m));
     }
+    if ((m == Mode::kStand || m == Mode::kBalance) && (mode_ == Mode::kDisarmed || mode_ == Mode::kFault)) {++log_session_;}
     if (m == Mode::kStand || m == Mode::kBalance) {
       t_mode_ = 0.0;
       for (int k = 0; k < 2; ++k) {M_start_[k] = M_[k]; osc_t_[k].clear(); osc_sign_[k] = 0; sat_s_[k] = 0.0;}
@@ -663,6 +683,81 @@ private:
         bus_->send(gen2_hardware::cubemars::encode_current(cw.can_id, wc), err);
       }
     }
+    if (step_log_) {
+      StepRec r{};
+      r.step = step_n_++; r.t_ns = t; r.session = log_session_; r.mode = static_cast<int>(mode_);
+      r.dt_ms = (t - prev_step_ns_) * 1e-6; r.imu_age_ms = imu_age_ms_; r.pitch = pitch_; r.roll = roll_;
+      r.gx = f.w_b[0]; r.gy = f.w_b[1]; r.gz = f.w_b[2];
+      const bool bal = mode_ == Mode::kBalance;
+      r.th = bal ? last_.th : 0; r.thd = bal ? last_.thd : 0; r.th_kin = th_kin_; r.th_bias = bal ? last_.th_bias : 0;
+      r.x_err = bal ? last_.x_err : 0; r.v = bal ? last_.v : 0; r.v_ref = bal ? last_.v_ref : 0; r.vx = vx; r.wz = wz;
+      r.tau_lqr = bal ? last_.tau_lqr : 0; r.tau_yaw = bal ? last_.tau_yaw : 0;
+      for (int k = 0; k < 2; ++k) {
+        const auto & cw = bus_->motors()[idx_.at(names[2 + k])];
+        r.h[k] = h_[k]; r.M[k] = M[k]; r.Md[k] = Md[k]; r.h_tgt[k] = h_tgt[k];
+        r.hip_tau[k] = hip_tau_[k]; r.hip_cur_fb[k] = fb[k].status.current_a; r.hip_age_ms[k] = (t - fb[k].mono_ns) * 1e-6;
+        r.w_wheel[k] = f.w_wheel_joint[k]; r.wheel_pre_lpf[k] = bal ? last_.wheel_pre_lpf[k] : 0; r.wheel_tau[k] = wheel_tau[k];
+        r.wheel_tau_fb[k] = cw.current_to_joint_torque(fb[2 + k].status.current_a);
+        r.wheel_age_ms[k] = (t - fb[2 + k].mono_ns) * 1e-6;
+      }
+      const uint64_t w = ring_w_.load(std::memory_order_relaxed);
+      if (w - ring_r_.load(std::memory_order_acquire) < kRing) {ring_[w % kRing] = r; ring_w_.store(w + 1, std::memory_order_release);}
+      else {++log_dropped_;}
+    }
+    prev_step_ns_ = t;
+  }
+
+  // non-RT: drain the ring into logs/steps/<date>_<session>.csv (new file per arm)
+  void log_writer()
+  {
+    std::FILE * fp = nullptr;
+    int cur = -1;
+    int64_t idle_since = 0;
+    std::error_code ec;
+    std::filesystem::create_directories(step_log_dir_, ec);
+    while (log_run_) {
+      std::this_thread::sleep_for(20ms);
+      uint64_t rd = ring_r_.load(std::memory_order_relaxed);
+      const uint64_t wr = ring_w_.load(std::memory_order_acquire);
+      if (rd == wr) {
+        if (fp && idle_since && now_ns() - idle_since > 1000000000LL) {std::fclose(fp); fp = nullptr;}
+        if (!idle_since) {idle_since = now_ns();}
+        continue;
+      }
+      idle_since = 0;
+      for (; rd != wr; ++rd) {
+        const StepRec & r = ring_[rd % kRing];
+        if (!fp || r.session != cur) {
+          if (fp) {std::fclose(fp);}
+          cur = r.session;
+          char name[64];
+          const std::time_t now = std::time(nullptr);
+          std::strftime(name, sizeof(name), "%Y-%m-%d_%H%M%S", std::localtime(&now));
+          const std::string path = step_log_dir_ + "/" + name + "_step.csv";
+          fp = std::fopen(path.c_str(), "w");
+          if (fp) {
+            RCLCPP_INFO(get_logger(), "step log -> %s", path.c_str());
+            std::fprintf(fp, "step,t_ns,mode,dt_ms,imu_age_ms,pitch,roll,gx,gy,gz,th,thd,th_kin,th_bias,x_err,v,v_ref,vx,wz,"
+              "hL,hR,ML,MR,MdL,MdR,h_tgtL,h_tgtR,hip_tauL,hip_tauR,hip_curL,hip_curR,hip_ageL,hip_ageR,"
+              "wwL,wwR,tau_lqr,tau_yaw,pre_lpfL,pre_lpfR,wheel_tauL,wheel_tauR,wheel_fbL,wheel_fbR,wheel_ageL,wheel_ageR\n");
+          }
+        }
+        if (fp) {
+          std::fprintf(fp, "%llu,%lld,%d,%.3f,%.2f,%.5f,%.5f,%.4f,%.4f,%.4f,%.5f,%.4f,%.5f,%.5f,%.4f,%.4f,%.3f,%.3f,%.3f,"
+            "%.4f,%.4f,%.4f,%.4f,%.3f,%.3f,%.4f,%.4f,%.3f,%.3f,%.2f,%.2f,%.2f,%.2f,"
+            "%.3f,%.3f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%.2f\n",
+            static_cast<unsigned long long>(r.step), static_cast<long long>(r.t_ns), r.mode, r.dt_ms, r.imu_age_ms,  // NOLINT
+            r.pitch, r.roll, r.gx, r.gy, r.gz, r.th, r.thd, r.th_kin, r.th_bias, r.x_err, r.v, r.v_ref, r.vx, r.wz,
+            r.h[0], r.h[1], r.M[0], r.M[1], r.Md[0], r.Md[1], r.h_tgt[0], r.h_tgt[1], r.hip_tau[0], r.hip_tau[1],
+            r.hip_cur_fb[0], r.hip_cur_fb[1], r.hip_age_ms[0], r.hip_age_ms[1],
+            r.w_wheel[0], r.w_wheel[1], r.tau_lqr, r.tau_yaw, r.wheel_pre_lpf[0], r.wheel_pre_lpf[1],
+            r.wheel_tau[0], r.wheel_tau[1], r.wheel_tau_fb[0], r.wheel_tau_fb[1], r.wheel_age_ms[0], r.wheel_age_ms[1]);
+        }
+      }
+      ring_r_.store(rd, std::memory_order_release);
+      if (fp) {std::fflush(fp);}
+    }
+    if (fp) {std::fclose(fp);}
   }
 
   void publish()
@@ -723,6 +818,16 @@ private:
   double hip_tau_[2] = {0, 0}, hip_cur_[2] = {0, 0}, wheel_tau_[2] = {0, 0}, wheel_cur_[2] = {0, 0};
   double pitch_ = 0, roll_ = 0, th_kin_ = 0, l_pend_ = 0, imu_age_ms_ = 1e9, vx_cmd_ = 0, wz_cmd_ = 0;
   Output last_;
+  // 200 Hz step log (SPSC ring: loop thread writes, log_writer reads)
+  bool step_log_ = true;
+  std::string step_log_dir_;
+  std::array<StepRec, kRing> ring_{};
+  std::atomic<uint64_t> ring_w_{0}, ring_r_{0}, log_dropped_{0};
+  std::atomic<bool> log_run_{true};
+  std::atomic<int> log_session_{0};
+  std::thread log_th_;
+  uint64_t step_n_ = 0;
+  int64_t prev_step_ns_ = 0;
   gen2_sensors::ImuShmReader shm_;
   int64_t shm_try_ns_ = 0;
   bool use_shm_ = true;

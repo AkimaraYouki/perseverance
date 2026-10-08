@@ -67,6 +67,7 @@ struct Output
   double leg_kp = 0.0, leg_kd = 0.0, ff_force = 0.0;
   // debug
   double th = 0, thd = 0, v = 0, pitch = 0, roll = 0, v_ref = 0, v_lim = 0, x_err = 0, th_bias = 0;
+  double tau_lqr = 0, tau_yaw = 0, wheel_pre_lpf[2] = {0, 0};   // wheel torque before the LPF / deadband comp
   bool lifted = false;
 };
 
