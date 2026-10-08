@@ -34,6 +34,7 @@ TUNE = dict(
     ctrl="lqr",
     lqr_qx=2.0, lqr_qv=5.0, lqr_qth=100.0, lqr_qthd=5.0,   # LQR 상태 가중 [진행거리 m, 속도 m/s, 진자각 rad, 각속도 rad/s]
     lqr_r=1.0,           # LQR 입력 가중 (두 바퀴 토크 합 N·m)
+    lqr_mx=1.0, lqr_mv=1.0, lqr_mth=1.0, lqr_mthd=1.0,   # LQR 이득 성분별 배율 [x, v, θ, θ̇] (실기 이득 재현용, 기본 1)
     wheel_tau_max=7.0,   # 바퀴 토크 한계 [N·m] (AK45-10 피크)
     fric_comp_nm=0.11,   # 바퀴 마찰 보상 [N·m]: 바퀴마다 fric_comp_nm x tanh(관절 속도 / fric_comp_w) 를 토크에 더함. 0 = 끔. 운동 마찰 실측 0.11 (2026-10-06)
                          #   운동 마찰과 같은 크기로 (2026-10-03 pv robust 마찰 켬: 보상 0 -> 74/88, 0.25 -> 87/88 = 마찰 없음 88/88 수준,
@@ -208,6 +209,9 @@ TUNE = dict(
     wheel_visc=0.0,      # 바퀴축 점성 마찰 [N·m·s/rad] (실측 없음)
     wheel_deadband_nm=0.625,  # 드라이브가 무시하는 작은 지령 [N·m]: 0.5 A 미만 안 돎 / 0.5 A 이상 돎 -> 0.635 바로 아래. 0.3 A 무시 확인.
                          #   로봇마다 dr_fric 만큼 흩어짐. 경계 스윕 (0.40–0.50 A) 은 아직
+    wheel_backlash_deg=0.0,   # 바퀴 감속기 백래시 [deg, 출력축 전체 유격] (0 = 끔, 사양 18' = 0.3). 켜면 회전자를 바퀴에서 떼어 적분, 엔코더 = 회전자 (2026-10-08)
+    wheel_gear_k=300.0,       # 감속기 강성 [N·m/rad, 출력축] (실측 없음)
+    wheel_gear_c=0.05,        # 감속기 감쇠 [N·m·s/rad] (실측 없음)
     wheel_armature=4.5e-4,  # 바퀴 관성 추가 [kg·m²]: 링크 1.84e-3 + 이것 = 2.29e-3 (실측 2.0~2.6e-3). 제어기 LQR 모델에도 같이
     dr_fric=0.01,        # 정지 마찰·데드밴드 로봇·바퀴마다 ± 비율 (데드밴드 0.625 x 0.99~1.01 = 0.619~0.631: 0.48 A (0.610) 무시, 0.50 A (0.635) 돎)
     dr_fric_dyn=0.3,     # 운동 마찰 로봇·바퀴마다 ± 비율
@@ -609,7 +613,8 @@ def apply_dr():
     kf = 1.0 + _rng.uniform(-1, 1, 2) * args.dr_fric                   # 바퀴 정지 마찰·데드밴드 (좌우 따로, pv robust 와 같음)
     kd_ = 1.0 + _rng.uniform(-1, 1, 2) * args.dr_fric_dyn              # 운동 마찰
     cad.set_wheel_model(robot, wheel_ids, torch.tensor([args.wheel_fric_nm * kf]), torch.tensor([args.wheel_fric_dyn_nm * kd_]),
-                        args.wheel_visc, torch.tensor([args.wheel_deadband_nm * kf]), args.wheel_armature)
+                        args.wheel_visc, torch.tensor([args.wheel_deadband_nm * kf]), args.wheel_armature,
+                        backlash_deg=args.wheel_backlash_deg, gear_k=args.wheel_gear_k, gear_c=args.wheel_gear_c, dt=float(cfg.sim.dt))
     if args.wheel_fric_nm > 0 or args.wheel_deadband_nm > 0:
         msg.append(f"바퀴 정지 마찰 L {args.wheel_fric_nm * kf[0]:.2f} R {args.wheel_fric_nm * kf[1]:.2f} N·m"
                    + (f" 데드밴드 L {args.wheel_deadband_nm * kf[0]:.2f} R {args.wheel_deadband_nm * kf[1]:.2f}" if args.wheel_deadband_nm > 0 else ""))
@@ -766,7 +771,7 @@ def hud_update(t, phase, vx, wz, h_cmd, wheel_pos, wx, tau, next_edge):
     for kk, pl in plots.items():
         pl.set_data(*hist[kk])
 
-RESTART = ("wheel_fric_nm", "wheel_fric_dyn_nm", "wheel_visc", "dr_fric_dyn", "wheel_deadband_nm", "wheel_armature", "dr_fric", "rl_policy", "rec_policy", "dr_mass", "dr_com_cm", "dr_motor", "dr_seed", "imu_tilt_bias_deg", "render_hz", "physics_hz", "color_body", "color_legs", "color_wheels", "spawn_z", "obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
+RESTART = ("wheel_backlash_deg", "wheel_gear_k", "wheel_gear_c", "wheel_fric_nm", "wheel_fric_dyn_nm", "wheel_visc", "dr_fric_dyn", "wheel_deadband_nm", "wheel_armature", "dr_fric", "rl_policy", "rec_policy", "dr_mass", "dr_com_cm", "dr_motor", "dr_seed", "imu_tilt_bias_deg", "render_hz", "physics_hz", "color_body", "color_legs", "color_wheels", "spawn_z", "obstacle", "step_h", "length", "tread", "edge", "hip", "hip_w0", "ridge_h", "ridge_base", "ridge_period",
            "ridge_lane", "ridge_len", "cad_file", "cad_unit", "gen_type", "gen_h", "gen_len", "gen_seed", "env_name", "anymal_type", "anymal_level", "anymal_h", "anymal_w")   # 장면을 다시 만들어야 해서 재시작 필요
 CLI_KEYS = {k for k in TUNE if f"--{k}" in sys.argv}                        # 명령줄로 준 값은 파일보다 우선
 
@@ -937,10 +942,15 @@ def ctrl_frame(t, wx_, h_now, tau):
     c_nom = (_com_nom_w() * _mass[_nonwheel, None]).sum(0) / _m_pend
     rb = _qai(d.root_quat_w[0:1], (c_nom - ax)[None])[0]
     acc = d.body_lin_acc_w[0, 0]
+    _wj = d.joint_vel[0, wheel_ids] * wsign; _wabs = d.body_ang_vel_w[0, wheel_bodies] @ lat  # noqa: E702
+    _wa = robot.actuators["wheels"]
+    if _wa.backlash > 0:                                            # 엔코더는 회전자 쪽 (감속기 백래시 앞)
+        _wr = _wa.omega_r[0] * wsign
+        _wabs = _wabs + (_wr - _wj); _wj = _wr  # noqa: E702
     np_ = lambda x: x.detach().cpu().numpy()[None]  # noqa: E731
     a1 = lambda x: np.array([float(x)])  # noqa: E731
     return wbctrl.Frame(t=t, g_b=np_(d.projected_gravity_b[0]), w_b=np_(d.root_ang_vel_b[0]), h=np_(h_now), tau_hip=np_(tau),
-                        w_wheel_joint=np_(d.joint_vel[0, wheel_ids] * wsign), w_wheel_abs=np_(d.body_ang_vel_w[0, wheel_bodies] @ lat),
+                        w_wheel_joint=np_(_wj), w_wheel_abs=np_(_wabs),
                         th_kin=a1(torch.atan2(rb[0], rb[2])), l_pend=a1(rb.norm()), wx=a1(wx_),
                         wheel_z_min=a1(float(d.body_pos_w[0, wheel_bodies, 2].min()) - R), yaw=a1(psi),
                         sf=a1(float((acc + torch.tensor([0.0, 0.0, 9.81], device=dev)).norm()) / 9.81),

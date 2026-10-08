@@ -67,9 +67,10 @@ class RollPI:
         return np.clip(self.i + kp * e + kd * self.track * rate, -lim, lim)
 
 
-def lqr_torque(lqr, l, x_err, v_err, th, thd):
-    """τ = -K(l) [x - x_ref, v - v_ref, θ, θ'] 를 로봇마다 (진자 길이 l 로 K 보간, lqr_vmc.WheelLQR.torque 와 같음)."""
-    K = np.stack([np.interp(l, lqr.l_grid, lqr.K[:, j]) for j in range(4)], axis=-1)
+def lqr_torque(lqr, l, x_err, v_err, th, thd, mult=(1.0, 1.0, 1.0, 1.0)):
+    """τ = -K(l) [x - x_ref, v - v_ref, θ, θ'] 를 로봇마다 (진자 길이 l 로 K 보간, lqr_vmc.WheelLQR.torque 와 같음).
+    mult: 성분별 배율 (TUNE lqr_mx/mv/mth/mthd, 실기 이득 표를 시뮬에서 그대로 재현할 때)."""
+    K = np.stack([np.interp(l, lqr.l_grid, lqr.K[:, j]) * mult[j] for j in range(4)], axis=-1)
     return -(K[:, 0] * x_err + K[:, 1] * v_err + K[:, 2] * th + K[:, 3] * thd)
 
 
@@ -246,12 +247,13 @@ class WBController:
             v_ref = np.where(guard, np.where(v_now * vx >= 0, v_now * (1.0 - 0.6 * cut), vx), v_ref)
             x_err = np.where(guard, 0.0, x_err)
         x_err = np.clip(x_err + (v_now - v_ref) * DT, -0.3, 0.3)
+        km = tuple(getattr(P, k_, 1.0) for k_ in ("lqr_mx", "lqr_mv", "lqr_mth", "lqr_mthd"))
         pk = int(round(getattr(P, "pred_ms", 0.0) / (DT * 1000)))
         if pk > 0 and hasattr(self.lqr, "A"):                   # 지연 보상: 이미 낸 토크로 지연만큼 앞 상태를 예측해 LQR 에 넣는다
             x_p, v_p, th_p, thd_p = self._predict(l_p, x_err, v_now, th, thd, v_ref, pk)
-            tau_w = lqr_torque(self.lqr, l_p, x_p, v_p - v_ref, th_p - th_ref, thd_p)
+            tau_w = lqr_torque(self.lqr, l_p, x_p, v_p - v_ref, th_p - th_ref, thd_p, km)
         else:
-            tau_w = lqr_torque(self.lqr, l_p, x_err, v_now - v_ref, th - th_ref, thd)
+            tau_w = lqr_torque(self.lqr, l_p, x_err, v_now - v_ref, th - th_ref, thd, km)
         self.dbg = dict(v_ref=v_ref, v_lim=v_lim, vm=vm, brake=v_lim < vm - 0.02, bump=bump_t > 0.0, x_err=x_err)
         if getattr(P, "turn_limit", True):                 # 바깥 바퀴 <= 모터 x wheel_margin 이 되게 회전 상한 (climb_test TUNE turn_limit)
             # 속도는 명령(스틱)으로 본다: 실제 속도로 보면 자갈길에서 추정이 튀어 상한이 출렁여 넘어짐 (stones_turn 16/16 -> 14/16,

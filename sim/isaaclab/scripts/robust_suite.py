@@ -246,7 +246,7 @@ kd_ = np.stack([g.uniform(-1, 1, 2) for g in rngs]) * P.dr_fric_dyn + 1.0      #
 for i in range(N):
     dr[i]["wheel_fric_nm"] = [round(P.wheel_fric_nm * x, 3) for x in kf[i]]
 cad.set_wheel_model(robot, wheel_ids, torch.tensor(P.wheel_fric_nm * kf), torch.tensor(P.wheel_fric_dyn_nm * kd_),
-                    P.wheel_visc, torch.tensor(P.wheel_deadband_nm * kf), P.wheel_armature)
+                    P.wheel_visc, torch.tensor(P.wheel_deadband_nm * kf), P.wheel_armature, backlash_deg=getattr(P, 'wheel_backlash_deg', 0.0), gear_k=getattr(P, 'wheel_gear_k', 300.0), gear_c=getattr(P, 'wheel_gear_c', 0.05), dt=float(cfg.sim.dt))
 CTRL = wbctrl.WBController(P, lqr, m_pend, n=N, seed=args.seed + 1000, edges=spec.get("edges", ()))   # 로봇 N 대 한 번에
 motor_est_a = np.asarray(motor_est)
 
@@ -276,6 +276,9 @@ with torch.inference_mode():
         tau = d.applied_torque[:, leg_ids] * hip_sign
         wj = d.joint_vel[:, wheel_ids] * wsign
         wabs = (d.body_ang_vel_w[:, wheel_bodies] * lat[:, None]).sum(-1)
+        if wheels_act.backlash > 0:                                 # 엔코더는 회전자 쪽 (감속기 백래시 앞)
+            wr = wheels_act.omega_r * wsign
+            wabs = wabs + (wr - wj); wj = wr  # noqa: E702
         ax = d.body_pos_w[:, wheel_bodies].mean(1)
         # 명목 무게중심 (모델 오차 전 링크 좌표 COM 을 지금 링크 자세로) — 실기는 명목 표만 안다. 2026-10-07 전에는 오차가 반영된
         # body_com_pos_w 를 써서 제어기가 실제 무게중심 (±2 cm 오차 포함) 을 알고 있었다

@@ -55,6 +55,7 @@ USD_PATH = os.path.expanduser(f"~/wheeled_biped_isaaclab/{_USD_DIR}/robot_simple
 # 바퀴 축 관성 (한 개) = 모터 회전자 반사관성 (fix_urdf: 157.33e-7 x 10^2 = 1.573e-3) + 바퀴 자체.
 #   CAD: 120 mm 자체 1.82e-4 -> 1.755e-3, 140 mm 자체 2.661e-4 -> 1.839e-3. 140 mm 실측 질량 (고무 16.5 g + 휠 56.0 g, 메시 모양) 2.681e-4 -> 1.841e-3. 사본은 make_wheel_variant 와 같은 식
 WHEEL_IZZ = {70: 1.8414e-3, 60: 1.755e-3}.get(_R_MM, 1.625e-3 + 1.3e-4 * (R_WHEEL / 0.060) ** 4)
+WHEEL_SELF_IZZ = {70: 2.6814e-4, 60: 1.82e-4}.get(_R_MM, 2.68e-4)   # 바퀴 자체 (고무 + 휠, 회전자 제외) — 백래시 모델용
 
 # --- leg_map 표 (theta -> 다리 관절값, dh/dtheta) -------------------------------
 _TH = torch.linspace(leg_map.THETA_MIN - 0.08, leg_map.THETA_MAX + 0.08, 2001, dtype=torch.float64)
@@ -216,19 +217,49 @@ class HipHostP:
 
 # --- 바퀴 모터 + 축 마찰 (2026-10-03 실측: AK45-10 은 0.4 A 이하 지령에 전혀 안 돈다) ----------------------
 class DCMotorFric(DCMotor):
-    """DC 모터 + 드라이브 데드밴드: |지령| <= deadband 이면 0 (드라이브가 작은 전류 지령을 무시하는 경우의 모델 —
-    0.4 A 이하가 안 도는 원인이 마찰인지 이것인지 아직 모름). 기본 0 = DCMotor 와 같음.
-    축 마찰은 여기서 안 한다 — PhysX 관절 마찰 (set_wheel_model) 이 정지 마찰을 솔버 안에서 푼다 (진짜로 붙어 안 돈다)."""
+    """DC 모터 + 드라이브 데드밴드 (+ 선택: 감속기 백래시).
+    데드밴드: |지령| <= deadband 이면 0 (서보 펌웨어의 0.5 A 문턱, 2026-10-06 판정). 기본 0.
+    축 마찰은 여기서 안 한다 — PhysX 관절 마찰 (set_wheel_model) 이 정지 마찰을 솔버 안에서 푼다.
+    백래시 (2026-10-08, backlash > 0): 회전자 (관성 rotor_J, 출력축 환산) 를 바퀴와 분리해 이 안에서 적분한다.
+      토크 공백 모델: 맞물린 채 미는 동안은 τ_m 이 그대로 전달 (기어 강성 무한, 회전자 관성은 바퀴 링크 izz 에 그대로).
+      토크 방향이 바뀌면 회전자가 유격 (출력축 b) 을 혼자 τ_m 으로 건너는 동안 바퀴엔 0 — 반전마다 수 ms 의 토크 공백.
+      반대편 끝에 닿으면 비탄성으로 맞물림. 엔코더는 회전자 쪽이라 도구가 omega_r 를 바퀴 속도로 읽는다.
+      (회전자를 떼어 강성 k 로 잇는 모델은 바퀴 링크가 가벼워져 2.5 ms 물리 스텝에서 발산 — 2026-10-08 98 Hz 발진)"""
 
     def __init__(self, cfg, *args, **kwargs):
         super().__init__(cfg, *args, **kwargs)
         self.deadband = torch.full_like(self.computed_effort, cfg.deadband)
+        self.backlash = 0.0                              # [rad, 출력축] 전체 유격 (0 = 끔)
+        self.gear_k, self.gear_c, self.rotor_J, self.dt, self.n_sub = 300.0, 0.05, 2.0e-3, 1.0 / 400, 10
+        self.omega_r = torch.zeros_like(self.computed_effort)    # 회전자 속도 (관절 좌표, 출력축 환산)
+        self.dphi = torch.zeros_like(self.computed_effort)       # 회전자 - 바퀴 각 (유격 포함)
+
+    def reset(self, env_ids):
+        super().reset(env_ids)
+        self.omega_r[env_ids] = 0.0
+        self.dphi[env_ids] = 0.0
 
     def compute(self, control_action, joint_pos, joint_vel):
         e = control_action.joint_efforts
         if e is not None:
             control_action.joint_efforts = torch.where(e.abs() <= self.deadband, torch.zeros_like(e), e)
-        return super().compute(control_action, joint_pos, joint_vel)
+        if self.backlash <= 0:
+            return super().compute(control_action, joint_pos, joint_vel)
+        out = super().compute(control_action, joint_pos, joint_vel)
+        tau_m = self.applied_effort.clone()
+        hb = 0.5 * self.backlash
+        # 맞물림: 회전자가 유격 끝 (|dphi| = hb) 에서 그 방향으로 밀면 토크 전달 (회전자 관성은 바퀴 링크 izz 에 그대로)
+        push = ((self.dphi >= hb - 1e-9) & (tau_m > 0)) | ((self.dphi <= -hb + 1e-9) & (tau_m < 0))
+        # 유격 안 (또는 반대로 당김): 바퀴엔 0, 회전자 혼자 τ_m 으로 가속해 유격을 건넌다
+        w_free = self.omega_r + self.dt * tau_m / self.rotor_J
+        self.omega_r = torch.where(push, joint_vel, w_free)
+        self.dphi = torch.where(push, self.dphi, (self.dphi + self.dt * (self.omega_r - joint_vel)).clamp(-hb, hb))
+        hit = ~push & (self.dphi.abs() >= hb - 1e-9)                      # 반대편 끝에 닿음 = 다음 스텝부터 맞물림 (비탄성)
+        self.omega_r = torch.where(hit, joint_vel, self.omega_r)
+        tau = torch.where(push, tau_m, torch.zeros_like(tau_m))
+        self.applied_effort = tau
+        out.joint_efforts = tau
+        return out
 
 
 @configclass
@@ -237,7 +268,8 @@ class DCMotorFricCfg(DCMotorCfg):
     deadband: float = 0.0    # [N·m] 이하 지령은 0
 
 
-def set_wheel_model(robot, wheel_ids, fric_static, fric_dyn, viscous=0.0, deadband=0.0, armature=0.0):
+def set_wheel_model(robot, wheel_ids, fric_static, fric_dyn, viscous=0.0, deadband=0.0, armature=0.0,
+                    backlash_deg=0.0, gear_k=300.0, gear_c=0.05, dt=1.0 / 400):
     """바퀴 실측 모델 적용 (창·시험 세트·가혹 평가 공통).
     fric_static / fric_dyn [N·m]: PhysX 관절 마찰 (Isaac Sim 5.x: 정지 = 멈춰 있을 때 버티는 최대 토크, 운동 = 도는 동안 일정).
       숫자 또는 (환경, 바퀴) 텐서. 2026-10-03 확인 (scripts/diag_wheel_friction.py): 정지 0.45 에 0.3 N·m -> 안 돎,
@@ -250,6 +282,10 @@ def set_wheel_model(robot, wheel_ids, fric_static, fric_dyn, viscous=0.0, deadba
     fd = torch.minimum(fd, fs)                                         # PhysX: 정지 >= 운동 이어야 한다 (어기면 설정 자체를 거부, 2026-10-07)
     robot.write_joint_friction_coefficient_to_sim(fs, fd, full(viscous), joint_ids=wheel_ids)
     robot.actuators["wheels"].deadband[:] = full(deadband)                 # 숫자 또는 (환경, 바퀴) — 로봇마다
+    wa = robot.actuators["wheels"]
+    if backlash_deg > 0:                                                   # 반전 토크 공백 모델 (DCMotorFric)
+        wa.backlash, wa.dt = math.radians(backlash_deg), dt
+        wa.rotor_J = (WHEEL_IZZ - WHEEL_SELF_IZZ) + armature               # 유격을 건너는 회전자 (출력축 환산)
     if armature > 0:
         robot.write_joint_armature_to_sim(full(armature), joint_ids=wheel_ids)
 
