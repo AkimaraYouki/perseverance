@@ -23,6 +23,7 @@ START 6, LB 9, RB 10. Set the *_axis / *_button parameters for another layout (e
 import time
 
 import rclpy
+import rclpy.executors
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
@@ -111,7 +112,12 @@ class PadTeleop(Node):
 
 def main():
     rclpy.init()
-    rclpy.spin(PadTeleop())
+    try:
+        rclpy.spin(PadTeleop())
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
+        pass
+    finally:
+        rclpy.try_shutdown()
 
 
 if __name__ == '__main__':

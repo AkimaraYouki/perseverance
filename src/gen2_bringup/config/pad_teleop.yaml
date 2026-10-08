@@ -1,0 +1,25 @@
+# Game pad on the Jetson (or desktop): joy_node (SDL game-controller layout) + gen2_tools/pad_teleop.
+joy_node:
+  ros__parameters:
+    device_id: 0
+    deadzone: 0.05
+    autorepeat_rate: 20.0      # keep /joy flowing while the sticks are held (pad_teleop needs < 0.5 s gaps)
+pad_teleop:
+  ros__parameters:
+    vx_max: 0.5                # stick end [m/s] (target 0.97 = 3.5 km/h after the speed tests)
+    wz_max: 1.0                # [rad/s]
+    height_rate: 0.05          # [m/s] while a trigger is fully pressed
+    deadzone: 0.08
+    joy_timeout_s: 0.5
+    # SDL layout (ROS 2 joy_node). Check with `ros2 topic echo /joy` and change here if the pad differs.
+    vx_axis: 1
+    wz_axis: 2
+    lt_axis: 4
+    rt_axis: 5
+    a_button: 0
+    b_button: 1
+    y_button: 3
+    back_button: 4
+    start_button: 6
+    lb_button: 9
+    rb_button: 10

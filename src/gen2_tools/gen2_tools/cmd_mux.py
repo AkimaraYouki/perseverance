@@ -17,6 +17,7 @@ import time
 
 import numpy as np
 import rclpy
+import rclpy.executors
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -92,7 +93,12 @@ class CmdMux(Node):
 
 def main():
     rclpy.init()
-    rclpy.spin(CmdMux())
+    try:
+        rclpy.spin(CmdMux())
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
+        pass
+    finally:
+        rclpy.try_shutdown()
 
 
 if __name__ == '__main__':
