@@ -31,6 +31,7 @@ balance:
       vmc_kd: 1.0
       vmax_kmh: 3.5
       accel_max: 0.8          # m/s^2 (1.5 -> 0.8 2026-10-09: full stick overshot to 1.28 m/s, pitch +-27 deg)
+      jerk_max: 3.0           # m/s^3 S-curve speed reference: the lean builds up smoothly (0 = old ramp)
       x_hold_moving: false    # position hold only when the stick is released (it added catch-up overshoot while driving)
       fric_comp_nm: 0.0       # 2026-10-08 MIT wheels: 0.11 (velocity-sign Coulomb comp) drove a 12-15 Hz wheel chatter; 0 = quiet
       yaw_kd: 0.15            # 2026-10-08 MIT wheels: 0.5 (sim) gave a 13 Hz L/R torque chatter; 0.15 quiet

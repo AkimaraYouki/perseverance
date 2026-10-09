@@ -31,7 +31,7 @@ WBCore::WBCore(const Params & p, const LqrTable & lqr)
 
 void WBCore::reset()
 {
-  x_err_ = t_un_ = t_ld_ = g_vf_ = g_i_ = g_ref_ = vf_ = rf_ = th_bias_ = v_prev_ = roll_i_ = yaw_i_ = 0.0;
+  x_err_ = t_un_ = t_ld_ = g_vf_ = g_i_ = g_ref_ = vf_ = rf_ = th_bias_ = v_prev_ = roll_i_ = yaw_i_ = g_acc_ = 0.0;
   lift_on_ = false;
   wf_[0] = wf_[1] = db_e_[0] = db_e_[1] = 0.0;
 }
@@ -80,7 +80,16 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
   double v_lim = std::max(0.0, vm - (P.brake_kp * std::max(e, 0.0) + g_i));
   if (P.turn_slow) {v_lim = std::min(v_lim, std::max(0.0, vm - kHalfTrack * std::fabs(wz)));}
   const double tgt = clip(vx, -v_lim, v_lim);
-  double g_ref = g_ref_ + clip(tgt - g_ref_, -P.accel_max * kDt, P.accel_max * kDt);
+  double g_ref;
+  if (P.jerk_max > 0) {
+    // S-curve: the acceleration itself ramps (the body lean follows the acceleration, so no step in lean)
+    const double a_want = clip(std::sqrt(2.0 * P.jerk_max * std::fabs(tgt - g_ref_)) * sgn(tgt - g_ref_), -P.accel_max, P.accel_max);
+    g_acc_ += clip(a_want - g_acc_, -P.jerk_max * kDt, P.jerk_max * kDt);
+    g_ref = g_ref_ + g_acc_ * kDt;
+    if ((tgt - g_ref) * (tgt - g_ref_) < 0) {g_ref = tgt; g_acc_ = 0.0;}   // no overshoot of the target
+  } else {
+    g_ref = g_ref_ + clip(tgt - g_ref_, -P.accel_max * kDt, P.accel_max * kDt);
+  }
   double v_ref = g_ref;
   double x_err = std::fabs(vx) > v_lim + 1e-3 || (!P.x_hold_moving && std::fabs(vx) > 0.02) ? 0.0 : x_err_;
   if (P.speed_guard < 1.0) {
@@ -115,14 +124,14 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
   if (b_) {t_ld_ = ldd ? t_ld_ + kDt : 0.0;} else if (up) {t_ld_ = 0.0;}
   const bool down = b_ && t_ld_ >= P.land_detect_s;
   lift_on_ = (lift_on_ || up) && !down;
-  if (down) {t_un_ = 0.0; x_err_ = 0.0; g_i_ = 0.0; g_ref_ = v_now; g_vf_ = v_now; roll_i_ = 0.0;}
+  if (down) {t_un_ = 0.0; x_err_ = 0.0; g_i_ = 0.0; g_ref_ = v_now; g_vf_ = v_now; roll_i_ = 0.0; g_acc_ = 0.0;}
   const bool lifted = lift_on_;
   if (lifted) {
     for (int k = 0; k < 2; ++k) {
       act[2 + k] = clip(-P.lift_wheel_kd * f.w_wheel_joint[k] / P.wheel_tau_max, -1.0, 1.0);
       act[k] = (P.idle_h - h_ref) / 0.12;
     }
-    roll_i_ = 0.0; x_err_ = 0.0; g_i_ = g_ref_ = g_vf_ = 0.0; yaw_i_ = 0.0;
+    roll_i_ = 0.0; x_err_ = 0.0; g_i_ = g_ref_ = g_vf_ = 0.0; yaw_i_ = 0.0; g_acc_ = 0.0;
   }
   const bool drv = !lift_on_;
   const double roll_ref = clip(std::atan(P.turn_lean * g_ref_ * wz / 9.81), -20.0 * M_PI / 180.0, 20.0 * M_PI / 180.0);

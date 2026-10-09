@@ -182,6 +182,7 @@ public:
     P.vmax_kmh = declare_parameter("tune.vmax_kmh", P.vmax_kmh);
     P.accel_max = declare_parameter("tune.accel_max", P.accel_max);
     P.x_hold_moving = declare_parameter("tune.x_hold_moving", P.x_hold_moving);
+    P.jerk_max = declare_parameter("tune.jerk_max", P.jerk_max);
     P.fric_comp_nm = declare_parameter("tune.fric_comp_nm", P.fric_comp_nm);
     P.db_comp = static_cast<int>(declare_parameter("tune.db_comp", static_cast<int64_t>(P.db_comp)));
     P.db_comp_nm = declare_parameter("tune.db_comp_nm", P.db_comp_nm);
