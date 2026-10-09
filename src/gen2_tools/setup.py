@@ -26,5 +26,6 @@ setup(
         'cmd_mux = gen2_tools.cmd_mux:main',
         'pad_teleop = gen2_tools.pad_teleop:main',
         'scan_gate = gen2_tools.scan_gate:main',
+        'aruco_follow = gen2_tools.aruco_follow:main',
     ]},
 )

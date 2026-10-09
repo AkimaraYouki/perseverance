@@ -18,6 +18,7 @@ pad_teleop:
     rt_axis: 4
     a_button: 0
     b_button: 1
+    x_button: 3
     y_button: 4
     lb_button: 6
     rb_button: 7

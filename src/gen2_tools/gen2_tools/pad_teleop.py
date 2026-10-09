@@ -12,6 +12,7 @@ balance/* services. Only standard messages, so it also runs on ROS 2 Humble.
   A              stop (vx = wz = 0 while held)
   B              default height
   LB + RB 0.5 s  emergency DISARM (0 A — the robot drops)
+  X              ArUco follow on / off (sticks override; release = follow resumes)
   Y              jump (not on the robot yet)
 If /joy stops (pad unplugged, joy_node dead) the heartbeat stops: the robot stops, sits and disarms.
 
@@ -29,7 +30,7 @@ from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Empty, Float64
-from std_srvs.srv import Trigger
+from std_srvs.srv import SetBool, Trigger
 
 H_MIN, H_MAX, H_DEFAULT = 0.1325, 0.2325, 0.1825
 
@@ -45,13 +46,17 @@ class PadTeleop(Node):
         self.joy_to = p('joy_timeout_s', 0.5)
         # defaults = the user's pad on the desktop (Xbox over Bluetooth, measured 2026-10-09)
         self.ax = {k: p(f'{k}_axis', v) for k, v in dict(vx=1, wz=2, lt=5, rt=4).items()}
-        self.bt = {k: p(f'{k}_button', v) for k, v in dict(a=0, b=1, y=4, back=10, start=11, lb=6, rb=7).items()}
+        self.bt = {k: p(f'{k}_button', v) for k, v in dict(a=0, b=1, x=3, y=4, back=10, start=11, lb=6, rb=7).items()}
         self.joy, self.joy_t, self.prev = None, 0.0, {}
         self.h, self.estop_t = H_DEFAULT, None
         self.hb = self.create_publisher(Empty, 'balance/heartbeat', 10)
         self.cmd = self.create_publisher(Twist, 'cmd_vel/teleop', 10)
         self.hp = self.create_publisher(Float64, 'balance/height', 10)
         self.cli = {k: self.create_client(Trigger, f'balance/{k}') for k in ('start', 'sit', 'disarm')}
+        self.cli_follow = self.create_client(SetBool, 'aruco/enable')
+        self.follow = False
+        self.active_t = 0.0      # last time the sticks / A were used: the pad only commands while in use,
+        #                          so cmd_mux falls back to cmd_vel/auto (ArUco follow) when the sticks rest
         self.create_subscription(Joy, 'joy', self._joy, 10)
         self.create_timer(0.05, self._tick)
         self.get_logger().info('pad_teleop ready: START = start, BACK = sit, LB+RB 0.5 s = disarm')
@@ -104,11 +109,22 @@ class PadTeleop(Node):
             self.h = H_DEFAULT
         up = (1.0 - self._axis('rt')) / 2.0 - (1.0 - self._axis('lt')) / 2.0
         self.h = min(H_MAX, max(H_MIN, self.h + self.h_rate * 0.05 * up))
+        if self._edge('x'):
+            self.follow = not self.follow
+            if self.cli_follow.service_is_ready():
+                self.cli_follow.call_async(SetBool.Request(data=self.follow))
+                self.get_logger().info(f'ArUco follow {"ON" if self.follow else "OFF"}')
+            else:
+                self.get_logger().warn('aruco/enable not reachable (aruco_follow not running)')
         t = Twist()
         if not self._btn('a'):
             t.linear.x = float(self.vx_max * self._dz(self._axis('vx')))
             t.angular.z = float(self.wz_max * self._dz(self._axis('wz')))
-        self.cmd.publish(t)
+        now = time.monotonic()
+        if self._btn('a') or t.linear.x != 0.0 or t.angular.z != 0.0:
+            self.active_t = now
+        if now - self.active_t < 0.3:          # in use (+0.3 s of zeros after release for a crisp stop)
+            self.cmd.publish(t)
         self.hp.publish(Float64(data=float(self.h)))
 
 
