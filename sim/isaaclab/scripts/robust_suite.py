@@ -339,6 +339,11 @@ with torch.inference_mode():
                 TR.setdefault("t", []).append(t); TR.setdefault("roll", []).append(np.asarray(info["roll"]).copy())
                 TR.setdefault("gx", []).append(np.asarray(w_b)[:, 0].copy()); TR.setdefault("h", []).append(h_.copy())
                 TR.setdefault("h_tgt", []).append(P.idle_h + 0.12 * np.clip(a[:, 0:2], -1.0, 1.0))
+                for k_ in ("v", "v_ref", "x_err", "th_bias", "th", "v_lim"):
+                    if k_ in info:
+                        TR.setdefault(k_, []).append(np.asarray(info[k_], float).copy())
+                TR.setdefault("v_true", []).append(vt_.copy()); TR.setdefault("wx", []).append(np.asarray(wx, float).copy()); TR.setdefault("vx_cmd", []).append(np.full(N, float(vx)))
+                TR.setdefault("th_true", []).append(tht_.copy()); TR.setdefault("wheel_cmd", []).append(a[:, 2:4] * P.wheel_tau_max)
             kps[alive] = kp[alive, None]; kds[alive] = kd[alive, None]
             for i in np.flatnonzero(alive):
                 rec[i]["pitch"].append(math.degrees(info["pitch"][i])); rec[i]["roll"].append(math.degrees(info["roll"][i]))

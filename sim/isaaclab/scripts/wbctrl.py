@@ -90,7 +90,7 @@ class WBController:
         m = np.ones(n, bool) if mask is None else np.asarray(mask, bool)
         z = lambda name: np.where(m, 0.0, getattr(self, name, np.zeros(n)))  # noqa: E731
         for k in ("t_phase", "x_err", "t_un", "t_ld", "g_vf", "g_i", "g_ref", "bump_t", "bump_quiet", "vf", "rf",
-                  "th_bias", "v_prev", "t_takeoff", "vh", "yaw_i", "acc_f", "g_acc"):
+                  "th_bias", "v_prev", "t_takeoff", "vh", "yaw_i", "acc_f", "g_acc", "settled"):
             setattr(self, k, z(k))
         self.phase = np.where(m, DRIVE, getattr(self, "phase", np.zeros(n, int))).astype(int)
         self.next_edge = np.where(m, 0, getattr(self, "next_edge", np.zeros(n, int))).astype(int)
@@ -270,7 +270,19 @@ class WBController:
             cut = np.minimum(1.0, (ww - P.speed_guard) / (1.0 - P.speed_guard))
             v_ref = np.where(guard, np.where(v_now * vx >= 0, v_now * (1.0 - 0.6 * cut), vx), v_ref)
             x_err = np.where(guard, 0.0, x_err)
+        xl = getattr(P, "x_leak_moving", 0.0)
+        if xl > 0:   # 주행 중 새는 위치 적분 (x_hold_moving False 대신): 정상 상태 속도 오차는 메우고, 큰 따라잡기는 1/xl 초 안에 잊는다
+            mov = (np.abs(vx) > 0.02) & (np.abs(vx) <= v_lim + 1e-3)    # 속도 상한에 걸린 명령은 예전처럼 0
+            x_err = np.where(mov, self.x_err * (1.0 - xl * DT), x_err)
+        if getattr(P, "x_hold_from_stop", False):
+            # 멈춘 자리에서 유지 (2026-10-09): 스틱을 놓은 뒤 실제로 거의 멈출 때 (|v| < stop_v) 까지는 위치 항 0 — 감속이 기준보다 늦어
+            # 놓은 지점을 지나쳐도 되돌아가지 않는다. 다시 스틱을 밀면 풀림
+            self.settled = np.where(np.abs(vx) > 0.02, 0.0, np.where(np.abs(v_now) < P.stop_v, 1.0, self.settled))
+            x_err = np.where(self.settled > 0.5, x_err, 0.0)
         x_err = np.clip(x_err + (v_now - v_ref) * DT, -0.3, 0.3)
+        lf = getattr(P, "lean_ff", 0.0)
+        if lf > 0:   # 기울기 피드포워드 (2026-10-09): 속도 기준의 가속도만큼 미리 기울인다 (정상 가속 평형 θ = atan(a/g)) -> 감속·가속 추종 지연 줄임
+            th_ref = th_ref + np.where(ph == DRIVE, lf * np.arctan(g_acc / 9.81), 0.0)
         km = tuple(getattr(P, k_, 1.0) for k_ in ("lqr_mx", "lqr_mv", "lqr_mth", "lqr_mthd"))
         pk = int(round(getattr(P, "pred_ms", 0.0) / (DT * 1000)))
         if pk > 0 and hasattr(self.lqr, "A"):                   # 지연 보상: 이미 낸 토크로 지연만큼 앞 상태를 예측해 LQR 에 넣는다
