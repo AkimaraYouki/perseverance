@@ -280,13 +280,9 @@ def _netpower(d, box, s):
     if sy.get('wifi_up'):
         dbm = sy.get('wifi_dbm')
         col = OK if _ok(dbm) and dbm > -67 else WARN
-        pct = max(0, min(100, round(2 * (dbm + 100)))) if _ok(dbm) else None   # NetworkManager 식: -50 dBm 이상 100 %, -100 dBm 0 %
-        t = f"{_fmt(pct, 'd')}% {_fmt(dbm, '.0f')}dBm"
         ssid = (sy.get('ssid') or '?')[:12]
-        room = w - d.textlength(t, font=F_S) - 4                                 # 신호 글자와 안 겹치게 SSID 를 자름
-        while len(ssid) > 1 and d.textlength(f"WiFi {ssid}", font=F_S) > room:
-            ssid = ssid[:-1]
         _txt(d, (x, y), f"WiFi {ssid}", F_S, FG)
+        t = f"{_fmt(dbm, '.0f')}dBm"
         _txt(d, (x + w - d.textlength(t, font=F_S), y), t, F_S, col)
         y += ROW
         _txt(d, (x, y), f"IP {sy.get('wifi_ip') or '--'}", F_S, DIM)
