@@ -1,0 +1,23 @@
+# slam_toolbox online async on the Jetson (2D LiDAR RPLIDAR C1, 10 Hz). Odometry = balance_node (wheels + gyro).
+slam_toolbox:
+  ros__parameters:
+    mode: mapping
+    base_frame: base_link
+    odom_frame: odom
+    map_frame: map
+    scan_topic: /scan_level        # scan_gate: only scans with |pitch|, |roll| < 5 deg
+    resolution: 0.05
+    max_laser_range: 8.0
+    minimum_time_interval: 0.2
+    minimum_travel_distance: 0.10
+    minimum_travel_heading: 0.10
+    transform_publish_period: 0.05
+    map_update_interval: 2.0
+    transform_timeout: 0.3
+    tf_buffer_duration: 10.0
+    use_scan_matching: true
+    use_scan_barycenter: true
+    do_loop_closing: true
+    throttle_scans: 1
+    stack_size_to_use: 40000000
+    debug_logging: false

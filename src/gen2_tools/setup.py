@@ -25,5 +25,6 @@ setup(
         'balance_cli = gen2_tools.balance_cli:main',
         'cmd_mux = gen2_tools.cmd_mux:main',
         'pad_teleop = gen2_tools.pad_teleop:main',
+        'scan_gate = gen2_tools.scan_gate:main',
     ]},
 )

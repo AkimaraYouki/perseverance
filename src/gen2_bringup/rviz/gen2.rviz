@@ -1,6 +1,6 @@
-# C-WANG RViz (run on the desktop: rviz2 -d gen2.rviz). Until the robot publishes TF the fixed frame is
-# the LiDAR's own frame "laser" (x = robot front, verified 2026-10-08). Camera needs
-# ros-jazzy-image-transport-plugins on the desktop (topic is JPEG compressed).
+# C-WANG RViz (run on the desktop: rviz2 -d gen2.rviz). Frames: map (slam_toolbox) -> odom (balance_node)
+# -> base_link -> laser / camera_link / imu_link. Without SLAM running set Fixed Frame to odom.
+# Camera needs ros-<distro>-image-transport-plugins on the desktop (topic is JPEG compressed).
 Panels:
   - Class: rviz_common/Displays
     Name: Displays
@@ -13,17 +13,36 @@ Visualization Manager:
       Cell Size: 0.25
       Plane Cell Count: 16
       Reference Frame: <Fixed Frame>
-    - Class: rviz_default_plugins/Axes
-      Name: LiDAR axes
+    - Class: rviz_default_plugins/Map
+      Name: Map
       Enabled: true
-      Length: 0.2
-      Radius: 0.01
-      Reference Frame: laser
+      Topic:
+        Value: /map
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Depth: 1
+      Alpha: 0.7
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Marker Scale: 0.3
+      Show Names: true
+    - Class: rviz_default_plugins/Odometry
+      Name: Odometry
+      Enabled: true
+      Topic:
+        Value: /odom
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 5
+      Keep: 50
     - Class: rviz_default_plugins/LaserScan
       Name: LiDAR
       Enabled: true
       Topic:
-        Value: /scan
+        Value: /scan_level
         Reliability Policy: Best Effort
         Durability Policy: Volatile
         History Policy: Keep Last
@@ -43,7 +62,7 @@ Visualization Manager:
         Depth: 1
       Transport Hint: compressed
   Global Options:
-    Fixed Frame: laser
+    Fixed Frame: map
     Frame Rate: 30
   Tools:
     - Class: rviz_default_plugins/MoveCamera

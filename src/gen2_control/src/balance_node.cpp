@@ -37,6 +37,8 @@
 #include "gen2_hardware/motor_params.hpp"
 #include "gen2_msgs/msg/controller_state.hpp"
 #include "std_msgs/msg/float64.hpp"
+#include "nav_msgs/msg/odometry.hpp"
+#include "tf2_ros/transform_broadcaster.h"
 #include "gen2_sensors/imu_shm.hpp"
 #include "gen2_msgs/msg/motor_state_array.hpp"
 #include "geometry_msgs/msg/twist.hpp"
@@ -279,6 +281,9 @@ public:
         });
     sit_s_ = declare_parameter("sit_s", 3.0);
     pub_ = create_publisher<gen2_msgs::msg::ControllerState>("controller/state", 10);
+    // wheel + gyro odometry (odom -> base_link, planar) for SLAM / RViz; integrated while standing/balancing
+    odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("odom", 10);
+    tf_br_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
     pub_timer_ = create_wall_timer(10ms, [this] {publish();});
     step_log_ = declare_parameter("step_log", true);
     step_log_dir_ = declare_parameter("step_log_dir", std::string(std::getenv("HOME") ? std::getenv("HOME") : "/tmp") + "/gen2_ws/logs/steps");
@@ -610,6 +615,18 @@ private:
     f.t = t * 1e-9;
     th_kin_ = f.th_kin;
     l_pend_ = f.l_pend;
+    if (mode_ == Mode::kStand || mode_ == Mode::kBalance) {
+      // planar odometry: v from both wheels' world rotation (joint + pitch rate + shank), yaw from the gyro
+      const double v_o = params_.r_wheel * 0.5 * (f.w_wheel_abs[0] + f.w_wheel_abs[1]);
+      std::lock_guard<std::mutex> lk(odom_m_);
+      od_yaw_ += f.w_b[2] / rate_hz_;
+      od_x_ += v_o * std::cos(od_yaw_) / rate_hz_;
+      od_y_ += v_o * std::sin(od_yaw_) / rate_hz_;
+      od_v_ = v_o; od_wz_ = f.w_b[2];
+    } else {
+      std::lock_guard<std::mutex> lk(odom_m_);
+      od_v_ = od_wz_ = 0.0;
+    }
     double vx = 0, wz = 0;
     {
       std::lock_guard<std::mutex> lk(cmd_m_);
@@ -905,6 +922,24 @@ private:
 
   void publish()
   {
+    {
+      double x, y, yaw, v, wz;
+      {
+        std::lock_guard<std::mutex> lk(odom_m_);
+        x = od_x_; y = od_y_; yaw = od_yaw_; v = od_v_; wz = od_wz_;
+      }
+      const auto stamp = now();
+      geometry_msgs::msg::TransformStamped tf;
+      tf.header.stamp = stamp; tf.header.frame_id = "odom"; tf.child_frame_id = "base_link";
+      tf.transform.translation.x = x; tf.transform.translation.y = y;
+      tf.transform.rotation.z = std::sin(0.5 * yaw); tf.transform.rotation.w = std::cos(0.5 * yaw);
+      tf_br_->sendTransform(tf);
+      nav_msgs::msg::Odometry od;
+      od.header = tf.header; od.child_frame_id = "base_link";
+      od.pose.pose.position.x = x; od.pose.pose.position.y = y; od.pose.pose.orientation = tf.transform.rotation;
+      od.twist.twist.linear.x = v; od.twist.twist.angular.z = wz;
+      odom_pub_->publish(od);
+    }
     gen2_msgs::msg::ControllerState s;
     s.header.stamp = now();
     {
@@ -962,6 +997,10 @@ private:
   double hip_tau_[2] = {0, 0}, hip_cur_[2] = {0, 0}, wheel_tau_[2] = {0, 0}, wheel_cur_[2] = {0, 0};
   double pitch_ = 0, roll_ = 0, th_kin_ = 0, l_pend_ = 0, imu_age_ms_ = 1e9, vx_cmd_ = 0, wz_cmd_ = 0;
   Output last_;
+  std::mutex odom_m_;
+  double od_x_ = 0.0, od_y_ = 0.0, od_yaw_ = 0.0, od_v_ = 0.0, od_wz_ = 0.0;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
+  std::unique_ptr<tf2_ros::TransformBroadcaster> tf_br_;
   // 200 Hz step log (SPSC ring: loop thread writes, log_writer reads)
   bool step_log_ = true;
   std::string step_log_dir_;
