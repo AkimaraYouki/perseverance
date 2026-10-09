@@ -57,7 +57,16 @@ class CmdMux(Node):
         self.create_subscription(Twist, 'cmd_vel/auto', lambda m: self._in('auto', m), 10)
         self.create_subscription(LaserScan, 'scan', self._scan, qos_profile_sensor_data)
         self.status = 'idle'
+        self.add_on_set_parameters_callback(self._set)   # `ros2 param set /cmd_mux lidar_limit false` works live
         self.create_timer(0.2, lambda: self.st_pub.publish(String(data=self.status)))
+
+    def _set(self, params):
+        from rcl_interfaces.msg import SetParametersResult
+        for q in params:
+            if q.name == 'lidar_limit':
+                self.limit_on = bool(q.value)
+                self.get_logger().info(f'lidar_limit -> {self.limit_on}')
+        return SetParametersResult(successful=True)
 
     def _scan(self, m):
         r = np.asarray(m.ranges, dtype=np.float64)
