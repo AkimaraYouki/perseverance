@@ -39,7 +39,7 @@ balance:
       wheel_lpf_hz: 20.0
       bal_adapt: 0.3          # user 2026-10-08 (0.1 / 0 tried: 0 stops the bias walk but parks ~0.17 m off)
       contact_tau_min: 0.8
-      roll_kp: 1.0            # 2026-10-09 desktop step 2 (sim rough terrain 91 -> 98 %). Step 1 = 0.5/3/0 (10-08: flat, pushes, ramp OK, ~2 deg left)
-      roll_ki: 8.0            # if the legs shake / roll oscillates: back to 0.5 / 3
+      roll_kp: 0.5            # 2026-10-08 desktop step 1: flat, pushes, one-wheel ramp OK (~2 deg left by roll_leak)
+      roll_ki: 3.0            # 2026-10-09 step 2 (1.0/8/0): body rocked left-right at 2.8 Hz (roll sd 0.6 deg, gx sd 11 deg/s) -> back here
       roll_kd: 0.0
       turn_lean: 0.0          # needs the roll loop
