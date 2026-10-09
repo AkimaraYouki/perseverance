@@ -2,8 +2,8 @@ cmd_mux:
   ros__parameters:
     teleop_timeout_s: 0.5
     auto_timeout_s: 0.5
-    stop_dist_m: 0.35          # LiDAR return this close in the travel corridor -> vx 0
-    slow_dist_m: 0.80          # full speed beyond this
+    stop_dist_m: 0.30          # LiDAR return this close in the travel corridor -> vx 0
+    slow_dist_m: 0.50          # full speed beyond this (0.80 felt like sudden braking while driving, 2026-10-09)
     corridor_half_width_m: 0.20  # wheel track 0.198 m + margin
     self_radius_m: 0.20        # ignore the robot's own legs/wheels (VERIFY on the robot)
     lidar_forward_deg: 0.0     # scan angle of the robot front. 2026-10-08 hand moved in front: most changing -12..+4 deg -> 0 OK
