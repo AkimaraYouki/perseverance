@@ -155,10 +155,11 @@ public:
     hip_mode_ = declare_parameter("hip_mode", std::string("servo_pos"));
     // "mit" = AK 3.0 MIT frames: damping kd inside the drive (kHz), stiffness kp(M*-M) + feed-forward
     //   computed here and sent as t_ff; p_des unused (drive frame has the 60 deg power-up wrap)
-    if (hip_mode_ != "servo_pos" && hip_mode_ != "current_pd" && hip_mode_ != "mit") {
+    if (hip_mode_ != "servo_pos" && hip_mode_ != "current_pd" && hip_mode_ != "mit" && hip_mode_ != "mit_pos") {
       throw std::runtime_error("hip_mode: servo_pos|current_pd|mit");
     }
-    mit_kt_drive_ = declare_parameter("mit_kt_drive", 0.5994);   // Kt the drive uses for t -> current (measured 2026-10-07)
+    mit_kt_drive_ = declare_parameter("mit_kt_drive", 0.5994);
+    mit_kp_scale_ = declare_parameter("mit_kp_scale", 1.0);   // mit_pos: drive kp correction (probe hinted ~0.56 effective)   // Kt the drive uses for t -> current (measured 2026-10-07)
     osc_flips_ = static_cast<int>(declare_parameter("osc_flips", 6));
     osc_window_s_ = declare_parameter("osc_window_s", 0.3);
     osc_vel_ = declare_parameter("osc_vel_rad_s", 1.0);
@@ -366,7 +367,7 @@ private:
     {
       std::lock_guard<std::mutex> lk(mode_m_);
       why = arm_check(start);
-      if (why.empty() && start && hip_mode_ != "mit" && !hips_zero_ok()) {why = "home needs hip_mode mit";}
+      if (why.empty() && start && hip_mode_.rfind("mit", 0) != 0 && !hips_zero_ok()) {why = "home needs hip_mode mit / mit_pos";}
       if (why.empty()) {
         want_ = m;
         last_refusal_.clear();
@@ -781,15 +782,26 @@ private:
         bus_->send(gen2_hardware::cubemars::encode_pos_spd(c.can_id, tgt_raw, hip_speed_ * epr, hip_accel_ * epr), err);
         hip_tau_[k] = f.tau_hip[k];                        // measured (logging)
         hip_cur_[k] = fb[k].status.current_a;
-      } else if (hip_mode_ == "mit") {
+      } else if (hip_mode_ == "mit" || hip_mode_ == "mit_pos") {
         // drive: t = t_ff + kd_drive * (0 - w_drive); it converts with its own Kt (0.6) -> scale by kt_drive / kt
         const double kt = std::isfinite(c.kt_nm_per_a) ? c.kt_nm_per_a : mit_kt_drive_;
         const double sc = mit_kt_drive_ / kt;
-        double tau = homing_ || home_done_ ? -home_tau_ : kp * (M_tgt[k] - M[k]) + ffF * interp(th[k], leg_th_, leg_dh_);
+        // mit_pos: the joint stiffness runs inside the drive (kHz loop) — p_des in the drive's own output
+        // frame = servo-upload position [rad] (2026-10-09 probe: same frame, same sign). Host sends p, kp, ff.
+        const bool in_drive = hip_mode_ == "mit_pos" && !(homing_ || home_done_);
+        const double ff = ffF * interp(th[k], leg_th_, leg_dh_);
+        double tau = homing_ || home_done_ ? -home_tau_ : in_drive ? ff : kp * (M_tgt[k] - M[k]) + ff;
         const double tmax = c.current_limit_a * kt;
         tau = std::clamp(tau, -tmax, tmax);
         gen2_hardware::mit::Command mc;
         mc.t = tau * c.direction * sc;
+        if (in_drive) {
+          const double p_raw_deg = fb[k].status.position_deg +
+            (M_tgt[k] - M[k]) * 180.0 / M_PI * c.raw_deg_per_output_rev / 360.0 / c.direction;
+          mc.p = p_raw_deg * M_PI / 180.0 * 360.0 / c.raw_deg_per_output_rev;
+          mc.kp = kp * sc * mit_kp_scale_;
+          tau = std::clamp(kp * (M_tgt[k] - M[k]) + ff, -tmax, tmax);   // logging: what the drive should produce
+        }
         mc.kd = (homing_ || home_done_ ? home_kd_ : kd) * sc;
         bus_->send(gen2_hardware::mit::encode(gen2_hardware::mit::Proto::kV3, c.can_id, c.mit_ranges, mc), err);
         hip_tau_[k] = tau; hip_cur_[k] = fb[k].status.current_a;
@@ -924,6 +936,7 @@ private:
   double rate_hz_, max_tilt_, start_tilt_, imu_timeout_, motor_timeout_, hb_timeout_, cmd_timeout_, stand_ramp_s_;
   bool stand_ff_;
   std::string hip_mode_;
+  double mit_kp_scale_ = 1.0;
   double hip_speed_, hip_accel_, mit_kt_drive_, osc_window_s_, osc_vel_, sat_frac_, sat_time_s_, sit_sat_a_;
   int osc_flips_;
   int osc_sign_[2] = {0, 0};

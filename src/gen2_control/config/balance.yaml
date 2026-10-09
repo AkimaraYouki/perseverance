@@ -15,7 +15,7 @@ balance:
     th_trim_deg: -1.2         # balance-point trim, + = lean back. 0 = CAD COM (th_kin). 2026-10-08 after the IMU was re-seated (user):
                               # 0 -> bias adapt +1.1, max 0.61 m; -1.0 -> bias -0.45, max 0.09 m; user picked -1.2
     stand_feedforward: true   # stand: + weight feed-forward (0.5 m g per leg, via dh/dtheta) — current_pd only
-    hip_mode: mit             # mit (kd in the drive, kp + ff from here) | servo_pos (drive position loop) | current_pd (host PD, shook at 200 Hz)
+    hip_mode: mit_pos         # 2026-10-09: mit_pos = p, kp, kd in the drive (kHz), ff from here. mit = host kp at 200 Hz (legs lagged 150 deg at 2.8 Hz -> roll rocking). servo_pos | current_pd old
     mit_kt_drive: 0.5994      # Kt the AK60-6 drive uses inside MIT (0.5 N·m -> 0.83 A measured 2026-10-07)
     osc_flips: 6              # fault: hip velocity (|w| > osc_vel) changes sign this often within osc_window_s
     osc_window_s: 0.3

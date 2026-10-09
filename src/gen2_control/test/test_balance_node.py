@@ -109,7 +109,7 @@ try:
     s = st['m']
     check('stand: mode stand, wheels 0 A', s.mode == 'stand' and all(c == 0 for c in s.wheel_cur_cmd),
           f'{s.mode} wheel {list(s.wheel_cur_cmd)}')
-    HIP_FN = {'mit': 8, 'servo_pos': 6, 'current_pd': 1}[os.environ.get('HIP_MODE', 'mit')]
+    HIP_FN = {'mit': 8, 'mit_pos': 8, 'servo_pos': 6, 'current_pd': 1}[os.environ.get('HIP_MODE', 'mit')]
     check(f'hips get fn={HIP_FN} commands ({os.environ.get("HIP_MODE", "mit")}), wheels get current',
           all(drive_cmds(k, HIP_FN) for k in ('leg_l', 'leg_r')) and
           all(drive_cmds(k, 'mit' if FAKE_PROTO[k] == 'mit_legacy' else 1) for k in ('wheel_l', 'wheel_r')),
