@@ -7,7 +7,7 @@
     height: 480
     fps: 30
     jpeg_quality: 80       # 80 이면 640x480 한 장 약 30~60 KB
-    flip_method: 0         # nvvidconv flip-method: 0 그대로, 2 상하좌우 180도 (거꾸로 달았을 때)
+    flip_method: 2         # nvvidconv flip-method: 0 그대로, 2 상하좌우 180도 (거꾸로 달았을 때)
     encoder: "nvjpeg"      # nvjpeg = nvjpegenc (NVMM) | cpu = jpegenc. 로봇 측정: nvjpeg CPU 21% vs 32%, 지연 3.8 vs 7.0 ms
     stamp_source: "capture"  # capture = 촬영 시각 추정 (now - 파이프라인 버퍼 나이) | publish = 받은 시각
     restart_delay_s: 2.0   # 파이프라인 오류/무프레임 뒤 재시작 대기
