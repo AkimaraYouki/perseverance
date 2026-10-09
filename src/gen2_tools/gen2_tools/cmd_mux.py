@@ -13,6 +13,7 @@ Status (source, limit) on cmd_mux/status (std_msgs/String, 5 Hz).
 """
 
 import math
+import os
 import time
 
 import numpy as np
@@ -38,6 +39,15 @@ class CmdMux(Node):
         self.fwd_deg = p('lidar_forward_deg', 0.0).value      # scan angle that points to the robot's front
         self.scan_to = p('scan_timeout_s', 0.5).value
         self.stale_vx = p('stale_vx_max', 0.1).value
+        self.limit_on = p('lidar_limit', True).value          # false: pass commands through (scan only logged)
+        log_dir = p('log_dir', os.path.expanduser('~/gen2_ws/logs/steps')).value
+        self.front_ang = self.back_ang = float('nan')
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            self.log = open(os.path.join(log_dir, time.strftime('%Y-%m-%d_%H%M%S') + '_mux.csv'), 'w', buffering=1)
+            self.log.write('t,src,vx_in,wz_in,vx_out,front,front_deg,back,back_deg,scale,note\n')
+        except OSError:
+            self.log = None
         self.src = {'teleop': (None, 0.0), 'auto': (None, 0.0)}
         self.front = self.back = math.inf
         self.scan_t = 0.0
@@ -55,9 +65,13 @@ class CmdMux(Node):
         ok = np.isfinite(r) & (r > max(m.range_min, self.self_r)) & (r < m.range_max)
         x, y = r[ok] * np.cos(a[ok]), r[ok] * np.sin(a[ok])
         lane = np.abs(y) < self.half_w
-        f, b = x[lane & (x > 0)], -x[lane & (x < 0)]
+        fm, bm = lane & (x > 0), lane & (x < 0)
+        f, b = x[fm], -x[bm]
         self.front = float(f.min()) if f.size else math.inf
         self.back = float(b.min()) if b.size else math.inf
+        aa = np.degrees(a[ok])
+        self.front_ang = float(aa[fm][np.argmin(f)]) if f.size else float('nan')
+        self.back_ang = float(aa[bm][np.argmin(b)]) if b.size else float('nan')
         self.scan_t = time.monotonic()
 
     def _in(self, name, m):
@@ -75,6 +89,7 @@ class CmdMux(Node):
                 self.status = 'idle'
                 return
         vx, wz = m.linear.x, m.angular.z
+        vx_in, k = vx, 1.0
         note = ''
         if now - self.scan_t > self.scan_to:
             vx = max(-self.stale_vx, min(self.stale_vx, vx))
@@ -82,13 +97,16 @@ class CmdMux(Node):
         else:
             d = self.front if vx > 0 else self.back if vx < 0 else math.inf
             k = min(1.0, max(0.0, (d - self.stop_d) / (self.slow_d - self.stop_d)))
-            if k < 1.0:
+            if k < 1.0 and self.limit_on:
                 vx *= k
                 note = f'obstacle {d:.2f} m x{k:.2f}'
         out = Twist()
         out.linear.x, out.angular.z = float(vx), float(wz)
         self.pub.publish(out)
         self.status = f'{name} vx {vx:+.2f} wz {wz:+.2f} front {self.front:.2f} back {self.back:.2f} {note}'
+        if self.log:
+            self.log.write(f'{now:.3f},{name},{vx_in:.3f},{wz:.3f},{vx:.3f},{self.front:.3f},{self.front_ang:.1f},'
+                           f'{self.back:.3f},{self.back_ang:.1f},{k:.2f},{note}\n')
 
 
 def main():
