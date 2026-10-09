@@ -76,7 +76,24 @@ struct StepRec
   double h[2], M[2], Md[2], h_tgt[2], hip_tau[2], hip_cur_fb[2], hip_age_ms[2];
   double w_wheel[2], tau_lqr, tau_yaw, wheel_pre_lpf[2], wheel_tau[2], wheel_tau_fb[2], wheel_age_ms[2];
 };
-constexpr std::size_t kRing = 8192;   // 41 s at 200 Hz
+constexpr std::size_t kRing = 8192;
+
+// RBJ biquad notch (direct form I)
+struct Notch
+{
+  double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  void design(double f0, double q, double fs)
+  {
+    const double w = 2.0 * M_PI * f0 / fs, al = std::sin(w) / (2.0 * q), a0 = 1.0 + al;
+    b0 = 1.0 / a0; b1 = -2.0 * std::cos(w) / a0; b2 = 1.0 / a0; a1 = -2.0 * std::cos(w) / a0; a2 = (1.0 - al) / a0;
+  }
+  double step(double x)
+  {
+    const double y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+    x2 = x1; x1 = x; y2 = y1; y1 = y;
+    return y;
+  }
+};   // 41 s at 200 Hz
 constexpr double kHMinSit = gen2_control::kHMin + 0.003;   // just above the lowest table height
 const char * mode_name(Mode m)
 {
@@ -120,6 +137,12 @@ public:
     // balancing low -> disarm after link_disarm_s (desktop 2026-10-08: 0 A at once tips the robot over)
     link_stop_ = declare_parameter("link_loss_stop", true);
     frozen_s_ = declare_parameter("wheel_frozen_s", 0.15);
+    // optional notch on the sent wheel torque (pitch chatter through the gear backlash, 14-18 Hz); 0 = off
+    {
+      const double f0 = declare_parameter("wheel_notch_hz", 0.0), q = declare_parameter("wheel_notch_q", 2.0);
+      notch_on_ = f0 > 0.0;
+      if (notch_on_) {for (auto & n : notch_) {n.design(f0, q, rate_hz_);}}
+    }
     frozen_cmd_nm_ = declare_parameter("wheel_frozen_cmd_nm", 0.15);
     link_sit_after_s_ = declare_parameter("link_sit_after_s", 2.0);
     link_disarm_s_ = declare_parameter("link_disarm_s", 30.0);
@@ -469,6 +492,7 @@ private:
     if ((m == Mode::kStand || m == Mode::kBalance) && (mode_ == Mode::kDisarmed || mode_ == Mode::kFault)) {++log_session_;}
     if (m == Mode::kStand || m == Mode::kBalance) {
       t_mode_ = 0.0;
+      for (auto & n : notch_) {n.x1 = n.x2 = n.y1 = n.y2 = 0.0;}
       for (int k = 0; k < 2; ++k) {M_start_[k] = M_[k]; osc_t_[k].clear(); osc_sign_[k] = 0; sat_s_[k] = 0.0;}
       sit_ = false;
       h_set_ = params_.idle_h; h_cmd_ = -1.0;
@@ -741,6 +765,7 @@ private:
         h_tgt[k] = params_.idle_h + 0.12 * o.act[k];
         M_tgt[k] = interp(std::clamp(h_tgt[k], leg_h_.front(), leg_h_.back()), leg_h_, leg_th_) - theta0_;
         wheel_tau[k] = o.act[2 + k] * params_.wheel_tau_max;
+        if (notch_on_) {wheel_tau[k] = notch_[k].step(wheel_tau[k]);}
       }
       ffF = o.ff_force; kp = o.leg_kp; kd = o.leg_kd;
     }
@@ -951,6 +976,8 @@ private:
   double frz_p_[2] = {1e9, 1e9}, frz_i_[2] = {1e9, 1e9}, frz_lo_[2] = {0, 0}, frz_hi_[2] = {0, 0};
   int64_t frz_ns_[2] = {0, 0};
   double frozen_s_ = 0.15, frozen_cmd_nm_ = 0.15;
+  bool notch_on_ = false;
+  Notch notch_[2];
   bool start_ = false, homing_ = false, home_done_ = false;
   int64_t idle_ping_ns_ = 0;
   std::atomic<bool> in_request_{false};
