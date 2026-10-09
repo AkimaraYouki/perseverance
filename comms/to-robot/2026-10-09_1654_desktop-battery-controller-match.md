@@ -1,5 +1,5 @@
 from: desktop
-re: 2026-10-09_1708_desktop-stop-lean-ff.md, 사용자 요청 2 개
+re: 2026-10-09_1642_desktop-stop-lean-ff.md, 사용자 요청 2 개
 status: 요청 (사용자: "로봇에 요청 ㄱㄱ")
 
 ## 요청 1 — 컴퓨터 배터리 (11.1 V 3S) 를 "닳기 직전 0 % ~ 완충 100 %" 로
