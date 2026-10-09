@@ -81,7 +81,10 @@ TUNE = dict(
     brake_kp=1.0,        # 최고 속도 초과 브레이크 P: 한계 = 최고 - (kp x 초과 + 적분). 켜고 끄지 않고 부드럽게 조인다
     brake_ki=5.5,        # 브레이크 I [1/s]: 내리막에서 필요한 제동량을 찾아가고, 속도가 내려가면 서서히 풀린다
     speed_lpf_hz=4.0,    # 브레이크가 보는 속도 필터 [Hz]
-    accel_max=1.5,       # 목표 속도 변화율 한계 [m/s^2] (스틱·브레이크 모두)
+    accel_max=0.8,       # 실기 2026-10-09: 1.5 는 스틱 끝에서 1.28 m/s 까지 넘침·pitch ±27° -> 0.8. 이상 = 1.5.
+                         #   목표 속도 변화율 한계 [m/s^2] (스틱·브레이크 모두)
+    jerk_max=3.0,        # 속도 기준 S-curve [m/s^3] (실기 wb_core 2026-10-09): 가속도가 jerk 로 쌓여 몸 기울기에 계단 없음. 0 = 옛 직선 램프
+    x_hold_moving=False, # 실기 2026-10-09: 주행 명령 (|vx| > 0.02) 중엔 위치 오차 0 (따라잡기 넘침 없앰), 스틱 놓으면 그 자리 유지. True = 옛 동작
     speed_guard=0.8,     # 바퀴 관절 속도가 모터 한계의 80 % 를 넘으면 목표 속도를 낮춰 뒤로 젖히며 감속 (푸시백). 1 = 끔.
                          #   자갈길 3 km/h 급회전에서 기울며 가속 -> 모터 한계 -> 고꾸라짐 3/3 -> 0/3 (2026-09-26).
                          #   최고 속도 3 km/h (13.9 rad/s) 가 기준 (15.1) 아래라 평지 직진에서는 걸리지 않음
@@ -207,8 +210,10 @@ TUNE = dict(
                          #   (필터 없이 센서 + 지연 5 ms 면 바퀴 속도 +-18 rad/s 발진 -> 넘어짐, 2026-09-26)
     enc_delay_ms=5.0,    # 실기: MIT 응답 = 직전 스텝 명령의 응답, 바퀴 상태 나이 4.1 ms (200 Hz 기록 2026-10-08). 이상 = 0.
                          #   시뮬 전용: 바퀴 엔코더 지연 [ms] (실기 톡 치기 9–26 ms, 감속기 백래시 근사). 실기 제어기엔 없음
-    hip_host_p=True,     # 실기 (2026-10-08 기본값): 고관절 MIT, kd 드라이브 / kp 호스트 200 Hz. 이상 = False.
+    hip_host_p=False,    # 실기 2026-10-09 hip_mode mit_pos: kp·kd 가 드라이브 안 -> 물리 주기 PD (False). 10-08 mit (호스트 kp) = True.
+                         #   실기 (2026-10-08 기본값): 고관절 MIT, kd 드라이브 / kp 호스트 200 Hz. 이상 = False.
                          #   고관절을 실기 구조로 (2026-10-08): P 항은 200 Hz 호스트가 지연된 피드백으로, D 만 드라이브. 끄면 IdealPD (P·D 물리 주기)
+    hip_gain_eff=0.6,    # mit_pos 드라이브가 실제 내는 토크 / 의도 (kp·kd·자중 FF 모두) [로봇 추정 ~0.56–0.6, 2026-10-09 — 처프·Kt 측정으로 확정 전]. 1 = 이상
     hip_cmd_max_nm=8.1,  # 실기 balance_node 고관절 MIT: P 항 + 자중 FF 상한 = current_limit 10 A x Kt 0.81 (잠정) [N·m]. 0 = 없음
     wheel_cmd_max_nm=6.35,  # 실기 balance_node 바퀴 지령 상한 = current_limit 5 A x Kt 1.27 [N·m]. 0 = 없음 (wheel_tau_max 7 까지)
     pred_ms=0.0,         # 지연 보상 예측 [ms] (0 = 끔): 최근 낸 바퀴 토크로 진자 상태를 이만큼 앞으로 적분해 LQR 에 넣음 (실기도). 실기 루프 지연 15–20 ms (2026-10-07)
@@ -1165,8 +1170,9 @@ def episode():
                 HIP.apply(robot, leg_ids, legs_act, act[:, 0:2], torch.tensor([h_ref], device=dev), torch.tensor([float(kp_)], device=dev),
                           torch.tensor([float(kd_)], device=dev), ffj, round(args.delay_ms / 5.0), tau_max=args.hip_cmd_max_nm)
             else:
-                legs_act.stiffness[:] = float(kp_); legs_act.damping[:] = float(kd_)
-                robot.set_joint_effort_target(ffj, joint_ids=leg_ids)
+                ge = args.hip_gain_eff                            # mit_pos: PD 가 드라이브 안 (물리 주기), 드라이브 실효 배율
+                legs_act.stiffness[:] = float(kp_) * ge; legs_act.damping[:] = float(kd_) * ge
+                robot.set_joint_effort_target(ffj * ge, joint_ids=leg_ids)
             EST.update(th=info["th"], thd=info["thd"], v=info["v"])
             stats.update(brake=bool(info.get("brake", False)), bump=bool(info.get("bump", False)), lift=bool(CTRL.lift_on[0]),
                          vm=info.get("vm", stats.get("vm", args.vmax_kmh / 3.6)))

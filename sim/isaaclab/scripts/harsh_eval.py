@@ -354,9 +354,9 @@ with torch.inference_mode():
                       torch.full((N,), float(P.idle_h), device=dev), torch.tensor(kp_a, device=dev, dtype=torch.float32),
                       torch.tensor(kd_a, device=dev, dtype=torch.float32), ffj, round(P.delay_ms / 5.0), tau_max=P.hip_cmd_max_nm)
         else:
-            legs_act.stiffness[:] = torch.tensor(kp_a, device=dev, dtype=torch.float32)[:, None]
-            legs_act.damping[:] = torch.tensor(kd_a, device=dev, dtype=torch.float32)[:, None]
-            robot.set_joint_effort_target(ffj, joint_ids=leg_ids)
+            legs_act.stiffness[:] = torch.tensor(kp_a, device=dev, dtype=torch.float32)[:, None] * P.hip_gain_eff   # mit_pos: PD 가 드라이브 안 (물리 주기)
+            legs_act.damping[:] = torch.tensor(kd_a, device=dev, dtype=torch.float32)[:, None] * P.hip_gain_eff
+            robot.set_joint_effort_target(ffj * P.hip_gain_eff, joint_ids=leg_ids)
         here = to(torch.cdist(d.root_pos_w[:, :2], org).argmin(1) % nc)    # 지금 서 있는 칸의 종류 (열)
         wfr = np.abs(f.w_wheel_joint).max(1) / (18.85 * kv)
         tilt = np.degrees(np.arccos(np.clip(-f.g_b[:, 2], -1, 1)))

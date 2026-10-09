@@ -90,7 +90,7 @@ class WBController:
         m = np.ones(n, bool) if mask is None else np.asarray(mask, bool)
         z = lambda name: np.where(m, 0.0, getattr(self, name, np.zeros(n)))  # noqa: E731
         for k in ("t_phase", "x_err", "t_un", "t_ld", "g_vf", "g_i", "g_ref", "bump_t", "bump_quiet", "vf", "rf",
-                  "th_bias", "v_prev", "t_takeoff", "vh", "yaw_i", "acc_f"):
+                  "th_bias", "v_prev", "t_takeoff", "vh", "yaw_i", "acc_f", "g_acc"):
             setattr(self, k, z(k))
         self.phase = np.where(m, DRIVE, getattr(self, "phase", np.zeros(n, int))).astype(int)
         self.next_edge = np.where(m, 0, getattr(self, "next_edge", np.zeros(n, int))).astype(int)
@@ -250,9 +250,20 @@ class WBController:
         if getattr(P, "turn_slow", False):                  # 돌 때 안쪽 바퀴를 느리게 (climb_test TUNE turn_slow)
             v_lim = np.minimum(v_lim, np.maximum(0.0, vm - HALF_TRACK * np.abs(wz)))
         tgt = np.clip(vx, -v_lim, v_lim)
-        g_ref = self.g_ref + np.clip(tgt - self.g_ref, -P.accel_max * DT, P.accel_max * DT)
+        jm = getattr(P, "jerk_max", 0.0)
+        if jm > 0:   # S-curve (실기 wb_core 2026-10-09): 가속도 자체가 jerk 로 따라감 -> 몸 기울기가 계단 없이 쌓인다
+            e_r = tgt - self.g_ref
+            a_want = np.clip(np.sqrt(2.0 * jm * np.abs(e_r)) * np.sign(e_r), -P.accel_max, P.accel_max)
+            g_acc = self.g_acc + np.clip(a_want - self.g_acc, -jm * DT, jm * DT)
+            g_ref = self.g_ref + g_acc * DT
+            over = (tgt - g_ref) * e_r < 0                     # 목표를 넘으면 목표에 고정
+            g_ref, g_acc = np.where(over, tgt, g_ref), np.where(over, 0.0, g_acc)
+        else:
+            g_ref = self.g_ref + np.clip(tgt - self.g_ref, -P.accel_max * DT, P.accel_max * DT)
+            g_acc = np.zeros(n)
         v_ref = g_ref.copy()
-        x_err = np.where(np.abs(vx) > v_lim + 1e-3, 0.0, self.x_err)
+        hold_off = (~np.asarray(getattr(P, "x_hold_moving", True), bool)) & (np.abs(vx) > 0.02)   # 주행 중 위치 따라잡기 끔 (실기 2026-10-09)
+        x_err = np.where((np.abs(vx) > v_lim + 1e-3) | hold_off, 0.0, self.x_err)
         if P.speed_guard < 1.0:
             ww = np.abs(f.w_wheel_joint).max(1) / w_max
             guard = ww > P.speed_guard
@@ -280,7 +291,7 @@ class WBController:
         tau_y = P.yaw_kd * e_y + (self.yaw_i if yi > 0 else 0.0)
         act[:, 2] = np.where(ctl, np.clip((0.5 * tau_w - tau_y) / P.wheel_tau_max, -1.0, 1.0), 0.0)
         act[:, 3] = np.where(ctl, np.clip((0.5 * tau_w + tau_y) / P.wheel_tau_max, -1.0, 1.0), 0.0)
-        self.g_vf, self.g_i, self.g_ref = (np.where(ctl, a, b) for a, b in ((g_vf, self.g_vf), (g_i, self.g_i), (g_ref, self.g_ref)))
+        self.g_vf, self.g_i, self.g_ref, self.g_acc = (np.where(ctl, a, b) for a, b in ((g_vf, self.g_vf), (g_i, self.g_i), (g_ref, self.g_ref), (g_acc, self.g_acc)))
         self.x_err = np.where(ctl, x_err, self.x_err)
         self.bump_t = np.where(ctl, bump_t, self.bump_t)
 
@@ -297,6 +308,7 @@ class WBController:
         self.t_un = np.where(down, 0.0, self.t_un)
         self.x_err = np.where(down, 0.0, self.x_err)
         self.g_i, self.g_ref, self.g_vf = (np.where(down, 0.0, self.g_i), np.where(down, v_now, self.g_ref), np.where(down, v_now, self.g_vf))
+        self.g_acc = np.where(down, 0.0, self.g_acc)
         self.roll_pi.reset(0.0, down)
 
         lifted = (ph == DRIVE) & self.lift_on                    # 들린 동안: 균형 끔, 바퀴 감쇠, 다리 IDLE
@@ -304,7 +316,7 @@ class WBController:
         act[:, 0:2] = np.where(lifted[:, None], ((P.idle_h - h_ref) / 0.12)[:, None], act[:, 0:2])
         self.roll_pi.reset(0.0, lifted)
         self.x_err = np.where(lifted, 0.0, self.x_err)
-        self.g_i, self.g_ref, self.g_vf = (np.where(lifted, 0.0, x) for x in (self.g_i, self.g_ref, self.g_vf))
+        self.g_i, self.g_ref, self.g_vf, self.g_acc = (np.where(lifted, 0.0, x) for x in (self.g_i, self.g_ref, self.g_vf, self.g_acc))
         drv = (ph == DRIVE) & ~self.lift_on
         roll_ref = np.clip(np.arctan(P.turn_lean * self.g_ref * wz / 9.81), -math.radians(20), math.radians(20))
         rl = S["roll"] - roll_ref                                 # 회전 중 안쪽으로 기울이기 (Ascento lean)

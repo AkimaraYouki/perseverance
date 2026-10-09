@@ -357,9 +357,9 @@ with torch.inference_mode():
                           torch.full((N,), float(P.idle_h), device=dev), torch.tensor(kps[:, 0], device=dev, dtype=torch.float32),
                           torch.tensor(kds[:, 0], device=dev, dtype=torch.float32), ffj, round(P.delay_ms / 5.0), tau_max=P.hip_cmd_max_nm)
             else:
-                legs_act.stiffness[:] = torch.tensor(kps, device=dev, dtype=torch.float32)
-                legs_act.damping[:] = torch.tensor(kds, device=dev, dtype=torch.float32)
-                robot.set_joint_effort_target(ffj, joint_ids=leg_ids)
+                legs_act.stiffness[:] = torch.tensor(kps, device=dev, dtype=torch.float32) * P.hip_gain_eff   # mit_pos: PD 가 드라이브 안 (물리 주기)
+                legs_act.damping[:] = torch.tensor(kds, device=dev, dtype=torch.float32) * P.hip_gain_eff
+                robot.set_joint_effort_target(ffj * P.hip_gain_eff, joint_ids=leg_ids)
         if "hand" in spec:                                          # 가상 손 (전 로봇 동시)
             tg, tr, roll_deg = spec["hand"]
             if tg <= t < tr:
