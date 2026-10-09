@@ -11,15 +11,15 @@ pad_teleop:
     height_rate: 0.05          # [m/s] while a trigger is fully pressed
     deadzone: 0.08
     joy_timeout_s: 0.5
-    # SDL layout (ROS 2 joy_node). Check with `ros2 topic echo /joy` and change here if the pad differs.
+    # the user's pad (Xbox over Bluetooth, measured 2026-10-09 with `ros2 topic echo /joy`)
     vx_axis: 1
     wz_axis: 2
-    lt_axis: 4
-    rt_axis: 5
+    lt_axis: 5
+    rt_axis: 4
     a_button: 0
     b_button: 1
-    y_button: 3
-    back_button: 4
-    start_button: 6
-    lb_button: 9
-    rb_button: 10
+    y_button: 4
+    lb_button: 6
+    rb_button: 7
+    back_button: 10
+    start_button: 11

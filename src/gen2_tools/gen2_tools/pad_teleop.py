@@ -15,9 +15,10 @@ balance/* services. Only standard messages, so it also runs on ROS 2 Humble.
   Y              jump (not on the robot yet)
 If /joy stops (pad unplugged, joy_node dead) the heartbeat stops: the robot stops, sits and disarms.
 
-Index defaults = ROS 2 joy_node (SDL game controller): axes LX 0, LY 1, RX 2, RY 3, LT 4, RT 5
-(sticks: left / up = +1, triggers: 1 released .. -1 pressed); buttons A 0, B 1, X 2, Y 3, BACK 4,
-START 6, LB 9, RB 10. Set the *_axis / *_button parameters for another layout (e.g. xpad classic).
+Index defaults = the user's pad (Xbox over Bluetooth, joy_node on Humble, measured 2026-10-09):
+axes LX 0, LY 1, RX 2, RT 4, LT 5 (sticks: left / up = +1, triggers: 1 released .. -1 pressed);
+buttons A 0, B 1, Y 4, LB 6, RB 7, BACK 10, START 11. Other pads: set the *_axis / *_button parameters
+(check with `ros2 topic echo /joy`).
 """
 
 import time
@@ -42,8 +43,9 @@ class PadTeleop(Node):
         self.h_rate = p('height_rate', 0.05)
         self.dead = p('deadzone', 0.08)
         self.joy_to = p('joy_timeout_s', 0.5)
-        self.ax = {k: p(f'{k}_axis', v) for k, v in dict(vx=1, wz=2, lt=4, rt=5).items()}
-        self.bt = {k: p(f'{k}_button', v) for k, v in dict(a=0, b=1, y=3, back=4, start=6, lb=9, rb=10).items()}
+        # defaults = the user's pad on the desktop (Xbox over Bluetooth, measured 2026-10-09)
+        self.ax = {k: p(f'{k}_axis', v) for k, v in dict(vx=1, wz=2, lt=5, rt=4).items()}
+        self.bt = {k: p(f'{k}_button', v) for k, v in dict(a=0, b=1, y=4, back=10, start=11, lb=6, rb=7).items()}
         self.joy, self.joy_t, self.prev = None, 0.0, {}
         self.h, self.estop_t = H_DEFAULT, None
         self.hb = self.create_publisher(Empty, 'balance/heartbeat', 10)
