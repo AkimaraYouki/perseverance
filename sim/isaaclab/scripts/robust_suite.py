@@ -42,6 +42,7 @@ ap.add_argument("--scenario", choices=SCEN, required=True)
 ap.add_argument("--n", type=int, default=8)
 ap.add_argument("--seed", type=int, default=100, help="로봇 i 의 무작위 시드 = seed + i")
 ap.add_argument("--out", default=None)
+ap.add_argument("--trace", default=None, help="스텝 기록 npz (roll, gx, h, h_tgt — 실기 step-log 와 같은 분석용)")
 ap.add_argument("--h", type=float, default=None, help="요철 시나리오(stones8, oneside8, stones_turn) 높이 덮어쓰기 [m]")
 ap.add_argument("--policy", default=None, help="잔차 RL 정책 (model_N.pt). 주면 학습 환경의 제어기(residual.py) + 정책으로 돈다 (점프 제외)")
 for k, v in TUNE.items():
@@ -261,6 +262,7 @@ dt = env.step_dt
 steps = int(spec["sec"] / dt)
 fell_t = [None] * N
 xmax = np.full(N, -9.0)
+TR = {}
 rec = [dict(pitch=[], roll=[], v=[], therr=[], x=[], tb=[]) for _ in range(N)]
 grab = None
 t0 = time.time()
@@ -333,6 +335,10 @@ with torch.inference_mode():
             a, kp, kd, ffF, info = CTRL.step(f, vx_i, wz, P.idle_h)
             alive = np.array([x is None for x in fell_t])                # 넘어진 로봇은 힘 빼기 (예전과 같음)
             acts[alive], ff[alive] = a[alive], ffF[alive]
+            if args.trace:
+                TR.setdefault("t", []).append(t); TR.setdefault("roll", []).append(np.asarray(info["roll"]).copy())
+                TR.setdefault("gx", []).append(np.asarray(w_b)[:, 0].copy()); TR.setdefault("h", []).append(h_.copy())
+                TR.setdefault("h_tgt", []).append(P.idle_h + 0.12 * np.clip(a[:, 0:2], -1.0, 1.0))
             kps[alive] = kp[alive, None]; kds[alive] = kd[alive, None]
             for i in np.flatnonzero(alive):
                 rec[i]["pitch"].append(math.degrees(info["pitch"][i])); rec[i]["roll"].append(math.degrees(info["roll"][i]))
@@ -414,6 +420,9 @@ out = args.out or os.path.expanduser(f"~/pv_out/robust/{SC}.json")
 os.makedirs(os.path.dirname(out), exist_ok=True)
 json.dump(dict(scenario=SC, n=N, seed=args.seed, npass=npass, tune={k: getattr(args, k) for k in TUNE}, rows=rows),
           open(out, "w"), ensure_ascii=False, default=str)
+if args.trace:
+    np.savez(os.path.expanduser(args.trace), **{k: np.array(v) for k, v in TR.items()})
+    print("[trace]", args.trace, flush=True)
 print(f"SUITE {SC} {npass}/{N}", flush=True)
 env.close()
 app.close()
