@@ -82,7 +82,7 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
   const double tgt = clip(vx, -v_lim, v_lim);
   double g_ref = g_ref_ + clip(tgt - g_ref_, -P.accel_max * kDt, P.accel_max * kDt);
   double v_ref = g_ref;
-  double x_err = std::fabs(vx) > v_lim + 1e-3 ? 0.0 : x_err_;
+  double x_err = std::fabs(vx) > v_lim + 1e-3 || (!P.x_hold_moving && std::fabs(vx) > 0.02) ? 0.0 : x_err_;
   if (P.speed_guard < 1.0) {
     const double ww = std::max(std::fabs(f.w_wheel_joint[0]), std::fabs(f.w_wheel_joint[1])) / w_max;
     if (ww > P.speed_guard) {

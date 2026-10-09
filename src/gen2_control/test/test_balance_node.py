@@ -26,7 +26,7 @@ FAKE_PROTO = {n: ('mit_legacy' if p == 'mit_legacy' else 'servo') for n, p in pr
 logs = {n: tempfile.TemporaryFile(mode='w+') for n in ids}
 STEPDIR = tempfile.mkdtemp()
 HIP_YAML = os.path.join(tempfile.mkdtemp(), 'hip.yaml')   # a params file: -p does not override balance.yaml
-open(HIP_YAML, 'w').write(f"balance:\n  ros__parameters:\n    hip_mode: {os.environ.get('HIP_MODE', 'mit')}\n    imu_shm: false\n    link_disarm_s: 6.0\n    step_log_dir: {STEPDIR}\n")
+open(HIP_YAML, 'w').write(f"balance:\n  ros__parameters:\n    hip_mode: {os.environ.get('HIP_MODE', 'mit')}\n    imu_shm: false\n    link_disarm_s: 6.0\n    heartbeat_timeout_s: 0.5\n    step_log_dir: {STEPDIR}\n")
 # hips power up at joint 20 deg: inside the stops with no 60 deg twin (an end-stop band would be ambiguous)
 POS0 = {n: (m[n]['direction'] * (20.0 + math.degrees(m[n]['position_offset_rad'])) if n.startswith('leg') else 0.0)
         for n in ids}

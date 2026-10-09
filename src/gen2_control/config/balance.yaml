@@ -9,7 +9,7 @@ balance:
     start_tilt_deg: 15.0      # stand/balance only when the body is held within this
     imu_timeout_s: 0.05
     motor_timeout_s: 0.05
-    heartbeat_timeout_s: 0.5  # operator tool must publish balance/heartbeat
+    heartbeat_timeout_s: 1.0  # operator tool must publish balance/heartbeat (0.5 -> 1.0 2026-10-09: 32 Wi-Fi gaps/h of 0.55-1.4 s jerked the robot to a stop)
     cmd_timeout_s: 0.5        # cmd_vel watchdog -> 0
     stand_ramp_s: 2.0         # stand: current leg height -> idle_h
     th_trim_deg: -1.2         # balance-point trim, + = lean back. 0 = CAD COM (th_kin). 2026-10-08 after the IMU was re-seated (user):
@@ -30,6 +30,8 @@ balance:
       vmc_kp: 60.0
       vmc_kd: 1.0
       vmax_kmh: 3.5
+      accel_max: 0.8          # m/s^2 (1.5 -> 0.8 2026-10-09: full stick overshot to 1.28 m/s, pitch +-27 deg)
+      x_hold_moving: false    # position hold only when the stick is released (it added catch-up overshoot while driving)
       fric_comp_nm: 0.0       # 2026-10-08 MIT wheels: 0.11 (velocity-sign Coulomb comp) drove a 12-15 Hz wheel chatter; 0 = quiet
       yaw_kd: 0.15            # 2026-10-08 MIT wheels: 0.5 (sim) gave a 13 Hz L/R torque chatter; 0.15 quiet
       yaw_ki: 1.0             # desktop 2026-10-08 (sim): kd 0.15 alone stalls on stiction (0.02 rad/s of 0.5); + ki 1.0 -> 0.44-0.48, pivot 4-6 cm

@@ -6,7 +6,7 @@ joy_node:
     autorepeat_rate: 20.0      # keep /joy flowing while the sticks are held (pad_teleop needs < 0.5 s gaps)
 pad_teleop:
   ros__parameters:
-    vx_max: 0.97               # stick end [m/s] = 3.5 km/h (user 2026-10-09: 0.5 too slow)
+    vx_max: 0.7                # stick end [m/s]; 0.97 overshot to 1.28 m/s (2026-10-09) -> 0.7 until tuned
     wz_max: 2.0                # [rad/s]
     height_rate: 0.05          # [m/s] while a trigger is fully pressed
     deadzone: 0.08
