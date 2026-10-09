@@ -670,8 +670,8 @@ private:
       }
     }
     if (mode_ != Mode::kStand && mode_ != Mode::kBalance) {
-      // idle: keep the legacy-MIT wheels visible (they answer only to commands) — zero-torque EXIT at 2 Hz
-      if (mode_ == Mode::kDisarmed && want_ == Mode::kDisarmed && !in_request_ && t - idle_ping_ns_ > 500000000LL) {
+      // idle / fault: keep the legacy-MIT wheels visible (they answer only to commands) — zero-torque EXIT at 2 Hz
+      if ((mode_ == Mode::kDisarmed || mode_ == Mode::kFault) && want_ == mode_ && !in_request_ && t - idle_ping_ns_ > 500000000LL) {
         idle_ping_ns_ = t;
         bus_->enable_tx(true);
         for (const auto & kv : idx_) {
