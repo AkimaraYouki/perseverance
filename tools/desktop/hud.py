@@ -27,6 +27,7 @@ from std_msgs.msg import String
 FX, CX = 530.0, 320.0                  # person_detector 기본값 (보정 전 추정)
 LASER_X, CAM_X = -0.0774, 0.1080       # base_link 기준 x [m] (footprint.yaml)
 HITBOX = (-0.221, 0.162, -0.164, 0.164)
+SKEL = [(5, 6), (5, 7), (7, 9), (6, 8), (8, 10), (5, 11), (6, 12), (11, 12), (11, 13), (13, 15), (12, 14), (14, 16)]   # COCO 팔·몸통·다리
 STATE_COL = {"FOLLOW": (60, 200, 60), "OCCLUDED": (0, 200, 255), "SEARCH": (0, 140, 255), "HOLD": (60, 60, 230),
              "IDLE": (150, 150, 150)}
 
@@ -102,7 +103,17 @@ def draw(n: Hud):
         is_t = tb is not None and abs(b - tb) < math.radians(8)
         col, th = ((60, 220, 60), 3) if is_t else ((200, 200, 200), 1)
         cv2.rectangle(img, (x0, y0), (x1, y1), col, th)
-        lab = f"{'TARGET ' if is_t else ''}{p.get('score', 0):.2f}"
+        kp = p.get("kps")
+        if kp:   # COCO 17 점: 하반신 (11–16 엉덩이·무릎·발목) 은 방위 계산에 쓰여 굵게
+            for i, j in SKEL:
+                if kp[i][2] > 0.3 and kp[j][2] > 0.3:
+                    lower = i >= 11 and j >= 11
+                    cv2.line(img, (int(kp[i][0]), int(kp[i][1])), (int(kp[j][0]), int(kp[j][1])),
+                             (0, 220, 255) if lower else (180, 180, 180), 3 if lower else 1, cv2.LINE_AA)
+            for q, (u_, v_, cf) in enumerate(kp):
+                if cf > 0.3:
+                    cv2.circle(img, (int(u_), int(v_)), 4 if q >= 11 else 2, (0, 220, 255) if q >= 11 else (220, 220, 220), -1)
+        lab = f"{'TARGET ' if is_t else ''}{p.get('score', 0):.2f}" + (f" ({p['bearing_from']})" if p.get("bearing_from") else "")
         cv2.putText(img, lab, (x0 + 3, max(14, y0 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1 + is_t)
     # 라이다 다리 (화면 아래 띠에 방위로)
     for (xl, yl) in (n.legs if now - n.legs_t < 1.0 else []):
