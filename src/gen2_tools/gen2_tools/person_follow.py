@@ -67,6 +67,7 @@ class PersonFollow(Node):
         self.nav_goal_h = None          # FollowPath goal handle
         self.nav_t = 0.0
         self.nav_busy = False
+        self.nav_fail_t = -1e9          # controller gave up (boxed in / no progress): steer directly for a while
         self.add_on_set_parameters_callback(self._set_params)
         self.create_timer(0.05, self._step)
 

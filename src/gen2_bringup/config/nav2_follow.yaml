@@ -77,9 +77,10 @@ controller_server:
       vx_min: -0.3
       vy_max: 0.0
       wz_max: 1.0
-      ax_max: 0.8
-      ax_min: -0.8
-      az_max: 2.0
+      ax_max: 3.0          # MPPI limits the step from the MEASURED speed (odom): 0.8 gave +0.02 m/s -> never starts;
+                           # balance_node S-curve (accel_max 0.8, jerk_max 3) shapes the real acceleration
+      ax_min: -3.0
+      az_max: 4.0
       temperature: 0.3
       gamma: 0.015
       motion_model: "DiffDrive"
