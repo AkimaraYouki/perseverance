@@ -77,6 +77,7 @@ struct StepRec
   double dt_ms, imu_age_ms, pitch, roll, gx, gy, gz, th, thd, th_kin, th_bias, x_err, v, v_ref, vx, wz;
   double h[2], M[2], Md[2], h_tgt[2], hip_tau[2], hip_cur_fb[2], hip_age_ms[2];
   double w_wheel[2], tau_lqr, tau_yaw, wheel_pre_lpf[2], wheel_tau[2], wheel_tau_fb[2], wheel_age_ms[2];
+  int jump_phase;
 };
 constexpr std::size_t kRing = 8192;
 
@@ -201,6 +202,28 @@ public:
     P.yaw_kd = declare_parameter("tune.yaw_kd", P.yaw_kd);
     P.yaw_ki = declare_parameter("tune.yaw_ki", P.yaw_ki);
     P.yaw_i_max = declare_parameter("tune.yaw_i_max", P.yaw_i_max);
+    // jump state machine (wb_core, desktop 2026-10-12) — same names as climb_test.py TUNE
+    P.jump_min_v = declare_parameter("tune.jump_min_v", P.jump_min_v);
+    P.jump_max_wz = declare_parameter("tune.jump_max_wz", P.jump_max_wz);
+    P.t_retract = declare_parameter("tune.t_retract", P.t_retract);
+    P.retract_lean = declare_parameter("tune.retract_lean", P.retract_lean);
+    P.t_tuck = declare_parameter("tune.t_tuck", P.t_tuck);
+    P.t_fly_max = declare_parameter("tune.t_fly_max", P.t_fly_max);
+    P.contact_tau = declare_parameter("tune.contact_tau", P.contact_tau);
+    P.land_s = declare_parameter("tune.land_s", P.land_s);
+    P.h_land = declare_parameter("tune.h_land", P.h_land);
+    P.leg_kp = declare_parameter("tune.leg_kp", P.leg_kp);
+    P.leg_kd = declare_parameter("tune.leg_kd", P.leg_kd);
+    P.land_kp = declare_parameter("tune.land_kp", P.land_kp);
+    P.land_kd = declare_parameter("tune.land_kd", P.land_kd);
+    P.air_ctrl = declare_parameter("tune.air_ctrl", P.air_ctrl);
+    P.air_pd_extract = declare_parameter("tune.air_pd_extract", P.air_pd_extract);
+    P.air_pitch = declare_parameter("tune.air_pitch", P.air_pitch);
+    P.land_pitch = declare_parameter("tune.land_pitch", P.land_pitch);
+    P.extract_pitch = declare_parameter("tune.extract_pitch", P.extract_pitch);
+    P.air_kp = declare_parameter("tune.air_kp", P.air_kp);
+    P.air_kd = declare_parameter("tune.air_kd", P.air_kd);
+    P.air_tau = declare_parameter("tune.air_tau", P.air_tau);
     P.m_pend = model_ok_ ? m_pend_ : P.m_pend;
     // wheels in MIT (legacy AK45-10 firmware): no 0.5 A deadband -> no sigma-delta compensation
     for (const auto & c : motors) {
@@ -283,6 +306,15 @@ public:
           rs->success = true; rs->message = "ok: sitting down";
         });
     sit_s_ = declare_parameter("sit_s", 3.0);
+    // jump: operator request (pad Y) -> the next control step passes it to wb_core (refused there if slow / turning)
+    srv_jump_ = create_service<std_srvs::srv::Trigger>("balance/jump",
+        [this](std_srvs::srv::Trigger::Request::ConstSharedPtr, std_srvs::srv::Trigger::Response::SharedPtr rs) {
+          std::lock_guard<std::mutex> lk(mode_m_);
+          if (mode_ != Mode::kBalance || sit_) {rs->success = false; rs->message = "not balancing"; return;}
+          jump_req_ = true;
+          rs->success = true;
+          rs->message = "ok: jump requested (needs >= " + std::to_string(params_.jump_min_v).substr(0, 4) + " m/s forward, not turning)";
+        });
     pub_ = create_publisher<gen2_msgs::msg::ControllerState>("controller/state", 10);
     // wheel + gyro odometry (odom -> base_link, planar) for SLAM / RViz; integrated while standing/balancing
     odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("odom", 10);
@@ -783,7 +815,13 @@ private:
       const double dh = h_rate_ / rate_hz_;
       h_set_ = h_set_ > 0 ? h_set_ + std::clamp(hc - h_set_, -dh, dh) : params_.idle_h;
       const double h_mid = sit_u >= 0 ? sit_h0_ + sit_u * (kHMinSit - sit_h0_) : h_set_;
-      const Output o = core_->step(f, sit_u >= 0 ? 0.0 : vx, sit_u >= 0 ? 0.0 : wz, params_.idle_h, h_mid);
+      const bool jreq = jump_req_.exchange(false) && sit_u < 0;
+      const Output o = core_->step(f, sit_u >= 0 ? 0.0 : vx, sit_u >= 0 ? 0.0 : wz, params_.idle_h, h_mid, jreq);
+      if (jreq) {
+        if (o.phase == gen2_control::kRetract) {RCLCPP_INFO(get_logger(), "jump: start (v %.2f m/s)", o.v);}
+        else {RCLCPP_WARN(get_logger(), "jump: refused (v %.2f m/s, need >= %.2f forward and |wz| <= %.1f)", o.v, params_.jump_min_v, params_.jump_max_wz);}
+      }
+      if (o.phase != last_.phase) {RCLCPP_INFO(get_logger(), "jump phase %d -> %d", last_.phase, o.phase);}
       last_ = o;
       for (int k = 0; k < 2; ++k) {
         h_tgt[k] = params_.idle_h + 0.12 * o.act[k];
@@ -854,7 +892,7 @@ private:
       const bool bal = mode_ == Mode::kBalance;
       r.th = bal ? last_.th : 0; r.thd = bal ? last_.thd : 0; r.th_kin = th_kin_; r.th_bias = bal ? last_.th_bias : 0;
       r.x_err = bal ? last_.x_err : 0; r.v = bal ? last_.v : 0; r.v_ref = bal ? last_.v_ref : 0; r.vx = vx; r.wz = wz;
-      r.tau_lqr = bal ? last_.tau_lqr : 0; r.tau_yaw = bal ? last_.tau_yaw : 0;
+      r.tau_lqr = bal ? last_.tau_lqr : 0; r.tau_yaw = bal ? last_.tau_yaw : 0; r.jump_phase = bal ? last_.phase : 0;
       for (int k = 0; k < 2; ++k) {
         const auto & cw = bus_->motors()[idx_.at(names[2 + k])];
         r.h[k] = h_[k]; r.M[k] = M[k]; r.Md[k] = Md[k]; r.h_tgt[k] = h_tgt[k];
@@ -902,19 +940,20 @@ private:
             RCLCPP_INFO(get_logger(), "step log -> %s", path.c_str());
             std::fprintf(fp, "step,t_ns,mode,dt_ms,imu_age_ms,pitch,roll,gx,gy,gz,th,thd,th_kin,th_bias,x_err,v,v_ref,vx,wz,"
               "hL,hR,ML,MR,MdL,MdR,h_tgtL,h_tgtR,hip_tauL,hip_tauR,hip_curL,hip_curR,hip_ageL,hip_ageR,"
-              "wwL,wwR,tau_lqr,tau_yaw,pre_lpfL,pre_lpfR,wheel_tauL,wheel_tauR,wheel_fbL,wheel_fbR,wheel_ageL,wheel_ageR\n");
+              "wwL,wwR,tau_lqr,tau_yaw,pre_lpfL,pre_lpfR,wheel_tauL,wheel_tauR,wheel_fbL,wheel_fbR,wheel_ageL,wheel_ageR,jump_phase\n");
           }
         }
         if (fp) {
           std::fprintf(fp, "%llu,%lld,%d,%.3f,%.2f,%.5f,%.5f,%.4f,%.4f,%.4f,%.5f,%.4f,%.5f,%.5f,%.4f,%.4f,%.3f,%.3f,%.3f,"
             "%.4f,%.4f,%.4f,%.4f,%.3f,%.3f,%.4f,%.4f,%.3f,%.3f,%.2f,%.2f,%.2f,%.2f,"
-            "%.3f,%.3f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%.2f\n",
+            "%.3f,%.3f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%.2f,%d\n",
             static_cast<unsigned long long>(r.step), static_cast<long long>(r.t_ns), r.mode, r.dt_ms, r.imu_age_ms,  // NOLINT
             r.pitch, r.roll, r.gx, r.gy, r.gz, r.th, r.thd, r.th_kin, r.th_bias, r.x_err, r.v, r.v_ref, r.vx, r.wz,
             r.h[0], r.h[1], r.M[0], r.M[1], r.Md[0], r.Md[1], r.h_tgt[0], r.h_tgt[1], r.hip_tau[0], r.hip_tau[1],
             r.hip_cur_fb[0], r.hip_cur_fb[1], r.hip_age_ms[0], r.hip_age_ms[1],
             r.w_wheel[0], r.w_wheel[1], r.tau_lqr, r.tau_yaw, r.wheel_pre_lpf[0], r.wheel_pre_lpf[1],
-            r.wheel_tau[0], r.wheel_tau[1], r.wheel_tau_fb[0], r.wheel_tau_fb[1], r.wheel_age_ms[0], r.wheel_age_ms[1]);
+            r.wheel_tau[0], r.wheel_tau[1], r.wheel_tau_fb[0], r.wheel_tau_fb[1], r.wheel_age_ms[0], r.wheel_age_ms[1],
+            r.jump_phase);
         }
       }
       ring_r_.store(rd, std::memory_order_release);
@@ -1041,7 +1080,8 @@ private:
   std::atomic<bool> in_request_{false};
   std::string err_ping_;
   double start_t_ = 0.0, home_still_ = 0.0, home_tau_ = 0.4, home_kd_ = 0.3, home_timeout_s_ = 3.0, auto_tilt_ = 0.087, auto_wait_s_ = 10.0;
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_start_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_start_, srv_jump_;
+  std::atomic<bool> jump_req_{false};
   bool sit_ = false, sit_hold_ = false, link_lost_ = false, link_stop_ = true;
   int64_t t_lost_ = 0;
   double link_sit_after_s_ = 2.0, link_disarm_s_ = 30.0;

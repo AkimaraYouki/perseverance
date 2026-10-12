@@ -1,5 +1,6 @@
 // Wheel-leg balance controller core = C++ port of sim/isaaclab/scripts/wbctrl.py (WBController.step),
-// one robot, DRIVE phase only (no jump state machine, bump_slow off, no sensor noise / delay models).
+// one robot, DRIVE + jump state machine (2026-10-12; no automatic edge trigger: the jump is requested by the caller),
+// bump_slow off, jump_retry off, no sensor noise / delay models.
 // Pure computation, no ROS: the node builds a Frame from the hardware each 5 ms and applies the output.
 // Units and signs as wbctrl.py:
 //   pitch = asin(g_x) (+ = nose down), roll = asin(g_y) (+ = left side low)
@@ -17,6 +18,9 @@ constexpr double kDt = 0.005;
 constexpr double kHMin = 0.1225, kHMax = 0.2425;
 constexpr double kHalfTrack = 0.094;
 constexpr double kWheelMax = 18.85;      // rad/s, nominal motor limit the controller believes
+
+// jump phases (wbctrl.py DRIVE, RETRACT, EXTRACT, FLY, DESCEND, LAND)
+enum Phase : int {kDrive = 0, kRetract = 1, kExtract = 2, kFly = 3, kDescend = 4, kLand = 5};
 
 struct Params      // climb_test.py TUNE defaults (2026-10-07)
 {
@@ -43,6 +47,16 @@ struct Params      // climb_test.py TUNE defaults (2026-10-07)
   int db_comp = 2;                  // 0 off, 1 boost, 2 sigma
   double db_comp_nm = 0.65, db_comp_eps = 0.05;
   double m_pend = 4.02;             // nominal mass without wheels [kg] (export 7)
+  // --- jump state machine (climb_test.py TUNE 2026-10-12, docs: comms/to-robot/attachments/jump_state_machine.md)
+  double jump_min_v = 0.2, jump_max_wz = 1.0;        // a request is ignored below this speed / above this yaw rate
+  double t_retract = 0.25, retract_lean = 3.0;       // crouch time [s], lean while crouching [deg]
+  double t_tuck = 0.12, t_fly_max = 0.45;            // legs tucked after take-off [s], forced landing after [s]
+  double contact_tau = 2.0;                          // landing: max |hip torque| above this [N·m] (after 0.04 s)
+  double land_s = 0.30, h_land = 0.1825;             // landing phase time [s], leg height to land on [m]
+  double leg_kp = 60.0, leg_kd = 1.5, land_kp = 20.0, land_kd = 1.0;   // leg gains in the jump / soft landing
+  bool air_ctrl = true, air_pd_extract = true;        // wheel pitch PD in the air (and already in EXTRACT)
+  double air_pitch = -5.0, land_pitch = 0.0, extract_pitch = 0.0;   // [deg] targets FLY / DESCEND / EXTRACT
+  double air_kp = 30.0, air_kd = 5.0, air_tau = 7.0;  // [N·m/rad], [N·m·s/rad], clip [N·m] per wheel
 };
 
 struct LqrTable    // K(l) for x = [x_err, v_err, th, thd]; tau = -K x (sum of both wheels)
@@ -73,6 +87,8 @@ struct Output
   double th = 0, thd = 0, v = 0, pitch = 0, roll = 0, v_ref = 0, v_lim = 0, x_err = 0, th_bias = 0;
   double tau_lqr = 0, tau_yaw = 0, wheel_pre_lpf[2] = {0, 0};   // wheel torque before the LPF / deadband comp
   bool lifted = false;
+  int phase = kDrive;               // jump phase after this step
+  bool jump_blocked = false;        // a jump was requested but refused (too slow / turning)
 };
 
 class WBCore
@@ -80,8 +96,10 @@ class WBCore
 public:
   WBCore(const Params & p, const LqrTable & lqr);
   void reset();
-  // vx [m/s], wz [rad/s] commands, h_ref (= idle_h in auto), h_mid (< 0 -> idle_h)
-  Output step(const Frame & f, double vx, double wz, double h_ref, double h_mid = -1.0);
+  // vx [m/s], wz [rad/s] commands, h_ref (= idle_h in auto), h_mid (< 0 -> idle_h),
+  // jump: operator request this step (pad Y edge) — honoured only in DRIVE, not lifted, v >= jump_min_v, |gz| <= jump_max_wz
+  Output step(const Frame & f, double vx, double wz, double h_ref, double h_mid = -1.0, bool jump = false);
+  int phase() const {return phase_;}
   const Params & params() const {return P_;}
 
 private:
@@ -91,6 +109,9 @@ private:
   // state (names as wbctrl.py)
   double x_err_, t_un_, t_ld_, g_vf_, g_i_, g_ref_, vf_, rf_, th_bias_, v_prev_, roll_i_, yaw_i_ = 0.0, g_acc_ = 0.0;
   bool lift_on_;
+  int phase_ = kDrive;
+  double t_phase_ = 0.0, t_takeoff_ = 0.0, h0_ = 0.1825;
+  bool soft_ = false;
   double wf_[2], db_e_[2];
 };
 

@@ -46,7 +46,8 @@ static void run_case(const char * file, const Params & P)
   WBCore core(P, lqr);
   double worst = 0.0;
   std::size_t worst_k = 0;
-  int lifted = 0;
+  int lifted = 0, jumps = 0, prev_phase = 0;
+  const bool has_jump = c.count("jump") > 0;
   for (std::size_t k = 0; k < rows.size(); ++k) {
     const auto & r = rows[k];
     Frame f;
@@ -58,7 +59,13 @@ static void run_case(const char * file, const Params & P)
     f.w_wheel_joint[0] = r[c["wjL"]]; f.w_wheel_joint[1] = r[c["wjR"]];
     f.w_wheel_abs[0] = r[c["waL"]]; f.w_wheel_abs[1] = r[c["waR"]];
     f.th_kin = r[c["th_kin"]]; f.l_pend = r[c["l_pend"]]; f.sf = r[c["sf"]]; f.motor_scale = r[c["motor_scale"]];
-    const Output o = core.step(f, r[c["vx"]], r[c["wzc"]], r[c["h_ref"]], r[c["h_mid"]]);
+    const bool jump = has_jump && r[c["jump"]] > 0.5;
+    const Output o = core.step(f, r[c["vx"]], r[c["wzc"]], r[c["h_ref"]], r[c["h_mid"]], jump);
+    if (has_jump) {
+      ASSERT_EQ(o.phase, static_cast<int>(r[c["phase"]])) << "step " << k << " phase";
+      jumps += prev_phase == kDrive && o.phase == kRetract;
+      prev_phase = o.phase;
+    }
     const double exp_[] = {r[c["a0"]], r[c["a1"]], r[c["a2"]], r[c["a3"]], r[c["kp"]], r[c["kd"]], r[c["ff"]],
                            r[c["th"]], r[c["v"]], r[c["lifted"]]};
     const double got[] = {o.act[0], o.act[1], o.act[2], o.act[3], o.leg_kp, o.leg_kd, o.ff_force, o.th, o.v,
@@ -70,8 +77,8 @@ static void run_case(const char * file, const Params & P)
     }
     lifted += o.lifted;
   }
-  EXPECT_GT(lifted, 50);   // the lift / landing path was exercised
-  std::printf("max |diff| %.3g at step %zu, lifted steps %d\n", worst, worst_k, lifted);
+  if (has_jump) {EXPECT_GE(jumps, 5);} else {EXPECT_GT(lifted, 50);}   // the jump / lift path was exercised
+  std::printf("max |diff| %.3g at step %zu, lifted steps %d, jumps %d\n", worst, worst_k, lifted, jumps);
 }
 
 TEST(WBCore, MatchesPythonSpec) {run_case("golden.csv", Params{});}
@@ -82,4 +89,12 @@ TEST(WBCore, MatchesPythonSpecRobotAdditions)   // GOLDEN_ROBOT=1 python3 test/g
   P.jerk_max = 3.0; P.accel_max = 0.8; P.x_hold_moving = false; P.x_leak_moving = 0.5; P.lean_ff = 1.0;
   P.yaw_kd = 0.15; P.yaw_ki = 1.0; P.yaw_i_max = 0.5;
   run_case("golden_robot.csv", P);
+}
+
+TEST(WBCore, MatchesPythonSpecJump)   // GOLDEN_JUMP=1 python3 test/gen_golden.py (robot additions + operator jumps)
+{
+  Params P;
+  P.jerk_max = 3.0; P.accel_max = 0.8; P.x_hold_moving = false; P.x_leak_moving = 0.5; P.lean_ff = 1.0;
+  P.yaw_kd = 0.15; P.yaw_ki = 1.0; P.yaw_i_max = 0.5;
+  run_case("golden_jump.csv", P);
 }

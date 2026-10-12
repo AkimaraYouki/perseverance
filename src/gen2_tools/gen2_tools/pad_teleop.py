@@ -13,7 +13,7 @@ balance/* services. Only standard messages, so it also runs on ROS 2 Humble.
   B              default height
   LB + RB 0.5 s  emergency DISARM (0 A — the robot drops)
   X              ArUco follow on / off (sticks override; release = follow resumes)
-  Y              jump (not on the robot yet)
+  Y              jump (balance/jump: needs >= 0.2 m/s forward, not turning — robot wb_core 2026-10-12)
 If /joy stops (pad unplugged, joy_node dead) the heartbeat stops: the robot stops, sits and disarms.
 
 Index defaults = the user's pad (Xbox over Bluetooth, joy_node on Humble, measured 2026-10-09):
@@ -52,7 +52,7 @@ class PadTeleop(Node):
         self.hb = self.create_publisher(Empty, 'balance/heartbeat', 10)
         self.cmd = self.create_publisher(Twist, 'cmd_vel/teleop', 10)
         self.hp = self.create_publisher(Float64, 'balance/height', 10)
-        self.cli = {k: self.create_client(Trigger, f'balance/{k}') for k in ('start', 'sit', 'disarm')}
+        self.cli = {k: self.create_client(Trigger, f'balance/{k}') for k in ('start', 'sit', 'disarm', 'jump')}
         self.cli_follow = self.create_client(SetBool, 'aruco/enable')
         self.follow = False
         self.active_t = 0.0      # last time the sticks / A were used: the pad only commands while in use,
@@ -97,7 +97,7 @@ class PadTeleop(Node):
         if self._edge('back'):
             self._call('sit')
         if self._edge('y'):
-            self.get_logger().info('jump: not implemented on the robot yet')
+            self._call('jump')
         if self._btn('lb') and self._btn('rb'):
             self.estop_t = self.estop_t or time.monotonic()
             if time.monotonic() - self.estop_t > 0.5:

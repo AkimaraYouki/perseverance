@@ -34,6 +34,7 @@ void WBCore::reset()
   x_err_ = t_un_ = t_ld_ = g_vf_ = g_i_ = g_ref_ = vf_ = rf_ = th_bias_ = v_prev_ = roll_i_ = yaw_i_ = g_acc_ = 0.0;
   lift_on_ = false;
   wf_[0] = wf_[1] = db_e_[0] = db_e_[1] = 0.0;
+  phase_ = kDrive; t_phase_ = t_takeoff_ = 0.0; h0_ = P_.idle_h; soft_ = false;
 }
 
 double WBCore::lqr_torque(double l, double x_err, double v_err, double th, double thd) const
@@ -47,7 +48,7 @@ double WBCore::lqr_torque(double l, double x_err, double v_err, double th, doubl
   return -(K[0] * x_err + K[1] * v_err + K[2] * th + K[3] * thd);
 }
 
-Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double h_mid)
+Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double h_mid, bool jump)
 {
   const Params & P = P_;
   Output o;
@@ -64,7 +65,7 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
   // --- balance point adaptation
   const double acc = (v_now - v_prev_) / kDt;
   v_prev_ = v_now;
-  const bool ad = P.bal_adapt > 0 && !lift_on_ && std::fabs(acc) < 0.3 && std::fabs(thd) < 0.3 &&
+  const bool ad = P.bal_adapt > 0 && phase_ == kDrive && !lift_on_ && std::fabs(acc) < 0.3 && std::fabs(thd) < 0.3 &&
     std::fabs(v_now) < 0.05 && std::fabs(vx) < 0.02;
   const double lim = P.bal_adapt_max_deg * M_PI / 180.0;
   if (ad) {th_bias_ = clip(th_bias_ + P.bal_adapt * kDt * (th - th_bias_), -lim, lim);}
@@ -72,7 +73,28 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
   const double w_max = kWheelMax * f.motor_scale;
   rf_ += lpf_a(P.roll_rate_lpf_hz) * (-gx - rf_);
   double leg_kp = P.vmc_kp, leg_kd = P.vmc_kd, ffF = 0.0;
-  // --- speed limit / brake / LQR (ctl = DRIVE)
+  // --- jump state machine: every transition is judged on the phase at the start of this step (wbctrl.py)
+  const double t = f.t;
+  const int ph0 = phase_;
+  const double tp = t - t_phase_;
+  const bool blocked = jump && ph0 == kDrive && (v_now < P.jump_min_v || std::fabs(wz_now) > P.jump_max_wz);
+  o.jump_blocked = blocked;
+  jump = jump && !blocked;
+  const bool m0 = ph0 == kDrive && !lift_on_ && jump;
+  const bool m1 = ph0 == kRetract && tp >= P.t_retract;
+  const bool m2 = ph0 == kExtract && (std::min(f.h[0], f.h[1]) >= kHMax - 0.008 || tp >= 0.25);
+  const bool m3 = ph0 == kFly && tp >= P.t_tuck;
+  const bool m4 = ph0 == kDescend &&
+    ((tp > 0.04 && std::max(std::fabs(f.tau_hip[0]), std::fabs(f.tau_hip[1])) > P.contact_tau) || t - t_takeoff_ >= P.t_fly_max);
+  const bool m5 = ph0 == kLand && tp >= P.land_s;
+  if (m0) {h0_ = 0.5 * (f.h[0] + f.h[1]);}
+  if (m2) {t_takeoff_ = t;}
+  if (m3) {soft_ = true;} else if (m5) {soft_ = false;}
+  phase_ = m0 ? kRetract : m1 ? kExtract : m2 ? kFly : m3 ? kDescend : m4 ? kLand : m5 ? kDrive : ph0;
+  if (m0 || m1 || m2 || m3 || m4 || m5) {t_phase_ = t;}
+  const int ph = phase_;
+  const bool ctl = ph == kDrive || ph == kRetract || ph == kExtract || ph == kLand;   // LQR drives the wheels
+  // --- speed limit / brake / LQR (state committed only while ctl)
   const double vm = std::min(P.vmax_kmh / 3.6, P.vmax_motor_frac * w_max * P.r_wheel);
   double g_vf = g_vf_ + lpf_a(P.speed_lpf_hz) * (v_now - g_vf_);
   const double e = std::fabs(g_vf) - vm;
@@ -80,13 +102,13 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
   double v_lim = std::max(0.0, vm - (P.brake_kp * std::max(e, 0.0) + g_i));
   if (P.turn_slow) {v_lim = std::min(v_lim, std::max(0.0, vm - kHalfTrack * std::fabs(wz)));}
   const double tgt = clip(vx, -v_lim, v_lim);
-  double g_ref;
+  double g_ref, g_acc = 0.0;
   if (P.jerk_max > 0) {
     // S-curve: the acceleration itself ramps (the body lean follows the acceleration, so no step in lean)
     const double a_want = clip(std::sqrt(2.0 * P.jerk_max * std::fabs(tgt - g_ref_)) * sgn(tgt - g_ref_), -P.accel_max, P.accel_max);
-    g_acc_ += clip(a_want - g_acc_, -P.jerk_max * kDt, P.jerk_max * kDt);
-    g_ref = g_ref_ + g_acc_ * kDt;
-    if ((tgt - g_ref) * (tgt - g_ref_) < 0) {g_ref = tgt; g_acc_ = 0.0;}   // no overshoot of the target
+    g_acc = g_acc_ + clip(a_want - g_acc_, -P.jerk_max * kDt, P.jerk_max * kDt);
+    g_ref = g_ref_ + g_acc * kDt;
+    if ((tgt - g_ref) * (tgt - g_ref_) < 0) {g_ref = tgt; g_acc = 0.0;}   // no overshoot of the target
   } else {
     g_ref = g_ref_ + clip(tgt - g_ref_, -P.accel_max * kDt, P.accel_max * kDt);
   }
@@ -104,32 +126,35 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
     x_err = x_err_ * (1.0 - P.x_leak_moving * kDt);   // driving: forget a big catch-up in 1/x_leak s
   }
   x_err = clip(x_err + (v_now - v_ref) * kDt, -0.3, 0.3);
-  const double th_ref = P.lean_ff > 0 ? P.lean_ff * std::atan(g_acc_ / 9.81) : 0.0;   // lean for the reference accel
+  double th_ref = ph == kRetract ? P.retract_lean * M_PI / 180.0 : 0.0;   // lean forward while crouching
+  if (P.lean_ff > 0 && ph == kDrive) {th_ref += P.lean_ff * std::atan(g_acc / 9.81);}   // lean for the reference accel
   const double tau_w = lqr_torque(l_p, x_err, v_now - v_ref, th - th_ref, thd);
-  if (P.turn_limit) {
+  if (P.turn_limit && ctl) {
     const double v_cmd = std::min(std::fabs(vx), vm);
     const double wz_lim = std::max(0.5, (P.wheel_margin * w_max * P.r_wheel - v_cmd) / kHalfTrack);
     wz = clip(wz, -wz_lim, wz_lim);
   }
-  yaw_i_ = clip(yaw_i_ + P.yaw_ki * (wz - wz_now) * kDt, -P.yaw_i_max, P.yaw_i_max);
-  const double tau_y = P.yaw_kd * (wz - wz_now) + yaw_i_;
+  if (P.yaw_ki > 0) {yaw_i_ = ctl ? clip(yaw_i_ + P.yaw_ki * (wz - wz_now) * kDt, -P.yaw_i_max, P.yaw_i_max) : 0.0;}
+  const double tau_y = P.yaw_kd * (wz - wz_now) + (P.yaw_ki > 0 ? yaw_i_ : 0.0);
   double act[4] = {0, 0, 0, 0};
-  act[2] = clip((0.5 * tau_w - tau_y) / P.wheel_tau_max, -1.0, 1.0);
-  act[3] = clip((0.5 * tau_w + tau_y) / P.wheel_tau_max, -1.0, 1.0);
-  g_vf_ = g_vf; g_i_ = g_i; g_ref_ = g_ref; x_err_ = x_err;
+  if (ctl) {
+    act[2] = clip((0.5 * tau_w - tau_y) / P.wheel_tau_max, -1.0, 1.0);
+    act[3] = clip((0.5 * tau_w + tau_y) / P.wheel_tau_max, -1.0, 1.0);
+    g_vf_ = g_vf; g_i_ = g_i; g_ref_ = g_ref; g_acc_ = g_acc; x_err_ = x_err;
+  }
   o.v_ref = v_ref; o.v_lim = v_lim;
   // --- lift / landing detection
   const double tmax = std::max(f.tau_hip[0], f.tau_hip[1]), tmin = std::min(f.tau_hip[0], f.tau_hip[1]);
   const bool unl = tmax < P.contact_tau_min;
   const bool ldd = tmax >= P.contact_tau_min && f.sf > P.land_sf_min;
-  const bool a_ = !lift_on_, b_ = lift_on_;
+  const bool a_ = ph == kDrive && !lift_on_, b_ = ph == kDrive && lift_on_;
   if (a_) {t_un_ = unl ? t_un_ + kDt : 0.0;}
   const bool up = a_ && t_un_ >= P.lift_detect_s;
   if (b_) {t_ld_ = ldd ? t_ld_ + kDt : 0.0;} else if (up) {t_ld_ = 0.0;}
   const bool down = b_ && t_ld_ >= P.land_detect_s;
   lift_on_ = (lift_on_ || up) && !down;
   if (down) {t_un_ = 0.0; x_err_ = 0.0; g_i_ = 0.0; g_ref_ = v_now; g_vf_ = v_now; roll_i_ = 0.0; g_acc_ = 0.0;}
-  const bool lifted = lift_on_;
+  const bool lifted = ph == kDrive && lift_on_;
   if (lifted) {
     for (int k = 0; k < 2; ++k) {
       act[2 + k] = clip(-P.lift_wheel_kd * f.w_wheel_joint[k] / P.wheel_tau_max, -1.0, 1.0);
@@ -137,7 +162,7 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
     }
     roll_i_ = 0.0; x_err_ = 0.0; g_i_ = g_ref_ = g_vf_ = 0.0; g_acc_ = 0.0;   // yaw_i kept (wbctrl: integrates in DRIVE even when lifted)
   }
-  const bool drv = !lift_on_;
+  const bool drv = ph == kDrive && !lift_on_;
   const double roll_ref = clip(std::atan(P.turn_lean * g_ref_ * wz / 9.81), -20.0 * M_PI / 180.0, 20.0 * M_PI / 180.0);
   const double rl = roll - roll_ref;
   const bool airborne = tmin < P.contact_tau_min;
@@ -153,7 +178,25 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
   if (drv) {
     act[0] = (clip(hc + 0.5 * dlt, kHMin, kHMax) - h_ref) / 0.12;
     act[1] = (clip(hc - 0.5 * dlt, kHMin, kHMax) - h_ref) / 0.12;
-    ffF = 0.5 * P.m_pend * 9.81;
+  }
+  if (drv || ph == kLand) {ffF = 0.5 * P.m_pend * 9.81;}
+  const bool jmp = ph == kRetract || ph == kExtract || ph == kFly || ph == kDescend;
+  if (jmp) {roll_i_ = f.h[0] - f.h[1];}   // roll PI restarts from the current leg difference
+  // --- jump phases: leg targets, wheel pitch PD in the air, leg gains
+  if (ph != kDrive) {
+    double tgt_h = ph == kExtract ? kHMax : ph == kFly ? kHMin : P.h_land;
+    if (ph == kRetract) {tgt_h = h0_ + (kHMin - h0_) * std::min(1.0, tp / (0.75 * P.t_retract));}   // tp: before this step's switch
+    act[0] = act[1] = (tgt_h - h_ref) / 0.12;
+    const bool pd = ph == kFly || ph == kDescend || (P.air_pd_extract && ph == kExtract);
+    if (pd) {
+      double u = 0.0;
+      if (P.air_ctrl) {
+        const double ref = ph == kExtract ? P.extract_pitch : ph == kDescend ? P.land_pitch : P.air_pitch;
+        u = clip((P.air_kp * (pitch - ref * M_PI / 180.0) + P.air_kd * gy) / P.air_tau, -1.0, 1.0);
+      }
+      act[2] = act[3] = u;
+    }
+    if (soft_) {leg_kp = P.land_kp; leg_kd = P.land_kd;} else if (ph != kLand) {leg_kp = P.leg_kp; leg_kd = P.leg_kd;}
   }
   // --- wheel friction compensation (not while lifted)
   if (P.fric_comp_nm > 0 || P.fric_comp_static_nm > 0 || P.fric_comp_cmd_nm > 0) {
@@ -190,7 +233,7 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
   for (int k = 0; k < 4; ++k) {o.act[k] = act[k];}
   o.leg_kp = leg_kp; o.leg_kd = leg_kd; o.ff_force = ffF;
   o.th = th; o.thd = thd; o.v = v_now; o.pitch = pitch; o.roll = roll; o.x_err = x_err_;
-  o.th_bias = th_bias_; o.lifted = lifted;
+  o.th_bias = th_bias_; o.lifted = lifted; o.phase = ph;
   return o;
 }
 
