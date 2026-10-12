@@ -24,9 +24,12 @@ sensor_hub:
     compute:
       # ESP32-C3 ADC (11 dB) cannot resolve PM02 current near 0 A (27.5 mV/A). When the PM02
       # reading is below pm02_min_current_a, current = Jetson VDD_IN power (as in the Jetson
-      # power GUI / INA3221) x factor / PM02 pack voltage. Shown with "~" on the LCD.
+      # power GUI / INA3221) x factor + offset, / PM02 pack voltage. Shown with "~" on the LCD.
+      # 2026-10-12 Rigol 12.00 V: idle 0.873 A (10.48 W) at VDD_IN 6.07 W, 6-core 100 % + YOLO 1.15 A (13.8 W)
+      # at 9.15 W -> pack W = 1.08 x VDD_IN + 3.93 (board, LiDAR, camera, Wi-Fi, LCD, converter losses)
       jetson_current_fallback: true
-      jetson_power_factor: 1.0
+      jetson_power_factor: 1.08
+      jetson_power_offset_w: 3.93
       pm02_min_current_a: 1.5
       nominal_cell_v: 3.70          # LiPo nominal (11.1 V 3S)
       reserve_fraction: 0.20        # runtime counts down to 20 % left

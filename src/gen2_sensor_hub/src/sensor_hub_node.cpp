@@ -112,6 +112,7 @@ public:
     double soc_settle_s;
     bool jetson_current_fallback;  // compute only: derive current from Jetson INA3221 VDD_IN
     double jetson_power_factor;    // VDD_IN power -> battery power (1.0 = as Jetson reports)
+    double jetson_power_offset_w;  // + carrier board / peripherals / converter losses not in VDD_IN
     double pm02_min_current_a;     // below this the PM02/ESP32 ADC reading is not trusted
     bool soc_from_voltage;         // SoC from the (load-corrected) voltage all the time instead of coulomb counting
     double internal_r_ohm;         // pack resistance for the load correction V_ocv = V + I R (0 = none)
@@ -203,6 +204,7 @@ private:
     b.soc_settle_s = declare_parameter(n + ".soc_init_settle_s", 2.0);
     b.jetson_current_fallback = declare_parameter(n + ".jetson_current_fallback", false);
     b.jetson_power_factor = declare_parameter(n + ".jetson_power_factor", 1.0);
+    b.jetson_power_offset_w = declare_parameter(n + ".jetson_power_offset_w", 0.0);
     b.pm02_min_current_a = declare_parameter(n + ".pm02_min_current_a", 1.5);
     b.soc_from_voltage = declare_parameter(n + ".soc_from_voltage", false);
     b.internal_r_ohm = declare_parameter(n + ".internal_r_ohm", 0.0);
@@ -252,7 +254,7 @@ private:
     const double j = jetson_w_.load();
     if (c.jetson_current_fallback && std::isfinite(j) && v > 1.0 && a_pm02 < c.pm02_min_current_a) {
       estimated = true;
-      return j * c.jetson_power_factor / v;
+      return (j * c.jetson_power_factor + c.jetson_power_offset_w) / v;
     }
     return a_pm02;
   }
