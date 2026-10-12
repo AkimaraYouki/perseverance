@@ -16,7 +16,7 @@ sensor_hub:
     gps_min_itow_step_ms: 1
 
     # PM02 V3 host-side calibration (firmware has CURRENT_ZERO_V = 0 and nominal scales):
-    #   volts = raw_V * voltage_scale
+    #   volts = raw_V * voltage_scale + voltage_offset_v
     #   amps  = (raw_A - current_offset_a) * current_scale
     # Procedure (README STEP 7): multimeter on battery -> voltage_scale = V_meter / raw_V;
     # load disconnected -> current_offset_a = raw_A; known load -> current_scale.
@@ -32,7 +32,10 @@ sensor_hub:
       reserve_fraction: 0.20        # runtime counts down to 20 % left
       power_avg_tau_s: 30.0         # runtime uses a 30 s power average
       soc_init_settle_s: 2.0        # initial SoC from resting voltage averaged over this window
-      voltage_scale: 1.0
+      # 2026-10-12 Rigol linear PSU (user) 11.10 / 12.00 / 12.60 V -> raw 10.083 / 11.026 / 11.627 V (10 s means):
+      # mostly a ~1 V offset (scale-only fit left 0.11 V); least squares residual <= 0.010 V (pass: +-0.03 V pack)
+      voltage_scale: 0.96966
+      voltage_offset_v: 1.3191
       current_scale: 1.0
       min_present_cell_v: 2.8
       max_present_cell_v: 4.35
@@ -44,6 +47,7 @@ sensor_hub:
       warn_cell_v: 3.50
       error_cell_v: 3.30
     motor:
+      voltage_offset_v: 0.0         # not calibrated yet (needs the PSU on the motor channel, see comms 1217)
       nominal_cell_v: 3.70          # LiPo nominal (22.2 V 6S)
       reserve_fraction: 0.20        # runtime counts down to 20 % left
       power_avg_tau_s: 30.0         # runtime uses a 30 s power average

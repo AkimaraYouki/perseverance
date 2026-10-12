@@ -99,6 +99,7 @@ public:
     int cells;
     double capacity_ah;
     double voltage_scale;
+    double voltage_offset_v;
     double current_offset_a;
     double current_scale;
     double min_present_cell_v;
@@ -189,6 +190,7 @@ private:
     b.cells = declare_parameter(n + ".cells", cells);
     b.capacity_ah = declare_parameter(n + ".capacity_ah", cap);
     b.voltage_scale = declare_parameter(n + ".voltage_scale", 1.0);
+    b.voltage_offset_v = declare_parameter(n + ".voltage_offset_v", 0.0);
     b.current_offset_a = declare_parameter(n + ".current_offset_a", 0.0);
     b.current_scale = declare_parameter(n + ".current_scale", 1.0);
     b.min_present_cell_v = declare_parameter(n + ".min_present_cell_v", 2.8);
@@ -255,7 +257,10 @@ private:
     return a_pm02;
   }
 
-  static double cal_voltage(const BatteryCfg & c, uint16_t mv) {return mv * 1e-3 * c.voltage_scale;}
+  static double cal_voltage(const BatteryCfg & c, uint16_t mv)
+  {
+    return mv > 0 ? mv * 1e-3 * c.voltage_scale + c.voltage_offset_v : 0.0;    // 0 = no reading / no pack
+  }
   static double cal_current(const BatteryCfg & c, int32_t ma)
   {
     return (ma * 1e-3 - c.current_offset_a) * c.current_scale;
@@ -747,6 +752,7 @@ private:
     s.add("raw_mV", idx == 0 ? last_.compute_mV : last_.motor_mV);
     s.add("raw_mA", idx == 0 ? last_.compute_mA : last_.motor_mA);
     s.add("voltage_scale", cfg.voltage_scale);
+    s.add("voltage_offset_v", cfg.voltage_offset_v);
     s.add("current_offset_a", cfg.current_offset_a);
     s.add("current_scale", cfg.current_scale);
   }
