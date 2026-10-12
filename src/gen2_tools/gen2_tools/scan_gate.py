@@ -15,7 +15,9 @@ import rclpy
 import rclpy.executors
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
+from geometry_msgs.msg import Point32, PolygonStamped
 from sensor_msgs.msg import LaserScan
+import numpy as np
 
 
 class ScanGate(Node):
@@ -23,9 +25,18 @@ class ScanGate(Node):
         super().__init__('scan_gate')
         self.max_tilt = math.radians(self.declare_parameter('max_tilt_deg', 5.0).value)
         self.pitch = self.roll = 0.0
-        self.n_in = self.n_out = 0
+        self.n_in = self.n_out = self.n_mask = 0
         self.pub = self.create_publisher(LaserScan, 'scan_level', qos_profile_sensor_data)
         self.shm = None
+        # robot self-hitbox in the laser frame (desktop CAD: three leg poses + 5 cm, sim/model/footprint.yaml)
+        self.hb = self.declare_parameter('hitbox_laser_xy', [-0.144, 0.239, -0.164, 0.164]).value
+        fp = self.declare_parameter('footprint_base_xy', [-0.221, 0.162, -0.164, 0.164]).value
+        self.fp_pub = self.create_publisher(PolygonStamped, 'footprint', 1)
+        self.fp = PolygonStamped()
+        self.fp.header.frame_id = 'base_link'
+        self.fp.polygon.points = [Point32(x=float(x), y=float(y)) for x, y in ((fp[0], fp[2]), (fp[1], fp[2]), (fp[1], fp[3]), (fp[0], fp[3]))]
+        self.create_timer(1.0, lambda: (setattr(self.fp.header, 'stamp', self.get_clock().now().to_msg()), self.fp_pub.publish(self.fp)))
+        self.n_mask = 0
         self.create_subscription(LaserScan, 'scan', self._scan, qos_profile_sensor_data)
         self.create_timer(10.0, self._report)
 
@@ -54,11 +65,19 @@ class ScanGate(Node):
             return
         if abs(self.pitch) < self.max_tilt and abs(self.roll) < self.max_tilt:
             self.n_out += 1
+            r = np.asarray(m.ranges, dtype=np.float32)
+            a = m.angle_min + np.arange(len(r)) * m.angle_increment
+            x, y = r * np.cos(a), r * np.sin(a)
+            inside = (x > self.hb[0]) & (x < self.hb[1]) & (y > self.hb[2]) & (y < self.hb[3])
+            self.n_mask += int(inside.sum())
+            r[inside] = float('inf')
+            m.ranges = r.tolist()
             self.pub.publish(m)
 
     def _report(self):
         if self.n_in:
-            self.get_logger().info(f'passed {self.n_out}/{self.n_in} scans (|tilt| < {math.degrees(self.max_tilt):.0f} deg)')
+            self.get_logger().info(f'passed {self.n_out}/{self.n_in} scans (|tilt| < {math.degrees(self.max_tilt):.0f} deg), '
+                                   f'{self.n_mask / max(1, self.n_out):.0f} self-hitbox points masked per scan')
         self.n_in = self.n_out = 0
 
 

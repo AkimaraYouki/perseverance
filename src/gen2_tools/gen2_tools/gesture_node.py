@@ -37,7 +37,7 @@ class GestureNode(Node):
         self.hz = p('process_hz', 5.0)
         self.min_score = p('min_score', 0.6)
         self.hold_s = p('hold_s', 0.6)
-        acts = p('actions', ['Open_Palm:follow_off', 'Thumb_Up:follow_on', 'Thumb_Down:sit'])
+        acts = p('actions', ['Open_Palm:follow_off', 'Thumb_Up:follow_on'])   # rules: only stop / restart hand signals
         self.actions = dict(a.split(':', 1) for a in acts)
         opt = vision.GestureRecognizerOptions(base_options=BaseOptions(model_asset_path=model),
                                               running_mode=vision.RunningMode.IMAGE, num_hands=1)

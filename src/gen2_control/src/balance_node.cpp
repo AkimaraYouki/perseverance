@@ -675,8 +675,12 @@ private:
       if (want_ != mode_ && !(mode_ == Mode::kFault && want_ != Mode::kDisarmed)) {enter(want_);}
       if (mode_ == Mode::kStand || mode_ == Mode::kBalance) {
         std::string why = bad;
+        // a jump (RETRACT..LAND, ~1 s) swings and loads the hips on purpose: no oscillation / saturation guard,
+        // and a heartbeat gap is handled after it (back in DRIVE)
+        const bool jumping = mode_ == Mode::kBalance && last_.phase != gen2_control::kDrive;
+        if (jumping) {for (int k = 0; k < 2; ++k) {osc_t_[k].clear(); sat_s_[k] = 0.0;}}
         // oscillation / saturation guard on the hips
-        for (int k = 0; k < 2 && why.empty(); ++k) {
+        for (int k = 0; k < 2 && why.empty() && !jumping; ++k) {
           const auto & c = bus_->motors()[idx_.at(names[k])];
           const double w = c.erpm_to_joint_vel(fb[k].status.speed_erpm);
           if (std::fabs(w) > osc_vel_) {
@@ -696,7 +700,7 @@ private:
         }
         if (why.empty() && imu_age_ms_ > imu_timeout_ * 1e3) {why = "IMU stale";}
         const bool hb_ok = (t - hb_ns_.load()) * 1e-9 <= hb_timeout_;
-        if (why.empty() && !hb_ok) {
+        if (why.empty() && !hb_ok && !jumping) {
           if (mode_ == Mode::kBalance && link_stop_) {
             if (!link_lost_) {
               link_lost_ = true; t_lost_ = t;
