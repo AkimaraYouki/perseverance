@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """wifi -r: 로봇 상태판 (터미널). 로봇 LCD 와 같은 항목 + 제어 상태 (속도·가속·자세·토크) + 데스크톱/로봇 Wi-Fi 신호 %.
 
-로봇에 desk_dash_robot.py 를 복사해 ssh 로 띄우고 (1 초마다 JSON 한 줄), 여기서 그린다. Ctrl+C 로 끝 (로봇 쪽도 같이 끝남).
+제어 상태·전원·모터·센서는 데스크톱이 직접 구독 (/controller/state, /diagnostics, /odom, /robot/state — env.sh 필요),
+로봇에서는 desk_dash_robot.py 가 시스템 정보 (CPU·온도·SSH·Wi-Fi) 만 ssh 로 1 초마다 보낸다 (젯슨 CPU 거의 0, 2026-10-12).
+Ctrl+C 로 끝 (로봇 쪽도 같이 끝남).
 """
 import json
+import math
 import os
+import threading
 import re
 import subprocess
 import sys
@@ -12,8 +16,7 @@ import time
 
 ROBOT = 'parksudo@192.168.50.124'
 HERE = os.path.dirname(os.path.abspath(__file__))
-ENV = ('source /opt/ros/jazzy/setup.bash; source ~/gen2_ws/install/setup.bash; '
-       'export ROS_DOMAIN_ID=42 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp CYCLONEDDS_URI=file://$HOME/.ros/gen2_cyclonedds.xml; ')
+ENV = 'source ~/gen2_ws/install/setup.bash; '      # gen2_status_display (SysInfo) 만 — ROS 노드는 안 띄움
 G, Y, R, D, B, Z = '\033[32m', '\033[33m', '\033[31m', '\033[2m', '\033[1m', '\033[0m'
 
 
@@ -147,13 +150,106 @@ def render(d, conn_age):
     return '\n'.join(L)
 
 
+class Collector:
+    """데스크톱에서 로봇 토픽을 직접 구독해 상태판용 dict 를 만든다 (예전 로봇 쪽 수집기와 같은 항목·계산)."""
+
+    def __init__(self):
+        import rclpy
+        from diagnostic_msgs.msg import DiagnosticArray
+        from gen2_msgs.msg import ControllerState
+        from nav_msgs.msg import Odometry
+        from rclpy.qos import QoSProfile
+        from std_msgs.msg import String
+        from rclpy.signals import SignalHandlerOptions
+        rclpy.init(signal_handler_options=SignalHandlerOptions.NO)   # Ctrl+C·종료 신호는 이 스크립트가 처리 (rclpy 가 삼키지 않게)
+        self.rclpy = rclpy
+        self.node = rclpy.create_node('desk_dash')
+        self.diag, self.state, self.cs, self.od = {}, None, None, None
+        self.prev, self.acc_f = None, 0.0
+        self.win = dict(vmax=0.0, amax=0.0, pmax=0.0)
+        self.lock = threading.Lock()
+        q1 = QoSProfile(depth=1)
+        self.node.create_subscription(DiagnosticArray, 'diagnostics', self._diag, 20)
+        self.node.create_subscription(String, 'robot/state', lambda m: setattr(self, 'state', (time.monotonic(), m.data)), 5)
+        self.node.create_subscription(ControllerState, 'controller/state', self._cs, q1)
+        self.node.create_subscription(Odometry, 'odom', lambda m: setattr(self, 'od', (time.monotonic(), m)), q1)
+        threading.Thread(target=rclpy.spin, args=(self.node,), daemon=True).start()
+
+    def _diag(self, m):
+        now = time.monotonic()
+        with self.lock:
+            for s in m.status:
+                lv = int.from_bytes(s.level, 'little') if isinstance(s.level, bytes) else int(s.level)
+                self.diag[s.name.split(': ', 1)[-1]] = (now, lv, s.message, {kv.key: kv.value for kv in s.values})
+
+    def _cs(self, m):
+        t = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9
+        if self.prev is not None and t > self.prev[0]:
+            self.acc_f += 0.1 * ((m.v - self.prev[1]) / (t - self.prev[0]) - self.acc_f)
+        self.prev = (t, m.v)
+        w = self.win
+        w['vmax'] = max(w['vmax'], abs(m.v)); w['amax'] = max(w['amax'], abs(self.acc_f)); w['pmax'] = max(w['pmax'], abs(m.pitch))
+        self.cs = (time.monotonic(), m)
+
+    def _get(self, name):
+        with self.lock:
+            d = self.diag.get(name)
+        return None if d is None else dict(age=time.monotonic() - d[0], level=d[1], msg=d[2], kv=d[3])
+
+    def snapshot(self):
+        def fv(kv, k):
+            try:
+                v = float(kv.get(k)); return v if math.isfinite(v) else None
+            except (TypeError, ValueError):
+                return None
+        now = time.monotonic()
+        out = dict(state=self.state[1] if self.state and now - self.state[0] < 2.0 else None)
+        for k in ('power motor', 'power compute'):
+            d = self._get('sensor_hub: ' + k)
+            if d:
+                kv = d['kv']
+                out[k] = dict(age=d['age'], level=d['level'], msg=d['msg'], v=fv(kv, 'voltage_v'), a=fv(kv, 'current_a'),
+                              w=fv(kv, 'power_w'), soc=fv(kv, 'soc_percent'), run=fv(kv, 'runtime_min'),
+                              cells=int(fv(kv, 'cells') or 0), cell_v=fv(kv, 'cell_voltage_v'), present=kv.get('present') == 'True')
+        out['motors'] = []
+        for name in ('leg_l', 'leg_r', 'wheel_l', 'wheel_r'):
+            d = self._get('motor: ' + name)
+            if d:
+                kv = d['kv']
+                out['motors'].append(dict(name=name, age=d['age'], level=d['level'], msg=d['msg'], temp=fv(kv, 'temperature_c'),
+                                          cur=fv(kv, 'current_a'), pos=fv(kv, 'position_deg'), err=int(fv(kv, 'error_code') or 0)))
+        dev = {}
+        for key, name in (('can', 'can: bus'), ('imu', 'iahrs'), ('lidar', 'scan'), ('camera', 'stream'), ('hub', 'sensor_hub: link'),
+                          ('gnss', 'sensor_hub: gnss'), ('mag', 'sensor_hub: magnetometer')):
+            d = self._get(name)
+            if d:
+                dev[key] = dict(age=d['age'], level=d['level'], msg=d['msg'])
+        out['dev'] = dev
+        if self.cs and now - self.cs[0] < 1.0:
+            m = self.cs[1]
+            out['ctrl'] = dict(mode=m.mode, fault=m.fault, v=m.v, v_ref=m.v_ref, vx=m.vx_cmd, wz=m.wz_cmd, acc=self.acc_f,
+                               pitch=math.degrees(m.pitch), roll=math.degrees(m.roll), th_bias=math.degrees(m.th_bias),
+                               h=list(m.h), wheel_tau=list(m.wheel_tau_cmd), hip_tau=list(m.hip_tau_cmd), lifted=m.lifted,
+                               imu_age=m.imu_age_ms, loop_max=m.loop_dt_max_ms, overruns=m.overruns,
+                               vmax=self.win['vmax'], amax=self.win['amax'], pmax=math.degrees(self.win['pmax']))
+        if self.od and now - self.od[0] < 1.0:
+            o = self.od[1]; q = o.pose.pose.orientation
+            out['odom'] = dict(x=o.pose.pose.position.x, y=o.pose.pose.position.y, wz=o.twist.twist.angular.z,
+                               yaw=math.degrees(math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))))
+        self.win = dict(vmax=0.0, amax=0.0, pmax=0.0)
+        return out
+
+
 def main():
+    import signal
+    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+    col = Collector()
     subprocess.run(['scp', '-q', '-o', 'BatchMode=yes', os.path.join(HERE, 'desk_dash_robot.py'), f'{ROBOT}:.cache/desk_dash_robot.py'], check=True)
     p = subprocess.Popen(['ssh', '-tt', '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=2', ROBOT,
                          ENV + 'exec python3 -u ~/.cache/desk_dash_robot.py'],
                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.PIPE, text=True, bufsize=1)
     os.set_blocking(p.stdout.fileno(), False)
-    last, last_t, buf = None, None, ''
+    sysd, sys_t, buf = None, None, ''
     try:
         while True:
             try:
@@ -166,20 +262,25 @@ def main():
                 line = line.strip()
                 if line.startswith('{'):
                     try:
-                        last, last_t = json.loads(line), time.time()
+                        sysd, sys_t = json.loads(line).get('sys'), time.time()
                     except json.JSONDecodeError:
                         pass
-            age = time.time() - last_t if last_t else 99.0
-            sys.stdout.write('\033[H\033[2J' + render(last if age < 5 else None, age) + '\n')
+            d = col.snapshot()
+            age = time.time() - sys_t if sys_t else 99.0
+            d['sys'] = sysd if age < 5 else {}
+            alive = bool(d.get('ctrl') or d.get('dev') or d['sys'])
+            sys.stdout.write('\033[H\033[2J' + render(d if alive else None, age) + '\n')
             sys.stdout.flush()
-            if p.poll() is not None:
-                print(f'{R}로봇 연결 끊김 (ssh 끝남){Z}')
+            if p.poll() is not None and not d.get('dev'):
+                print(f'{R}로봇 연결 끊김{Z}')
                 return
             time.sleep(1.0)
     except KeyboardInterrupt:
         pass
     finally:
         p.terminate()
+        sys.stdout.flush()
+        os._exit(0)          # rclpy spin 스레드를 기다리지 않고 바로 끝 (C++ terminate 경고 없이)
 
 
 if __name__ == '__main__':

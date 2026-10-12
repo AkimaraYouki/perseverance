@@ -9,7 +9,8 @@ C-WANG 브링업 — 원스톱 (2026-10-12, 패드 X = 사람 추종, Y = 점프
 
 [2] 데스크톱 — 한 번에
   cw up
-     = 로봇 확인 → SLAM 켬 → 패드 (joy_node + pad_teleop) → RViz → 상태판  (각각 새 터미널 탭)
+     = 로봇 확인 → 사람 추종 (로봇) → 패드 → 손짓 (데스크톱) → RViz → 상태판 → HUD  (각각 새 터미널 탭)
+     지도 만들 때만: cw slam start  (SLAM 은 이제 데스크톱에서 — 젯슨 CPU 절약)
   cw check          지금 상태만 보기 (로봇 연결, 서비스, SLAM, 비전, 패드, RViz)
 
 [3] 패드 조종
@@ -26,10 +27,12 @@ C-WANG 브링업 — 원스톱 (2026-10-12, 패드 X = 사람 추종, Y = 점프
   * 패드가 끊기면 (1초) 로봇은 스스로 멈춤 → 2초 뒤 앉아서 균형 → 30초 뒤 해제
 
 [4] 하나씩 쓰기
-  cw slam start | stop       로봇 SLAM 켜기/끄기
+  cw slam start | stop       SLAM 켜기/끄기 (데스크톱)
   cw slam reset              지도 지우고 지금 자리부터 새로
-  cw slam save [이름]        지도 저장 (로봇 ~/maps/이름.pgm/.yaml)
-  cw vision start | stop     로봇 비전 (예전 ArUco 스크립트 — 사람 추종은 control.launch 쪽, 로봇 확인 필요)
+  cw slam save [이름]        지도 저장 (데스크톱 ~/maps/이름.pgm/.yaml)
+  cw follow start | stop     로봇 사람 추종 (다리·사람 검출·추종·Nav2) — 로봇 재부팅 뒤엔 다시 켜기, 그다음 패드 X
+  cw gesture                 손짓 인식 (데스크톱): 손바닥 = 정지 (Hold), 엄지 = 재개
+  cw hud                     사람 추종 HUD (카메라 + 사람 상자·대상·다리·상태·손짓)
   cw pad                     패드만 (joy_node + pad_teleop)
   cw rviz                    RViz 만 (지도·라이다·TF·오도메트리·카메라)
   cw dash                    상태판만 (= wifi -r)

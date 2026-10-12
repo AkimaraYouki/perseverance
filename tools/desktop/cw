@@ -18,8 +18,9 @@ check() {
   if ! r true 2>/dev/null; then echo "안 됨 (젯슨 전원·Wi-Fi ROBOT 확인)"; return 1; fi
   echo "OK"
   r 'printf "  서비스: bench %s, balance %s\n" $(systemctl is-active gen2-bench) $(systemctl is-active gen2-balance);
-     printf "  SLAM: %s\n" "$(pgrep -f "[s]lam_toolbox" >/dev/null && echo 켜짐 || echo 꺼짐)";
+     printf "  로봇 SLAM: %s (이제 데스크톱에서 — cw slam)\n" "$(pgrep -f "[s]lam_toolbox" >/dev/null && echo 켜짐 || echo 꺼짐)";
      printf "  사람 추종: %s\n" "$(pgrep -f "lib/gen2_tools/[p]erson_follow" >/dev/null && echo 켜짐 || echo 꺼짐)"'
+  printf "  데스크톱: SLAM %s, 손짓 %s\n" "$(pgrep -f '[a]sync_slam_toolbox_node' >/dev/null && echo 켜짐 || echo 꺼짐)" "$(pgrep -f 'gen2_tools[.]gesture_node' >/dev/null && echo 켜짐 || echo 꺼짐)"
   printf "  데스크톱: 패드 %s, joy %s, RViz %s\n" \
     "$(running_local 'lib/gen2_tools/pad_teleop' && echo 켜짐 || echo 꺼짐)" \
     "$(running_local 'lib/joy/joy_node' && echo 켜짐 || echo 꺼짐)" \
@@ -27,16 +28,20 @@ check() {
   ls /dev/input/js* >/dev/null 2>&1 && echo "  게임패드: 연결됨" || echo "  게임패드: 없음 (블루투스 연결 확인)"
 }
 
-slam() {
+slam() {   # 2026-10-12 역할 분배: SLAM 은 데스크톱 (젯슨 CPU 절약). 지도 = 데스크톱 ~/maps
   case "${1:-start}" in
     start)
-      if r 'pgrep -f "[s]lam_toolbox" >/dev/null'; then echo "SLAM 이미 켜짐"; return; fi
-      r 'setsid nohup ~/gen2_ws/logs/run_slam.sh > ~/gen2_ws/logs/slam.log 2>&1 < /dev/null &' && echo "SLAM 켬 (로봇, 지도 /map)" ;;
-    stop)  r 'kill -INT $(cat ~/gen2_ws/logs/slam.pid) 2>/dev/null; sleep 2; pkill -INT -f slam_toolbox; echo SLAM 끔' ;;
-    reset) r "$RENV"' ros2 service call /slam_toolbox/reset slam_toolbox/srv/Reset "{}"' | tail -2 ;;
-    save)  n="${2:-room_$(date +%m%d_%H%M)}"
-           r "mkdir -p ~/maps; $RENV"' ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap "{name: {data: '"'/home/parksudo/maps/$n'"'}}"' | tail -2
-           echo "저장: 로봇 ~/maps/$n.pgm/.yaml" ;;
+      if pgrep -f "[a]sync_slam_toolbox_node" >/dev/null; then echo "SLAM 이미 켜짐 (데스크톱)"; return; fi
+      if r 'pgrep -f "[s]lam_toolbox" >/dev/null'; then echo "로봇에서 SLAM 이 돌고 있음 — 둘이면 지도·TF 가 싸운다. cw slam stop 으로 끄고 다시"; return 1; fi
+      tab "SLAM" "ros2 launch gen2_bringup slam.launch.py" && echo "SLAM 켬 (데스크톱, /scan_level + odom TF)" ;;
+    stop)
+      for p in $(pgrep -f "[a]sync_slam_toolbox_node|[g]en2_bringup slam.launch"); do kill -INT "$p" 2>/dev/null; done
+      r 'kill -INT $(cat ~/gen2_ws/logs/slam.pid 2>/dev/null) 2>/dev/null; pkill -INT -f "[a]sync_slam_toolbox_node"' 2>/dev/null
+      echo "SLAM 끔 (데스크톱·로봇)" ;;
+    reset) bash -c "$LENV; ros2 service call /slam_toolbox/reset slam_toolbox/srv/Reset '{}'" 2>/dev/null | tail -1 ;;
+    save)  n="${2:-room_$(date +%m%d_%H%M)}"; mkdir -p ~/maps
+           bash -c "$LENV; ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap \"{name: {data: '$HOME/maps/$n'}}\"" 2>/dev/null | tail -1
+           echo "저장: ~/maps/$n.pgm/.yaml" ;;
     *) echo "cw slam [start|stop|reset|save 이름]" ;;
   esac
 }
@@ -69,15 +74,21 @@ pad() {
 
 rviz() { pgrep -x rviz2 > /dev/null && { echo "RViz 이미 켜짐"; return; }; tab "RViz" "rviz2 -d ~/gen2_desk/gen2_desktop.rviz 2>/dev/null"; echo "RViz 켬"; }
 dash() { tab "상태판" "wifi -r"; echo "상태판 켬 (wifi -r)"; }
+gesture() {   # 손짓 (정지/재개) — 데스크톱 MediaPipe (젯슨 CPU 30 % 먹던 것), 출력 follow/hold
+  running_local "^$HOME/gen2_desk/venv_vision/bin/python -m gen2_tools.gesture_node" && { echo "손짓 이미 켜짐"; return; }
+  tab "손짓" "$HOME/gen2_desk/venv_vision/bin/python -m gen2_tools.gesture_node --ros-args -p process_hz:=15.0 2>&1 | grep -v -E 'rcutils|error state|overwritten|null-term|invalid data|^>>>|^<<<|reset_error|with this new|^$'"
+  echo "손짓 켬 (손바닥 = 정지, 엄지 = 재개)"
+}
+
 hud() { running_local '^/usr/bin/python3 /.*/gen2_desk/hud\.py' && { echo "HUD 이미 켜짐"; return; }; tab "HUD" "/usr/bin/python3 ~/gen2_desk/hud.py 2>/dev/null"; echo "HUD 켬 (카메라 + 사람 상자·추종 대상·라이다 다리·상태·수신호, q 끝, s 저장)"; }
 
 down() {   # 데스크톱 쪽만 끈다 (로봇은 그대로 — 패드가 끊기면 로봇은 멈춤·앉기·해제)
-  for p in $(pgrep -f 'lib/gen2_tools/pad_teleop|lib/joy/joy_node|rviz2 -d|desk_dash.py|gen2_desk/hud.py'); do kill -INT "$p" 2>/dev/null; done
+  for p in $(pgrep -f 'lib/gen2_tools/pad_teleop|lib/joy/joy_node|rviz2 -d|desk_dash.py|gen2_desk/hud.py|gen2_tools.gesture_node'); do kill -INT "$p" 2>/dev/null; done
   echo "데스크톱 패드·joy·RViz·상태판 끔 (로봇 SLAM 은 그대로 — 끄려면 cw slam stop)"
 }
 
 case "${1:-help}" in
-  up)     check || exit 1; slam start; follow start; sleep 2; pad; rviz; dash; hud; echo; echo "준비 끝 — 패드 START 로 일어서기·균형, X 로 사람 추종" ;;
+  up)     check || exit 1; follow start; sleep 2; pad; gesture; rviz; dash; hud; echo; echo "준비 끝 — 패드 START 로 일어서기·균형, X 로 사람 추종 (지도 만들 땐 cw slam start)" ;;
   check|st|status) check ;;
   slam)   shift; slam "$@" ;;
   vision) shift; vision "$@" ;;
@@ -86,17 +97,19 @@ case "${1:-help}" in
   rviz)   rviz ;;
   dash)   dash ;;
   hud)    hud ;;
+  gesture) gesture ;;
   down)   down ;;
   ssh)    exec ssh "$ROBOT" ;;
   *) cat <<'EOF'
-cw up                 한 번에: 로봇 확인 → SLAM 켬 → 패드(joy+pad_teleop) → RViz → 상태판   (각각 새 탭)
-cw check              로봇 연결·서비스·SLAM·비전·패드·RViz 상태
-cw slam start|stop    로봇 SLAM 켜기/끄기
+cw up                 한 번에: 로봇 확인 → 사람 추종 → 패드 → 손짓 → RViz → 상태판 → HUD   (각각 새 탭)
+cw check              로봇 연결·서비스·사람 추종·SLAM·손짓·패드·RViz 상태
+cw slam start|stop    SLAM 켜기/끄기 (데스크톱에서, 지도 만들 때만)
 cw slam reset         지도 지우고 지금 자리부터 새로
-cw slam save [이름]   지도 저장 (로봇 ~/maps/이름)
+cw slam save [이름]   지도 저장 (데스크톱 ~/maps/이름)
 cw follow start|stop  로봇 사람 추종 묶음 (다리·사람 검출·수신호·추종·Nav2) 켜기/끄기 — 켠 뒤 패드 X
 cw vision start|stop  (예전) ArUco 추종 + 손동작
 cw pad | rviz | dash  하나씩 켜기
+cw gesture            손짓 인식 (데스크톱 MediaPipe: 손바닥 정지, 엄지 재개)
 cw hud                사람 추종 HUD (카메라 + 검출 상자·추종 대상·라이다 다리·상태·수신호·미니맵)
 cw down               데스크톱 쪽 끄기 (패드 끊기면 로봇은 스스로 멈춤·앉기)
 cw ssh                로봇 접속

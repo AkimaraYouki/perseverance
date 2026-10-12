@@ -5,7 +5,7 @@ ROBOT=parksudo@192.168.50.124
 robot=0; once=0
 for a in "$@"; do case "$a" in -r) robot=1 ;; -1) once=1 ;; *) echo "사용: wifi [-r] [-1]"; exit 1 ;; esac; done
 # -r (계속 보기) = 로봇 상태판: LCD 항목 (전원·모터·센서·SSH·CPU) + 속도·가속·자세 (~/gen2_desk/desk_dash.py)
-[ "$robot" = 1 ] && [ "$once" = 0 ] && exec /usr/bin/python3 ~/gen2_desk/desk_dash.py
+[ "$robot" = 1 ] && [ "$once" = 0 ] && exec bash -c "source ~/gen2_desk/env.sh; exec /usr/bin/python3 ~/gen2_desk/desk_dash.py"
 pct() { awk -v d="$1" 'BEGIN{p=2*(d+100); if(p>100)p=100; if(p<0)p=0; printf "%d", p}'; }
 bar() { local p=$1 n=$(( $1 / 5 )); printf '%*s' "$n" '' | tr ' ' '#'; printf '%*s' $((20 - n)) '' | tr ' ' '.'; }
 line() {   # 이름 dBm ssid
