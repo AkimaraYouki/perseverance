@@ -87,7 +87,7 @@ class PersonDetector(Node):
 
     def _img(self, msg):
         now = time.monotonic()
-        if now - self.last_t < 1.0 / self.hz:
+        if now - self.last_t < 0.7 / self.hz:      # 0.7: frame-arrival jitter must not skip every other frame
             return
         self.last_t = now
         # half-resolution JPEG decode (libjpeg DCT scaling): 320x240 is the network size anyway, ~3x faster
