@@ -44,7 +44,7 @@ balance:
       wheel_lpf_hz: 20.0
       bal_adapt: 0.3          # user 2026-10-08 (0.1 / 0 tried: 0 stops the bias walk but parks ~0.17 m off)
       contact_tau_min: 0.8
-      roll_kp: 0.5            # 2026-10-08 desktop step 1: flat, pushes, one-wheel ramp OK (~2 deg left by roll_leak)
-      roll_ki: 3.0            # 2026-10-09 step 2 (1.0/8/0): body rocked left-right at 2.8 Hz (roll sd 0.6 deg, gx sd 11 deg/s) -> back here
+      roll_kp: 1.0            # 2026-10-12 retest with hip_mode mit_pos (legs -29 deg at 2.8 Hz instead of -150): step 2 of the desktop plan
+      roll_ki: 8.0            # 10-09 with mit (host kp) this rocked at 2.8 Hz; 10-12 with mit_pos: quiet (roll sd 0.35 deg, no 2.8 Hz), pushes/ramp OK. fallback 0.5 / 3
       roll_kd: 0.0
       turn_lean: 0.0          # needs the roll loop
