@@ -8,3 +8,8 @@ firmware/**/build/
 # full ESP32 flash dump may contain device-specific NVS data: keep it local only
 firmware/backup/
 logs/steps/
+models/*.onnx
+models/*.engine
+models/*.pt
+models/*.task
+models/trt_build.log
