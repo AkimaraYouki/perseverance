@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Person detection on the robot GPU: YOLO11n TensorRT FP16 (~3 ms) on the camera JPEG stream.
+"""Person detection + 17 COCO keypoints on the robot GPU: YOLO11n-pose TensorRT FP16 (~3 ms) on the camera JPEG stream
+(the plain detect engine yolo11n_320_fp16.engine also works: no keypoints then).
 
 Run with the vision venv (cuda-python):  ~/venv_vision/bin/python -m gen2_tools.person_detector
 Engine: ~/gen2_ws/models/yolo11n_320_fp16.engine (built locally: trtexec --onnx=yolo11n.onnx --fp16).
 
 Out: people/camera (std_msgs/String, JSON): {"stamp": s, "w": W, "h": H, "people": [
-       {"box": [x0, y0, x1, y1] (pixels), "score": s, "bearing_deg": +left, "hsv_hist": [...] (appearance)}]}
+       {"box": [x0, y0, x1, y1] (pixels), "score": s, "bearing_deg": +left (from the ankles / knees / hips when seen,
+        else the box centre; "bearing_from"), "kps": 17 x [u, v, conf] (pose engine), "hsv_hist": [...] (appearance)}]}
 Bearing uses the camera intrinsics (fx, cx) — data-sheet values until calibrated. The appearance is a small
 HSV histogram of the box (hue x saturation, 8 x 4) for telling two people apart by clothes.
 """
@@ -70,7 +72,7 @@ class PersonDetector(Node):
     def __init__(self):
         super().__init__('person_detector')
         p = lambda n, v: self.declare_parameter(n, v).value  # noqa: E731
-        self.yolo = TrtYolo(os.path.expanduser(p('engine', '~/gen2_ws/models/yolo11n_320_fp16.engine')))
+        self.yolo = TrtYolo(os.path.expanduser(p('engine', '~/gen2_ws/models/yolo11n-pose_320_fp16.engine')))
         self.hz = p('process_hz', 30.0)          # = camera rate
         self.conf = p('score_min', 0.40)
         self.fx, self.cx = p('fx', 530.0), p('cx', 320.0)
@@ -104,14 +106,20 @@ class PersonDetector(Node):
         dx, dy = (S - nw) // 2, (S - nh) // 2
         canvas[dy:dy + nh, dx:dx + nw] = cv2.resize(img, (nw, nh))
         x = canvas[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32) / 255.0
-        out = self.yolo(x)[0]                       # (84, N): cx, cy, w, h, 80 class scores
-        score = out[4]                              # class 0 = person
+        out = self.yolo(x)[0]
+        pose = out.shape[0] == 56                   # yolo11n-pose: cx, cy, w, h, score, 17 x (x, y, conf)
+        score = out[4]                              # pose: person score / detect: class 0 = person
         k = score > self.conf
-        boxes, scores = [], []
-        for cxb, cyb, wb, hb, s in zip(out[0][k], out[1][k], out[2][k], out[3][k], score[k]):
-            x0, y0 = (cxb - wb / 2 - dx) / r, (cyb - hb / 2 - dy) / r
-            boxes.append([float(x0), float(y0), float(wb / r), float(hb / r)])
-            scores.append(float(s))
+        boxes, scores, kps = [], [], []
+        for j in np.nonzero(k)[0]:
+            cxb, cyb, wb, hb = out[0, j], out[1, j], out[2, j], out[3, j]
+            boxes.append([float((cxb - wb / 2 - dx) / r), float((cyb - hb / 2 - dy) / r), float(wb / r), float(hb / r)])
+            scores.append(float(score[j]))
+            if pose:
+                kp = out[5:, j].reshape(17, 3).copy()
+                kp[:, 0] = (kp[:, 0] - dx) / r
+                kp[:, 1] = (kp[:, 1] - dy) / r
+                kps.append(kp)
         people = []
         if boxes:
             hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
@@ -123,9 +131,20 @@ class PersonDetector(Node):
                     continue
                 hist = cv2.calcHist([hsv[y0:y1, x0:x1]], [0, 1], None, [8, 4], [0, 180, 0, 256])
                 hist = (hist / max(1.0, hist.sum())).flatten()
-                people.append({'box': [int(x0 * full), int(y0 * full), int(x1 * full), int(y1 * full)], 'score': round(scores[i], 3),
-                               'bearing_deg': round(math.degrees(math.atan2(self.cx - full * (x0 + x1) / 2, self.fx)), 1),
-                               'hsv_hist': [round(float(v), 4) for v in hist]})
+                u_bear = (x0 + x1) / 2                      # bearing pixel: box centre unless the feet / knees are seen
+                d = {'box': [int(x0 * full), int(y0 * full), int(x1 * full), int(y1 * full)], 'score': round(scores[i], 3),
+                     'hsv_hist': [round(float(v), 4) for v in hist]}
+                if pose:
+                    kp = kps[i]
+                    for a_, b_ in ((15, 16), (13, 14), (11, 12)):      # ankles, knees, hips (COCO)
+                        sel = [q for q in (a_, b_) if kp[q, 2] > 0.5]
+                        if sel:
+                            u_bear = float(np.mean(kp[sel, 0]))
+                            d['bearing_from'] = {15: 'ankles', 13: 'knees', 11: 'hips'}[a_]
+                            break
+                    d['kps'] = [[round(float(q[0] * full), 1), round(float(q[1] * full), 1), round(float(q[2]), 2)] for q in kp]
+                d['bearing_deg'] = round(math.degrees(math.atan2(self.cx - full * u_bear, self.fx)), 1)
+                people.append(d)
         self.t_inf += time.monotonic() - t0
         self.n += 1
         st = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
