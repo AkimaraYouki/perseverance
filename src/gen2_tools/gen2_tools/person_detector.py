@@ -71,7 +71,7 @@ class PersonDetector(Node):
         super().__init__('person_detector')
         p = lambda n, v: self.declare_parameter(n, v).value  # noqa: E731
         self.yolo = TrtYolo(os.path.expanduser(p('engine', '~/gen2_ws/models/yolo11n_320_fp16.engine')))
-        self.hz = p('process_hz', 15.0)
+        self.hz = p('process_hz', 30.0)          # = camera rate
         self.conf = p('score_min', 0.40)
         self.fx, self.cx = p('fx', 530.0), p('cx', 320.0)
         self.last_t, self.n, self.t_inf = 0.0, 0, 0.0
@@ -90,7 +90,9 @@ class PersonDetector(Node):
         if now - self.last_t < 1.0 / self.hz:
             return
         self.last_t = now
-        img = cv2.imdecode(np.frombuffer(msg.data, np.uint8), cv2.IMREAD_COLOR)
+        # half-resolution JPEG decode (libjpeg DCT scaling): 320x240 is the network size anyway, ~3x faster
+        img = cv2.imdecode(np.frombuffer(msg.data, np.uint8), cv2.IMREAD_REDUCED_COLOR_2)
+        full = 2.0
         if img is None:
             return
         t0 = time.monotonic()
@@ -121,13 +123,13 @@ class PersonDetector(Node):
                     continue
                 hist = cv2.calcHist([hsv[y0:y1, x0:x1]], [0, 1], None, [8, 4], [0, 180, 0, 256])
                 hist = (hist / max(1.0, hist.sum())).flatten()
-                people.append({'box': [x0, y0, x1, y1], 'score': round(scores[i], 3),
-                               'bearing_deg': round(math.degrees(math.atan2(self.cx - (x0 + x1) / 2, self.fx)), 1),
+                people.append({'box': [int(x0 * full), int(y0 * full), int(x1 * full), int(y1 * full)], 'score': round(scores[i], 3),
+                               'bearing_deg': round(math.degrees(math.atan2(self.cx - full * (x0 + x1) / 2, self.fx)), 1),
                                'hsv_hist': [round(float(v), 4) for v in hist]})
         self.t_inf += time.monotonic() - t0
         self.n += 1
         st = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-        self.pub.publish(String(data=json.dumps({'stamp': st, 'w': W, 'h': H, 'people': people})))
+        self.pub.publish(String(data=json.dumps({'stamp': st, 'w': int(W * full), 'h': int(H * full), 'people': people})))
 
 
 def main():

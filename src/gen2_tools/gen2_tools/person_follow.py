@@ -131,6 +131,18 @@ class PersonFollow(Node):
                 tgt['p'], tgt['t'] = pick['p'], now
                 if pick['cam'] is not None:
                     tgt['hist'] = 0.9 * tgt['hist'] + 0.1 * np.array(pick['cam']['hsv_hist'])
+        # between LiDAR scans (10 Hz) keep the bearing fresh with the camera (30 Hz): same person = matching
+        # clothes within the bearing tolerance -> rotate the target to the camera bearing, keep the LiDAR range
+        if tgt is not None and now - self.cam_t < 0.1 and now - tgt['t'] < 0.5:
+            bt, dt_ = math.atan2(tgt['p'][1], tgt['p'][0]), float(np.hypot(*tgt['p']))
+            best = None
+            for c in self.cam:
+                bc = math.radians(c['bearing_deg'])
+                if abs(bc - bt) < self.tol and self._sim(c['hsv_hist'], tgt['hist']) >= self.app_min:
+                    if best is None or abs(bc - bt) < abs(best - bt):
+                        best = bc
+            if best is not None:
+                tgt['p'] = np.array([dt_ * math.cos(best), dt_ * math.sin(best)])
         t = Twist()
         if self.hold:
             state = 'HOLD'

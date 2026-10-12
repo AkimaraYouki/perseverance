@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Person (leg-pair) detection from the 2D LiDAR (C1 at ~12 cm sees shins / ankles).
 
-/scan_level (self-hitbox masked, level only) -> split into clusters where neighbouring returns jump by more
+/scan (raw, 10 Hz: every scan is used, also while the body pitches) -> own self-hitbox mask + floor cut (the plane
+of a pitched LiDAR meets the floor at H/tan(pitch): returns beyond 85 % of that in the tilt direction are dropped;
+body attitude from the IMU shared memory) -> split into clusters where neighbouring returns jump by more
 than split_m -> keep leg-sized clusters (width leg_min..leg_max) -> pair legs whose centres are pair_min..pair_max
 apart (a single leg also counts: legs often occlude each other) -> people candidates in the laser frame.
 Simple nearest-neighbour tracks with a constant-velocity filter keep an id per candidate.
@@ -11,6 +13,8 @@ Out: people/legs (geometry_msgs/PoseArray, frame laser: one pose per person cand
 """
 
 import math
+import mmap
+import struct
 import time
 
 import numpy as np
@@ -50,15 +54,37 @@ class LegDetector(Node):
         self.gate = p('track_gate_m', 0.5)
         self.keep_s = p('track_keep_s', 1.0)
         self.tracks, self.next_id = [], 1
+        self.hb = p('hitbox_laser_xy', [-0.144, 0.239, -0.164, 0.164])
+        self.h_lidar = p('lidar_height_m', 0.37)        # above the floor when standing (wheel r + leg h + mount)
+        self.shm = None
         self.pub = self.create_publisher(PoseArray, 'people/legs', 10)
         self.dbg = self.create_publisher(String, 'people/debug', 10)
-        self.create_subscription(LaserScan, 'scan_level', self._scan, qos_profile_sensor_data)
+        self.create_subscription(LaserScan, 'scan', self._scan, qos_profile_sensor_data)
+
+    def _tilt(self):
+        try:
+            if self.shm is None:
+                with open('/dev/shm/gen2_imu', 'rb') as f:
+                    self.shm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            w, x, y, z = struct.unpack_from('<4d', self.shm, 24)
+            return (math.asin(max(-1.0, min(1.0, 2.0 * (w * y - z * x)))),
+                    math.atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y)))
+        except (OSError, ValueError):
+            self.shm = None
+            return 0.0, 0.0
 
     def _clusters(self, m):
         r = np.asarray(m.ranges, dtype=np.float64)
         a = m.angle_min + np.arange(len(r)) * m.angle_increment
         ok = np.isfinite(r) & (r > m.range_min) & (r < self.max_range)
         xy = np.stack([r * np.cos(a), r * np.sin(a)], 1)
+        hb = self.hb
+        ok &= ~((xy[:, 0] > hb[0]) & (xy[:, 0] < hb[1]) & (xy[:, 1] > hb[2]) & (xy[:, 1] < hb[3]))
+        pitch, roll = self._tilt()               # pitch + = nose down -> plane hits the floor ahead
+        for ang, axis, sgn in ((pitch, 0, 1.0), (roll, 1, -1.0)):   # roll + = right side low -> floor on the right (-y)
+            if abs(ang) > math.radians(1.0):
+                d = 0.85 * self.h_lidar / math.tan(abs(ang))
+                ok &= ~(sgn * math.copysign(1.0, ang) * xy[:, axis] > d)
         out, cur = [], []
         for i in range(len(r)):
             if not ok[i]:
