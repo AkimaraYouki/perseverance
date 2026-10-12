@@ -36,7 +36,8 @@ def load_tune():
 
 
 TUNE = load_tune()
-SCEN = ("flat_stop", "turn", "ridges", "ramp", "jump", "hand10", "hand20", "stones8", "oneside8", "stones_turn", "fast_turn", "com_hold")
+SCEN = ("flat_stop", "turn", "ridges", "ramp", "jump", "hand10", "hand20", "stones8", "oneside8", "stones_turn", "fast_turn", "com_hold",
+        "stairs6", "stairs8")
 ap = argparse.ArgumentParser()
 ap.add_argument("--scenario", choices=SCEN, required=True)
 ap.add_argument("--n", type=int, default=8)
@@ -88,8 +89,12 @@ spec = dict(
     oneside8=dict(sec=14.0, v=0.4, gen=("oneside_stones", 0.08)),     # 왼쪽 바퀴 차선만 둥근 돌 8 cm (두 바퀴 높이 다름)
     stones_turn=dict(sec=12.0, v=P.vmax_kmh / 3.6, gen=("stones", 0.08), wz_const=2.5),   # 자갈길 최고 속도 급회전 (패드에서 넘어진 상황)
     fast_turn=dict(sec=12.0, v=P.vmax_kmh / 3.6, turns=(2.0, 1.5, 1.5)),   # 평지 최고 속도: 2 s 직진 뒤 스틱 끝 회전 1.5 s / 직진 1.5 s 좌우 번갈아 (패드, 2026-09-28)
-    com_hold=dict(sec=30.0, v=0.3, stop_at=12.0),                   # 무게중심 적응 (2026-10-08, 기본 세트 밖): 0.3 m/s 12 s 뒤 18 s 서 있기
+    com_hold=dict(sec=30.0, v=0.3, stop_at=12.0),
+    # 대회 2 단 계단 (2026-10-12, 기본 세트 밖): ㅗ 모양 1 m | 1 m | 1 m, 한 단 6 cm (1일차) / 8 cm (2일차). 두 번 점프로 오르고 굴러 내려옴
+    stairs6=dict(sec=14.0, v=P.v, boxes=[(1.0, 4.0, 0.06), (2.0, 3.0, 0.12)], edges=[1.0, 2.0], x_pass=4.6),
+    stairs8=dict(sec=14.0, v=P.v, boxes=[(1.0, 4.0, 0.08), (2.0, 3.0, 0.16)], edges=[1.0, 2.0], x_pass=4.6),                   # 무게중심 적응 (2026-10-08, 기본 세트 밖): 0.3 m/s 12 s 뒤 18 s 서 있기
 )[SC]
+P.edge_stop = "x_pass" not in spec                                   # 계단: 윗단에서 멈추지 말고 끝까지 (점프 시험은 예전처럼 멈춤)
 
 
 def turn_wz(t):
@@ -173,6 +178,12 @@ if "cad" in spec:
         collision_props=schemas_cfg.CollisionPropertiesCfg(collision_enabled=True),
         mesh_collision_props=schemas_cfg.TriangleMeshPropertiesCfg(), scale=(0.001,) * 3))
     cfg.scene.obst = AssetBaseCfg(prim_path="{ENV_REGEX_NS}/Obst", spawn=sim_utils.UsdFileCfg(usd_path=conv.usd_path))
+for k_, (x0, x1, hb) in enumerate(spec.get("boxes", [])):          # 여러 단 (계단)
+    setattr(cfg.scene, f"obst{k_}", AssetBaseCfg(
+        prim_path=f"{{ENV_REGEX_NS}}/Obst{k_}",
+        spawn=sim_utils.CuboidCfg(size=(x1 - x0, 3.0, hb), collision_props=sim_utils.CollisionPropertiesCfg(),
+                                  physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0)),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=((x0 + x1) / 2, 0.0, hb / 2))))
 if "box" in spec:
     x0, x1, hb = spec["box"]
     cfg.scene.obst = AssetBaseCfg(
@@ -403,6 +414,8 @@ for i in range(N):
         ok = ok and xmax[i] >= 5.0
     elif SC == "jump":
         ok = ok and wzmin_end[i] >= 0.07
+    elif "x_pass" in spec:                                           # 계단: 넘어지지 않고 끝까지 (내려온 뒤)
+        ok = ok and xmax[i] >= spec["x_pass"]
     elif SC in ("stones8", "oneside8"):
         ok = ok and xmax[i] >= 4.0                                   # 요철 3 m 넘게 들어감
     pr = np.abs(rec[i]["pitch"][200:]) if len(rec[i]["pitch"]) > 200 else np.abs(rec[i]["pitch"])

@@ -22,6 +22,9 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--assets", default="/home/parksuho/Desktop/휠 레그드 로봇/export_(7b)_fixed/assets")
 ap.add_argument("--out", default=os.path.expanduser("~/perseverance/sim/model/footprint.yaml"))
 ap.add_argument("--band_mm", type=float, default=15.0, help="LiDAR 높이 단면 두께 ± [mm]")
+ap.add_argument("--npz", default=None, help="자세별 z 투영 점 (그림용) 저장 경로")
+ap.add_argument("--margin", type=float, default=0.05, help="히트박스 여유 (앞뒤좌우 각각) [m]")
+ap.add_argument("--laser_yaw_deg", type=float, default=0.0, help="LiDAR 0° 방향 (실기 실측 = 앞, 0). URDF 커넥터는 -180")
 args = ap.parse_args()
 
 sys.argv = ["x", "--out", "/tmp/_bt_unused.yaml"]
@@ -114,9 +117,12 @@ laser = next(j for j in root.findall("joint") if j.find("child").get("link") == 
 z_laser = float(laser.find("origin").get("xyz").split()[2])
 poses = {"stand_idle": 0.1825, "sit": 0.1255, "high": 0.2425}
 out, txt = {}, []
+PTS = {}
 for name, hj in poses.items():
     th = float(leg_map.theta_of_h(hj + leg_map.R_WHEEL))
     P, joints = pose_points(th)
+    if args.npz:
+        PTS[name] = P[::7, :3].copy()
     H = simplify(hull(P[:, :2]), 16)
     band = P[np.abs(P[:, 2] - z_laser) <= args.band_mm / 1000.0]
     Hs = simplify(hull(band[:, :2]), 12) if len(band) >= 3 else np.zeros((0, 2))
@@ -160,6 +166,22 @@ for name, o in out.items():
           f"    hull_xy: {fl(o['hull'])}   # x0, y0, x1, y1, ...",
           f"    slice_box_xy: {fl(o['slice_box']) if o['slice_box'] else '[]'}",
           f"    slice_hull_xy: {fl(o['slice'])}"]
+# 히트박스 (2026-10-12 사용자): 세 자세 z 투영 박스의 합집합 + 앞뒤좌우 margin. LiDAR 자기 몸 마스크용.
+ub = [min(o["box"][0] for o in out.values()), max(o["box"][1] for o in out.values()),
+      min(o["box"][2] for o in out.values()), max(o["box"][3] for o in out.values())]
+m_ = args.margin
+hb = [ub[0] - m_, ub[1] + m_, ub[2] - m_, ub[3] + m_]
+lx, ly = sens_xy = [float(v) for v in laser.find("origin").get("xyz").split()[:2]]
+cy, sy_ = math.cos(math.radians(args.laser_yaw_deg)), math.sin(math.radians(args.laser_yaw_deg))
+corn = [((x - lx) * cy + (y_ - ly) * sy_, -(x - lx) * sy_ + (y_ - ly) * cy) for x in hb[:2] for y_ in hb[2:]]
+hl = [min(c[0] for c in corn), max(c[0] for c in corn), min(c[1] for c in corn), max(c[1] for c in corn)]
+y += [f"hitbox:   # 세 자세 합집합 + 앞뒤좌우 {m_ * 100:.0f} cm. 이 상자 안의 LiDAR 점 = 자기 몸 (무시)",
+      f"  margin_m: {m_}",
+      f"  union_box_xy: {fl(ub)}   # 여유 없는 합집합 [x_min, x_max, y_min, y_max] (base_link)",
+      f"  base_link_xy: {fl(hb)}   # [x_min, x_max, y_min, y_max] — 크기 {hb[1] - hb[0]:.3f} x {hb[3] - hb[2]:.3f} m",
+      f"  laser_xy: {fl(hl)}   # 같은 상자를 laser 좌표로 (원점 laser, yaw {args.laser_yaw_deg:.0f}° = 실기 실측 0° 앞)",
+      "  # 마스크: 점 (r, a) -> x = r cos a, y = r sin a (laser 좌표) 가 laser_xy 안이면 버림. 몸통 기울기 > 8° 면 0.45 m 안도 버림 (바닥)"]
+print("[히트박스] base_link", [round(v, 4) for v in hb], "laser", [round(v, 4) for v in hl])
 y += ["sensors:   # base_link 기준 xyz [m], rpy [deg] (CAD 메이트 커넥터 frame_*)"]
 for c, (xyz, rpy) in sens.items():
     y.append(f"  {c}: {{xyz: {fl(xyz)}, rpy_deg: {fl(rpy, 2)}}}")
@@ -169,3 +191,7 @@ y += ["four_bar:   # RViz joint_states: θ (크랭크) -> 관절값 [rad]. M = (
       f"  R_M: {fl(tab[:, 4])}", f"  R_I: {fl(tab[:, 5])}", f"  R_K: {fl(tab[:, 6])}"]
 open(args.out, "w").write("\n".join(y) + "\n")
 print("[저장]", args.out)
+if args.npz:
+    np.savez(args.npz, laser=np.array(sens["laser"][0]), hitbox=np.array(hb), union=np.array(ub),
+             slice=np.array(out["stand_idle"]["slice"]), **{k: v for k, v in PTS.items()})
+    print("[점]", args.npz)

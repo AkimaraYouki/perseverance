@@ -90,9 +90,10 @@ class WBController:
         m = np.ones(n, bool) if mask is None else np.asarray(mask, bool)
         z = lambda name: np.where(m, 0.0, getattr(self, name, np.zeros(n)))  # noqa: E731
         for k in ("t_phase", "x_err", "t_un", "t_ld", "g_vf", "g_i", "g_ref", "bump_t", "bump_quiet", "vf", "rf",
-                  "th_bias", "v_prev", "t_takeoff", "vh", "yaw_i", "acc_f", "g_acc", "settled"):
+                  "th_bias", "v_prev", "t_takeoff", "vh", "yaw_i", "acc_f", "g_acc", "settled", "odo", "blk_t", "rt_x", "n_retry"):
             setattr(self, k, z(k))
         self.phase = np.where(m, DRIVE, getattr(self, "phase", np.zeros(n, int))).astype(int)
+        self.rt_phase = np.where(m, 0, getattr(self, "rt_phase", np.zeros(n, int))).astype(int)   # 0 없음, 1 물러남, 2 다시 달림
         self.next_edge = np.where(m, 0, getattr(self, "next_edge", np.zeros(n, int))).astype(int)
         self.h0 = np.where(m, self.P.idle_h, getattr(self, "h0", np.zeros(n)))
         self.air_pmin = np.where(m, 99.0, getattr(self, "air_pmin", np.full(n, 99.0)))
@@ -196,6 +197,25 @@ class WBController:
         ne = len(self.edges)
         auto = (np.zeros(n, bool) if ne == 0 else
                 (self.next_edge < ne) & (f.wx >= np.asarray(self.edges)[np.minimum(self.next_edge, ne - 1)] - P.trigger))
+        if getattr(P, "jump_retry", False):
+            # 막힘 → 물러남 → 다시 달려 점프 (2026-10-12): 턱에 막혀 서 있으면 (앞 명령인데 거의 안 감) 바퀴 중심 ≈ 모서리 앞 retry_contact.
+            # 그 자리 (오도메트리 x_b) 에서 retry_back_m 물러났다가 다시 달려, 바퀴 중심이 모서리 앞 trigger 가 되는 x_b + retry_contact − trigger
+            # 에서 점프 요청. 짧게 착지한 점프의 재시도이자, 카메라 없이 쓰는 접촉 점프. 점프 상태기계는 그대로 (요청만 만든다).
+            self.odo = self.odo + v_now * DT
+            want = vx > 0.15
+            blk = (ph == DRIVE) & ~self.lift_on & want & (v_now < 0.05) & (self.rt_phase == 0)
+            self.blk_t = np.where(blk, self.blk_t + DT, 0.0)
+            st_ = self.blk_t >= P.retry_block_s
+            self.rt_x = np.where(st_, self.odo, self.rt_x)
+            self.rt_phase = np.where(st_, 1, self.rt_phase)
+            self.blk_t = np.where(st_, 0.0, self.blk_t)
+            bk = self.rt_phase == 1
+            vx = np.where(bk, -P.retry_back_v, vx)                           # 물러남
+            self.rt_phase = np.where(bk & (self.odo <= self.rt_x - P.retry_back_m), 2, self.rt_phase)
+            fire = (self.rt_phase == 2) & (self.odo >= self.rt_x + P.retry_contact - P.trigger)
+            self.rt_phase = np.where(fire | ~want & (self.rt_phase == 2), 0, self.rt_phase)   # 쏘거나 조종자가 앞 명령을 놓으면 끝
+            self.n_retry = self.n_retry + fire
+            jump = jump | fire
         blocked = jump & (ph == DRIVE) & ((v_now < P.jump_min_v) | (np.abs(wz_now) > P.jump_max_wz))   # 제자리·후진·회전 중 점프 막기
         self.jump_blocked = [""] * n
         for i in np.flatnonzero(blocked):
@@ -225,7 +245,7 @@ class WBController:
         self.bump_quiet = np.where(m5, t + 1.0, self.bump_quiet)                  # 착지 충격을 턱으로 보지 않게
         self.phase = np.select([m0, m1, m2, m3, m4, m5], [RETRACT, EXTRACT, FLY, DESCEND, LAND, DRIVE], ph)
         self.t_phase = np.where(m0 | m1 | m2 | m3 | m4 | m5, t, self.t_phase)
-        if ne:   # 마지막 모서리 넘어 0.25 m 더 들어간 뒤 멈춘다 (모서리에 서면 굴러 내려옴, 0.4 면 1 m 평대를 지나침)
+        if ne and getattr(P, "edge_stop", True):   # (시험용) 마지막 모서리 넘어 0.25 m 더 들어간 뒤 멈춘다 (모서리에 서면 굴러 내려옴, 0.4 면 1 m 평대를 지나침)
             vx = np.where((self.next_edge >= ne) & (f.wx >= self.edges[-1] + 0.25), 0.0, vx)
         ph = self.phase
 
