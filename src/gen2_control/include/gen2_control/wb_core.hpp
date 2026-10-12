@@ -31,6 +31,8 @@ struct Params      // climb_test.py TUNE defaults (2026-10-07)
   double wheel_margin = 0.85, yaw_kd = 0.5, wheel_tau_max = 7.0;
   double yaw_ki = 0.0, yaw_i_max = 0.5;   // yaw-rate integral (desktop 2026-10-08: beats wheel stiction in place)
   bool x_hold_moving = true;          // false: position hold only while the speed command is ~0 (robot 2026-10-09)
+  double x_leak_moving = 0.0;         // > 0 [1/s]: while driving x_err leaks instead of being 0 (desktop 2026-10-09)
+  double lean_ff = 0.0;               // lean feed-forward: th_ref = lean_ff * atan(g_acc / g) (desktop 2026-10-09)
   double jerk_max = 0.0;              // > 0: S-curve speed reference [m/s^3]; 0 = plain accel_max ramp (wbctrl)
   double land_sf_min = 0.4, lift_detect_s = 0.3, land_detect_s = 0.02, lift_wheel_kd = 0.05;
   double turn_lean = 1.0, roll_kp = 1.5, roll_ki = 15.0, roll_kd = 0.3, roll_leak = 0.5;

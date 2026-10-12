@@ -31,7 +31,7 @@ static std::vector<std::vector<double>> read_csv(const std::string & path, std::
   return rows;
 }
 
-TEST(WBCore, MatchesPythonSpec)
+static void run_case(const char * file, const Params & P)
 {
   LqrTable lqr;
   for (const auto & r : read_csv(std::string(GOLDEN_DIR) + "/lqr.csv", nullptr)) {
@@ -39,11 +39,11 @@ TEST(WBCore, MatchesPythonSpec)
     lqr.K.push_back({r[1], r[2], r[3], r[4]});
   }
   std::vector<std::string> h;
-  const auto rows = read_csv(std::string(GOLDEN_DIR) + "/golden.csv", &h);
+  const auto rows = read_csv(std::string(GOLDEN_DIR) + "/" + file, &h);
   ASSERT_GT(rows.size(), 1000u);
   std::map<std::string, std::size_t> c;
   for (std::size_t i = 0; i < h.size(); ++i) {c[h[i]] = i;}
-  WBCore core(Params{}, lqr);
+  WBCore core(P, lqr);
   double worst = 0.0;
   std::size_t worst_k = 0;
   int lifted = 0;
@@ -72,4 +72,14 @@ TEST(WBCore, MatchesPythonSpec)
   }
   EXPECT_GT(lifted, 50);   // the lift / landing path was exercised
   std::printf("max |diff| %.3g at step %zu, lifted steps %d\n", worst, worst_k, lifted);
+}
+
+TEST(WBCore, MatchesPythonSpec) {run_case("golden.csv", Params{});}
+
+TEST(WBCore, MatchesPythonSpecRobotAdditions)   // GOLDEN_ROBOT=1 python3 test/gen_golden.py
+{
+  Params P;
+  P.jerk_max = 3.0; P.accel_max = 0.8; P.x_hold_moving = false; P.x_leak_moving = 0.5; P.lean_ff = 1.0;
+  P.yaw_kd = 0.15; P.yaw_ki = 1.0; P.yaw_i_max = 0.5;
+  run_case("golden_robot.csv", P);
 }

@@ -31,6 +31,8 @@ balance:
       vmc_kd: 1.0
       vmax_kmh: 3.5
       accel_max: 0.8          # m/s^2 (1.5 -> 0.8 2026-10-09: full stick overshot to 1.28 m/s, pitch +-27 deg)
+      lean_ff: 1.0            # desktop 2026-10-09: lean ahead by atan(a_ref/g) -> sim flat_stop 5 -> 15/16 (0.70 -> 0.40 m past the release)
+      x_leak_moving: 0.5      # 1/s, driving: x_err leaks (steady speed error fixed, big catch-up forgotten in 2 s)
       jerk_max: 3.0           # m/s^3 S-curve speed reference: the lean builds up smoothly (0 = old ramp)
       x_hold_moving: false    # position hold only when the stick is released (it added catch-up overshoot while driving)
       fric_comp_nm: 0.0       # 2026-10-08 MIT wheels: 0.11 (velocity-sign Coulomb comp) drove a 12-15 Hz wheel chatter; 0 = quiet

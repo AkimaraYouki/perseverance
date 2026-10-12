@@ -185,6 +185,8 @@ public:
     P.accel_max = declare_parameter("tune.accel_max", P.accel_max);
     P.x_hold_moving = declare_parameter("tune.x_hold_moving", P.x_hold_moving);
     P.jerk_max = declare_parameter("tune.jerk_max", P.jerk_max);
+    P.x_leak_moving = declare_parameter("tune.x_leak_moving", P.x_leak_moving);
+    P.lean_ff = declare_parameter("tune.lean_ff", P.lean_ff);
     P.fric_comp_nm = declare_parameter("tune.fric_comp_nm", P.fric_comp_nm);
     P.db_comp = static_cast<int>(declare_parameter("tune.db_comp", static_cast<int64_t>(P.db_comp)));
     P.db_comp_nm = declare_parameter("tune.db_comp_nm", P.db_comp_nm);

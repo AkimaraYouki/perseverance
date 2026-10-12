@@ -100,8 +100,12 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
       x_err = 0.0;
     }
   }
+  if (P.x_leak_moving > 0 && std::fabs(vx) > 0.02 && std::fabs(vx) <= v_lim + 1e-3) {
+    x_err = x_err_ * (1.0 - P.x_leak_moving * kDt);   // driving: forget a big catch-up in 1/x_leak s
+  }
   x_err = clip(x_err + (v_now - v_ref) * kDt, -0.3, 0.3);
-  const double tau_w = lqr_torque(l_p, x_err, v_now - v_ref, th, thd);
+  const double th_ref = P.lean_ff > 0 ? P.lean_ff * std::atan(g_acc_ / 9.81) : 0.0;   // lean for the reference accel
+  const double tau_w = lqr_torque(l_p, x_err, v_now - v_ref, th - th_ref, thd);
   if (P.turn_limit) {
     const double v_cmd = std::min(std::fabs(vx), vm);
     const double wz_lim = std::max(0.5, (P.wheel_margin * w_max * P.r_wheel - v_cmd) / kHalfTrack);
@@ -131,7 +135,7 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
       act[2 + k] = clip(-P.lift_wheel_kd * f.w_wheel_joint[k] / P.wheel_tau_max, -1.0, 1.0);
       act[k] = (P.idle_h - h_ref) / 0.12;
     }
-    roll_i_ = 0.0; x_err_ = 0.0; g_i_ = g_ref_ = g_vf_ = 0.0; yaw_i_ = 0.0; g_acc_ = 0.0;
+    roll_i_ = 0.0; x_err_ = 0.0; g_i_ = g_ref_ = g_vf_ = 0.0; g_acc_ = 0.0;   // yaw_i kept (wbctrl: integrates in DRIVE even when lifted)
   }
   const bool drv = !lift_on_;
   const double roll_ref = clip(std::atan(P.turn_lean * g_ref_ * wz / 9.81), -20.0 * M_PI / 180.0, 20.0 * M_PI / 180.0);
