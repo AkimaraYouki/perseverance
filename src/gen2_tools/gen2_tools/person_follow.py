@@ -32,10 +32,10 @@ import rclpy
 import rclpy.executors
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseArray, PoseStamped, Twist
+from nav_msgs.msg import Odometry
 from nav2_msgs.action import ComputePathToPose, FollowPath
 from rclpy.action import ActionClient
 from rclpy.node import Node
-from tf2_ros import Buffer, TransformListener
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
@@ -75,8 +75,8 @@ class PersonFollow(Node):
         # Nav2 (nav_follow.launch: planner + MPPI on the LiDAR costmap) drives around obstacles when available
         self.use_nav = p('use_nav', True)
         self.nav_period = p('nav_replan_s', 0.5)
-        self.tfb = Buffer()
-        self.tfl = TransformListener(self.tfb, self)
+        self.odom = (0.0, 0.0, 0.0)     # robot pose in odom from /odom (a Python TF listener on the 200 Hz /tf cost ~25 % CPU)
+        self.create_subscription(Odometry, 'odom', self._odom, 1)
         self.ac_plan = ActionClient(self, ComputePathToPose, 'compute_path_to_pose')
         self.ac_follow = ActionClient(self, FollowPath, 'follow_path')
         self.nav_goal_h = None          # FollowPath goal handle
@@ -174,15 +174,14 @@ class PersonFollow(Node):
         return out
 
     # ------------------------------------------------------------------ frames
+    def _odom(self, m):
+        q = m.pose.pose.orientation
+        self.odom = (m.pose.pose.position.x, m.pose.pose.position.y,
+                     math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)))
+
     def _pose(self):
-        """Robot pose in odom (x, y, yaw); identity without TF (then targets are robot-relative as before)."""
-        try:
-            tf = self.tfb.lookup_transform('odom', 'base_link', rclpy.time.Time())
-        except Exception:
-            return 0.0, 0.0, 0.0
-        q = tf.transform.rotation
-        return (tf.transform.translation.x, tf.transform.translation.y,
-                math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)))
+        """Robot pose in odom (x, y, yaw); stays (0, 0, 0) without /odom (targets are then robot-relative)."""
+        return self.odom
 
     @staticmethod
     def _to_w(pose, p):

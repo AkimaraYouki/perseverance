@@ -28,7 +28,7 @@ def tf_pub(now):
     t.transform.translation.x, t.transform.translation.y = rob[0], rob[1]
     t.transform.rotation.z, t.transform.rotation.w = math.sin(rob[2] / 2), math.cos(rob[2] / 2); tb.sendTransform(t)
     o = Odometry(); o.header.stamp = now; o.header.frame_id = 'odom'; o.child_frame_id = 'base_link'
-    o.pose.pose.position.x, o.pose.pose.position.y = rob[0], rob[1]; o.twist.twist.linear.x = v_act; o.twist.twist.angular.z = w_act; po.publish(o)
+    o.pose.pose.position.x, o.pose.pose.position.y = rob[0], rob[1]; o.pose.pose.orientation.z, o.pose.pose.orientation.w = math.sin(rob[2] / 2), math.cos(rob[2] / 2); o.twist.twist.linear.x = v_act; o.twist.twist.angular.z = w_act; po.publish(o)
 def rel(p):
     c, s = math.cos(rob[2]), math.sin(rob[2]); dx, dy = p[0] - rob[0], p[1] - rob[1]
     return np.array([c * dx + s * dy, -s * dx + c * dy])
