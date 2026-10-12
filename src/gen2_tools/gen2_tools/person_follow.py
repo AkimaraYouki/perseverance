@@ -5,14 +5,22 @@ Fusion: LiDAR leg tracks (people/legs, laser frame: distance + bearing, works wi
 when a camera person box (people/camera, YOLO on the GPU) lies at the same bearing (+-bearing_tol). The designated
 person is registered on enable: the confirmed person closest to straight ahead; its clothes (HSV histogram of the
 box) are kept and slowly updated, and every later choice prefers the track that continues + the best appearance.
+The target is kept in the odom frame (world-fixed) with a velocity estimate, so it stays valid while the robot
+drives / turns and while the person is hidden (predicted along its walking direction, up to predict_s).
 
-States: IDLE (not enabled) -> FOLLOW (seen) -> OCCLUDED (lost < occl_s: drive to the last seen place, slowly)
-        -> SEARCH (turn slowly until the person is seen and matches again). HOLD = stop hand signal: stand still.
-Command: with Nav2 up (nav_follow.launch) a path to 'follow_dist in front of the person' is planned on the LiDAR
-costmap every nav_replan_s and MPPI drives it (around obstacles); close to the person, without Nav2 or when the
-controller aborts: wz = k_yaw * bearing, vx = k_dist * (distance - follow_dist) * cos(bearing). Both go to
-cmd_vel/auto (cmd_mux; the pad always wins). Parameters can be changed live (ros2 param set). Services: follow/enable (SetBool), follow/hold (SetBool: true = stop, false = resume).
-Topic: follow/status (String).
+States: IDLE (not enabled) -> FOLLOW (seen within grace_s) -> OCCLUDED (lost < occluded_s: go to the predicted
+        place) -> SEARCH (turn towards the side the person was last seen until seen + matched again).
+        HOLD = stop hand signal: stand still.
+Re-acquire: short gaps (< legs_only_s) also by LiDAR legs alone near the prediction; longer gaps need a camera
+match (clothes >= appearance_min) within max_gate_m of the prediction, or anywhere with clothes >= reacquire_min.
+Command: free corridor to the person (scan_level) -> direct: wz = k_yaw * bearing,
+vx = k_dist * (distance - follow_dist) * cos(bearing) (responsive; MPPI only steps up from the measured speed and is
+sluggish on a balancing robot). Obstacle in the corridor (robot width + corridor_margin_m, up to 0.45 m before the
+person) -> Nav2 (nav_follow.launch): a path to 'follow_dist in front of the person' on the LiDAR costmap every
+nav_replan_s, MPPI drives it around; kept nav_hold_s after the corridor is free again. After a controller abort only
+turn towards the person for 1 s, then plan again. Both go to cmd_vel/auto (cmd_mux; the pad always wins).
+Parameters can be changed live (ros2 param set). Services: follow/enable (SetBool), follow/hold (SetBool: true =
+stop, false = resume). Topic: follow/status (String).
 """
 
 import json
@@ -28,6 +36,8 @@ from nav2_msgs.action import ComputePathToPose, FollowPath
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from tf2_ros import Buffer, TransformListener
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 from std_srvs.srv import SetBool
 
@@ -44,13 +54,18 @@ class PersonFollow(Node):
         self.tol = math.radians(p('bearing_tol_deg', 10.0))
         self.cam_to = p('camera_timeout_s', 0.5)
         self.occl_s = p('occluded_s', 5.0)
-        self.search_wz = p('search_wz', 0.4)
-        self.app_min = p('appearance_min', 0.5)          # Bhattacharyya similarity needed to re-acquire
+        self.search_wz = p('search_wz', 0.5)
+        self.app_min = p('appearance_min', 0.5)          # Bhattacharyya similarity: same person near the prediction
+        self.app_reacq = p('reacquire_min', 0.65)        # ... anywhere (long loss)
+        self.grace = p('grace_s', 0.5)                   # missed scans shorter than this stay FOLLOW
+        self.legs_only = p('legs_only_s', 1.0)           # gaps up to this may be bridged by legs without the camera
+        self.max_gate = p('max_gate_m', 2.5)
+        self.pred_s = p('predict_s', 1.5)
         self.enabled, self.hold = False, False
         self.state = 'IDLE'
-        self.cam, self.cam_t = [], 0.0
-        self.legs = []
-        self.target = None                               # dict: id, p (base xy), t, hist
+        self.cam, self.cam_t, self.cam_new = [], 0.0, False
+        self.legs, self.legs_new = [], False
+        self.target = None                               # dict: w (odom xy), v (odom m/s), t, hist, side
         self.pub = self.create_publisher(Twist, 'cmd_vel/auto', 10)
         self.st = self.create_publisher(String, 'follow/status', 10)
         self.create_subscription(String, 'people/camera', self._cam, 10)
@@ -67,13 +82,20 @@ class PersonFollow(Node):
         self.nav_goal_h = None          # FollowPath goal handle
         self.nav_t = 0.0
         self.nav_busy = False
-        self.nav_fail_t = -1e9          # controller gave up (boxed in / no progress): steer directly for a while
+        self.nav_fail_t = -1e9
+        self.margin = p('corridor_margin_m', 0.12)
+        self.nav_hold = p('nav_hold_s', 2.0)
+        self.blocked_t = -1e9           # last time the corridor to the person was blocked
+        self.scan_b = np.zeros((0, 2))  # scan_level points in base_link
+        self.create_subscription(LaserScan, 'scan_level', self._scan, qos_profile_sensor_data)          # controller gave up (boxed in / no progress): steer directly for a while
         self.add_on_set_parameters_callback(self._set_params)
         self.create_timer(0.05, self._step)
 
     _LIVE = {'follow_dist_m': 'd_ref', 'k_dist': 'k_d', 'k_yaw': 'k_yaw', 'vx_max': 'vx_max', 'wz_max': 'wz_max',
              'occluded_s': 'occl_s', 'search_wz': 'search_wz', 'appearance_min': 'app_min', 'use_nav': 'use_nav',
-             'nav_replan_s': 'nav_period'}
+             'nav_replan_s': 'nav_period', 'reacquire_min': 'app_reacq', 'grace_s': 'grace',
+             'legs_only_s': 'legs_only', 'max_gate_m': 'max_gate', 'predict_s': 'pred_s',
+             'corridor_margin_m': 'margin', 'nav_hold_s': 'nav_hold'}
 
     def _set_params(self, params):
         """ros2 param set /person_follow <name> <value> takes effect immediately (tuning on the robot)."""
@@ -87,11 +109,29 @@ class PersonFollow(Node):
 
     # ------------------------------------------------------------------ inputs
     def _cam(self, m):
-        self.cam, self.cam_t = json.loads(m.data)['people'], time.monotonic()
+        self.cam, self.cam_t, self.cam_new = json.loads(m.data)['people'], time.monotonic(), True
 
     def _legs(self, m):
         # PoseArray in the laser frame, ids are not carried: use positions (base frame)
         self.legs = [np.array([q.position.x + LASER_X, q.position.y]) for q in m.poses]
+        self.legs_new = True
+
+    def _scan(self, m):
+        r = np.asarray(m.ranges, dtype=np.float64)
+        a = m.angle_min + np.arange(len(r)) * m.angle_increment
+        ok = np.isfinite(r) & (r > m.range_min) & (r < 4.0)
+        self.scan_b = np.stack([r[ok] * np.cos(a[ok]) + LASER_X, r[ok] * np.sin(a[ok])], 1)
+
+    def _blocked(self, pb):
+        """Obstacle in the straight corridor robot -> person (stopping 0.45 m before the person's legs)?"""
+        d = float(np.hypot(*pb))
+        if d < 0.6 or not len(self.scan_b):
+            return False
+        u = pb / d
+        along = self.scan_b @ u
+        lat = np.abs(self.scan_b[:, 0] * u[1] - self.scan_b[:, 1] * u[0])
+        hit = (along > 0.05) & (along < d - 0.45) & (lat < 0.164 + self.margin)
+        return int(hit.sum()) >= 3
 
     def _enable(self, req, res):
         self.enabled = bool(req.data)
@@ -133,43 +173,60 @@ class PersonFollow(Node):
             out.append({'p': pl, 'bearing': b, 'dist': float(np.hypot(*pl)), 'cam': best[1] if best else None})
         return out
 
+    # ------------------------------------------------------------------ frames
+    def _pose(self):
+        """Robot pose in odom (x, y, yaw); identity without TF (then targets are robot-relative as before)."""
+        try:
+            tf = self.tfb.lookup_transform('odom', 'base_link', rclpy.time.Time())
+        except Exception:
+            return 0.0, 0.0, 0.0
+        q = tf.transform.rotation
+        return (tf.transform.translation.x, tf.transform.translation.y,
+                math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)))
+
+    @staticmethod
+    def _to_w(pose, p):
+        c, s_ = math.cos(pose[2]), math.sin(pose[2])
+        return np.array([pose[0] + c * p[0] - s_ * p[1], pose[1] + s_ * p[0] + c * p[1]])
+
+    @staticmethod
+    def _to_b(pose, w):
+        c, s_ = math.cos(pose[2]), math.sin(pose[2])
+        dx, dy = w[0] - pose[0], w[1] - pose[1]
+        return np.array([c * dx + s_ * dy, -s_ * dx + c * dy])
+
+    def _predict(self, tgt, now):
+        return tgt['w'] + tgt['v'] * min(now - tgt['t'], self.pred_s)
+
+    # ------------------------------------------------------------------ main loop
     def _step(self):
         now = time.monotonic()
         if not self.enabled:
             self._status('IDLE')
             return
-        cands = self._candidates()
+        pose = self._pose()
         tgt = self.target
-        pick = None
-        if tgt is None:
-            # register: confirmed person (camera + legs) closest to straight ahead, within 2.5 m
-            conf = [c for c in cands if c['cam'] is not None and c['dist'] < 2.5]
-            if conf:
-                pick = min(conf, key=lambda c: abs(c['bearing']))
-                self.target = tgt = {'p': pick['p'], 't': now, 'hist': np.array(pick['cam']['hsv_hist'])}
-                self.get_logger().info(f'registered person at {pick["dist"]:.2f} m, {math.degrees(pick["bearing"]):+.0f} deg')
-        else:
-            best, bs = None, -1e9
+        if self.legs_new:                                   # match once per LiDAR scan (10 Hz)
+            self.legs_new = False
+            cands = self._candidates()
             for c in cands:
-                jump = float(np.linalg.norm(c['p'] - tgt['p']))
-                gate = 0.4 + 1.5 * (now - tgt['t'])          # how far the person may have walked since last seen
-                if jump > gate:
-                    continue
-                sim = self._sim(c['cam']['hsv_hist'], tgt['hist']) if c['cam'] else None
-                if sim is not None and sim < self.app_min:
-                    continue                                 # someone else (different clothes)
-                s = -jump + (0.5 * sim if sim is not None else 0.0)
-                if s > bs:
-                    best, bs = c, s
-            pick = best
-            if pick is not None:
-                tgt['p'], tgt['t'] = pick['p'], now
-                if pick['cam'] is not None:
-                    tgt['hist'] = 0.9 * tgt['hist'] + 0.1 * np.array(pick['cam']['hsv_hist'])
+                c['w'] = self._to_w(pose, c['p'])
+            if tgt is None:
+                # register: confirmed person (camera + legs) closest to straight ahead, within 2.5 m
+                conf = [c for c in cands if c['cam'] is not None and c['dist'] < 2.5]
+                if conf:
+                    pk = min(conf, key=lambda c: abs(c['bearing']))
+                    self.target = tgt = {'w': pk['w'], 'v': np.zeros(2), 't': now, 'side': 1.0,
+                                         'hist': np.array(pk['cam']['hsv_hist'])}
+                    self.get_logger().info(f'registered person at {pk["dist"]:.2f} m, {math.degrees(pk["bearing"]):+.0f} deg')
+            else:
+                self._match(tgt, cands, now)
         # between LiDAR scans (10 Hz) keep the bearing fresh with the camera (30 Hz): same person = matching
         # clothes within the bearing tolerance -> rotate the target to the camera bearing, keep the LiDAR range
-        if tgt is not None and now - self.cam_t < 0.1 and now - tgt['t'] < 0.5:
-            bt, dt_ = math.atan2(tgt['p'][1], tgt['p'][0]), float(np.hypot(*tgt['p']))
+        if tgt is not None and self.cam_new and now - tgt['t'] < self.grace:
+            self.cam_new = False
+            pb = self._to_b(pose, tgt['w'])
+            bt, dt_ = math.atan2(pb[1], pb[0]), float(np.hypot(*pb))
             best = None
             for c in self.cam:
                 bc = math.radians(c['bearing_deg'])
@@ -177,63 +234,103 @@ class PersonFollow(Node):
                     if best is None or abs(bc - bt) < abs(best - bt):
                         best = bc
             if best is not None:
-                tgt['p'] = np.array([dt_ * math.cos(best), dt_ * math.sin(best)])
+                tgt['w'] = self._to_w(pose, (dt_ * math.cos(best), dt_ * math.sin(best)))
         t = Twist()
+        lost = now - tgt['t'] if tgt is not None else 1e9
         if self.hold:
             state = 'HOLD'
         elif tgt is None:
             state = 'SEARCH'
             t.angular.z = self.search_wz
-        elif pick is not None:
+        elif lost < self.grace:
             state = 'FOLLOW'
-        elif now - tgt['t'] < self.occl_s:
+        elif lost < self.occl_s:
             state = 'OCCLUDED'
         else:
             state = 'SEARCH'
-            t.angular.z = self.search_wz
-        if state in ('FOLLOW', 'OCCLUDED') and self._nav(tgt, now, state == 'FOLLOW'):
-            self._status(state + '+nav', tgt)
-            return                                         # the Nav2 controller publishes cmd_vel/auto
-        self._nav_cancel()
+            t.angular.z = math.copysign(self.search_wz, tgt['side'])     # turn to where the person went
+        pb = None
         if state in ('FOLLOW', 'OCCLUDED'):
-            x, y = tgt['p']
+            pw = self._predict(tgt, now)
+            pb = self._to_b(pose, pw)
+            if abs(pb[1]) > 0.1:
+                tgt['side'] = math.copysign(1.0, pb[1])
+            if self._blocked(pb):
+                self.blocked_t = now
+            if now - self.blocked_t < self.nav_hold and self._nav(pose, pw, pb, now):
+                self._status(state + '+nav', pb)
+                return                                     # the Nav2 controller publishes cmd_vel/auto
+        self._nav_cancel()
+        if pb is not None:
+            x, y = pb
             b, d = math.atan2(y, x), math.hypot(x, y)
-            k = 1.0 if state == 'FOLLOW' else 0.5             # slower towards the last seen place
+            k = 1.0 if state == 'FOLLOW' else 0.5             # slower towards the predicted place
+            if now - self.nav_fail_t < 1.0:
+                k = 0.0                                       # controller just gave up (blocked): only turn
             t.angular.z = float(np.clip(self.k_yaw * b, -self.wz_max, self.wz_max))
             t.linear.x = float(np.clip(k * self.k_d * (d - self.d_ref) * max(0.0, math.cos(b)), -self.vx_max * 0.5, self.vx_max))
         self.pub.publish(t)
-        self._status(state, tgt)
+        self._status(state, pb)
+
+    def _match(self, tgt, cands, now):
+        """Pick this scan's candidate for the target (odom frame) and update position / velocity / clothes."""
+        lost = now - tgt['t']
+        pred = self._predict(tgt, now)
+        gate = min(self.max_gate, 0.4 + 1.5 * lost)        # how far the person may have walked since last seen
+        best, bs = None, -1e9
+        for c in cands:
+            jump = float(np.linalg.norm(c['w'] - pred))
+            if jump > gate:
+                continue
+            sim = self._sim(c['cam']['hsv_hist'], tgt['hist']) if c['cam'] else None
+            if sim is None and lost > self.legs_only:
+                continue                                     # long gap: legs alone could be anything (chair, someone)
+            if sim is not None and sim < self.app_min:
+                continue                                     # someone else (different clothes)
+            s = -jump + (0.5 * sim if sim is not None else 0.0)
+            if s > bs:
+                best, bs = c, s
+        reacq = False
+        if best is None and lost > self.legs_only:          # lost for a while: the same clothes anywhere in view
+            sims = [(self._sim(c['cam']['hsv_hist'], tgt['hist']), c) for c in cands if c['cam'] is not None]
+            sims = [sc for sc in sims if sc[0] >= self.app_reacq]
+            if sims:
+                best, reacq = max(sims, key=lambda sc: sc[0])[1], True
+        if best is None:
+            return
+        dt = now - tgt['t']
+        if reacq or dt > 1.0:
+            tgt['v'] = np.zeros(2)
+            if lost > self.grace:
+                self.get_logger().info(f're-acquired after {lost:.1f} s{" by clothes" if reacq else ""}')
+        else:
+            v = (best['w'] - tgt['w']) / max(dt, 0.05)
+            tgt['v'] = 0.7 * tgt['v'] + 0.3 * v
+            n = float(np.linalg.norm(tgt['v']))
+            if n > 1.8:
+                tgt['v'] *= 1.8 / n
+        tgt['w'], tgt['t'] = best['w'], now
+        if best['cam'] is not None:
+            tgt['hist'] = 0.9 * tgt['hist'] + 0.1 * np.array(best['cam']['hsv_hist'])
 
     # ------------------------------------------------------------------ Nav2
-    def _nav(self, tgt, now, seen):
-        """Plan to 'follow_dist in front of the person' (odom frame) every nav_replan_s; False = drive directly.
-        Not seen (OCCLUDED): the target position is relative to where the robot was, so keep the last (odom) goal."""
+    def _nav(self, pose, pw, pb, now):
+        """Plan to 'follow_dist in front of the person' (odom frame) every nav_replan_s; False = drive directly."""
         if not self.use_nav or not self.ac_plan.server_is_ready() or not self.ac_follow.server_is_ready():
             return False
-        if now - self.nav_fail_t < 2.0:
+        if now - self.nav_fail_t < 1.0:
             return False
-        if not seen:
-            return self.nav_goal_h is not None
-        x, y = tgt['p']
-        d = math.hypot(x, y)
+        d = float(np.hypot(*pb))
         if d < self.d_ref + 0.15:                          # close enough: just face the person (direct)
             return False
         if self.nav_busy or now - self.nav_t < self.nav_period:
             return self.nav_goal_h is not None
-        try:
-            tf = self.tfb.lookup_transform('odom', 'base_link', rclpy.time.Time())
-        except Exception:
-            return False
-        gx, gy = x - self.d_ref * x / d, y - self.d_ref * y / d          # goal in base_link
-        q = tf.transform.rotation
-        yaw0 = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
-        c, s_ = math.cos(yaw0), math.sin(yaw0)
+        u = (pw - np.array(pose[:2])) / d                  # robot -> person (unit, odom)
         g = PoseStamped()
         g.header.frame_id = 'odom'
         g.header.stamp = self.get_clock().now().to_msg()
-        g.pose.position.x = tf.transform.translation.x + c * gx - s_ * gy
-        g.pose.position.y = tf.transform.translation.y + s_ * gx + c * gy
-        yaw = yaw0 + math.atan2(y, x)
+        g.pose.position.x, g.pose.position.y = float(pw[0] - self.d_ref * u[0]), float(pw[1] - self.d_ref * u[1])
+        yaw = math.atan2(u[1], u[0])
         g.pose.orientation.z, g.pose.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
         req = ComputePathToPose.Goal(goal=g, planner_id='GridBased', use_start=False)
         self.nav_busy, self.nav_t = True, now
@@ -263,7 +360,7 @@ class PersonFollow(Node):
 
     def _follow_done(self, h, status):
         if status == GoalStatus.STATUS_ABORTED and self.nav_goal_h is h:
-            self.get_logger().warn('Nav2 controller aborted: steering directly for 2 s')
+            self.get_logger().warn('Nav2 controller aborted (blocked): turning to the person, plan again in 1 s')
             self.nav_goal_h, self.nav_fail_t = None, time.monotonic()
 
     def _nav_cancel(self):
@@ -271,13 +368,13 @@ class PersonFollow(Node):
             self.nav_goal_h.cancel_goal_async()
             self.nav_goal_h = None
 
-    def _status(self, state, tgt=None):
+    def _status(self, state, pb=None):
         if state != self.state:
             self.get_logger().info(f'{self.state} -> {state}')
             self.state = state
         s = state
-        if tgt is not None:
-            s += f' target {math.hypot(*tgt["p"]):.2f} m @ {math.degrees(math.atan2(tgt["p"][1], tgt["p"][0])):+.0f} deg'
+        if pb is not None:
+            s += f' target {math.hypot(*pb):.2f} m @ {math.degrees(math.atan2(pb[1], pb[0])):+.0f} deg'
         self.st.publish(String(data=s))
 
 

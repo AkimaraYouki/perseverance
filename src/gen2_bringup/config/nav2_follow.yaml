@@ -54,7 +54,7 @@ controller_server:
     failure_tolerance: 0.5
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["goal_checker"]
-    controller_plugins: ["FollowPath"]
+    controller_plugins: ["FollowPath", "MPPI"]     # person_follow uses FollowPath (RPP); MPPI kept for comparison
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.1
@@ -64,7 +64,32 @@ controller_server:
       xy_goal_tolerance: 0.15
       yaw_goal_tolerance: 0.6
       stateful: true
+    # Regulated Pure Pursuit on the NavFn path (planned around obstacles every 0.5 s): tracks the path directly,
+    # MPPI (below) only steps up from the measured speed and got stuck in front of an obstacle in the sim.
     FollowPath:
+      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      desired_linear_vel: 0.7
+      lookahead_dist: 0.6
+      min_lookahead_dist: 0.3
+      max_lookahead_dist: 1.2
+      lookahead_time: 1.5
+      use_velocity_scaled_lookahead_dist: true
+      rotate_to_heading_angular_vel: 1.0
+      use_rotate_to_heading: true
+      rotate_to_heading_min_angle: 0.785
+      max_angular_accel: 3.0
+      transform_tolerance: 0.2
+      min_approach_linear_velocity: 0.1
+      approach_velocity_scaling_dist: 0.5
+      use_collision_detection: true
+      max_allowed_time_to_collision_up_to_carrot: 1.0
+      use_regulated_linear_velocity_scaling: true
+      regulated_linear_scaling_min_radius: 0.9
+      regulated_linear_scaling_min_speed: 0.25
+      use_cost_regulated_linear_velocity_scaling: false
+      allow_reversing: false
+      max_robot_pose_search_dist: 10.0
+    MPPI:
       plugin: "nav2_mppi_controller::MPPIController"
       time_steps: 40
       model_dt: 0.05
