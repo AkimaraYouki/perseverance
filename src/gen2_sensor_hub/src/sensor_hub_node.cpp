@@ -112,6 +112,8 @@ public:
     bool jetson_current_fallback;  // compute only: derive current from Jetson INA3221 VDD_IN
     double jetson_power_factor;    // VDD_IN power -> battery power (1.0 = as Jetson reports)
     double pm02_min_current_a;     // below this the PM02/ESP32 ADC reading is not trusted
+    bool soc_from_voltage;         // SoC from the (load-corrected) voltage all the time instead of coulomb counting
+    double internal_r_ohm;         // pack resistance for the load correction V_ocv = V + I R (0 = none)
   };
 
   // Coulomb-counting state of charge + runtime estimate for one pack.
@@ -123,6 +125,7 @@ public:
     bool power_estimated = false;
     bool initialized = false;
     double soc0 = 0.0;          // SoC at initialization (from resting voltage)
+    double v_avg = 0.0;         // 2 s average of the load-corrected cell voltage (soc_from_voltage)
     double v_settle_sum = 0.0;
     int v_settle_n = 0;
     double consumed_ah = 0.0;
@@ -199,6 +202,8 @@ private:
     b.jetson_current_fallback = declare_parameter(n + ".jetson_current_fallback", false);
     b.jetson_power_factor = declare_parameter(n + ".jetson_power_factor", 1.0);
     b.pm02_min_current_a = declare_parameter(n + ".pm02_min_current_a", 1.5);
+    b.soc_from_voltage = declare_parameter(n + ".soc_from_voltage", false);
+    b.internal_r_ohm = declare_parameter(n + ".internal_r_ohm", 0.0);
     return b;
   }
 
@@ -611,6 +616,11 @@ private:
     fu.power_estimated = est;
     const double p = v * a_eff;
     energy_wh += p * dt / 3600.0;
+    {
+      const double ocv = cell + a_eff * c.internal_r_ohm / std::max(1, c.cells);
+      const double k = std::min(1.0, dt / 2.0);
+      fu.v_avg = fu.v_avg > 0.0 ? fu.v_avg + k * (ocv - fu.v_avg) : ocv;
+    }
     if (!fu.initialized) {
       // Average voltage for a short settle window, then map to SoC. Best if the pack is at rest.
       fu.v_settle_sum += cell;
@@ -643,8 +653,14 @@ private:
       return o;
     }
     o.valid = true;
-    o.remaining_ah = std::max(0.0, c.capacity_ah * fu.soc0 - fu.consumed_ah);
-    o.soc = c.capacity_ah > 0 ? o.remaining_ah / c.capacity_ah : 0.0;
+    if (c.soc_from_voltage) {
+      // 0 % = error_cell_v (3.30 V), 100 % = 4.20 V on the LiPo curve (user 2026-10-09)
+      o.soc = lipo_percentage(fu.v_avg);
+      o.remaining_ah = c.capacity_ah * o.soc;
+    } else {
+      o.remaining_ah = std::max(0.0, c.capacity_ah * fu.soc0 - fu.consumed_ah);
+      o.soc = c.capacity_ah > 0 ? o.remaining_ah / c.capacity_ah : 0.0;
+    }
     o.p_avg_w = fu.p_avg_w;
     const double usable_wh = std::max(0.0, o.remaining_ah - c.capacity_ah * c.reserve_fraction) *
       c.cells * c.nominal_cell_v;

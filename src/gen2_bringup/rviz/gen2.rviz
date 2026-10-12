@@ -55,7 +55,7 @@ Visualization Manager:
       Name: Camera
       Enabled: true
       Topic:
-        Value: /camera/image_raw
+        Value: /camera/image_raw/compressed
         Reliability Policy: Best Effort
         Durability Policy: Volatile
         History Policy: Keep Last

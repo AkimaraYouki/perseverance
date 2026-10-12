@@ -38,6 +38,8 @@ sensor_hub:
       max_present_cell_v: 4.35
       cells: 3
       capacity_ah: 3.3
+      soc_from_voltage: true      # 2026-10-09 user: 0 % = 3.30 V/cell, 100 % = 4.20 V/cell; coulomb count read 0 % (current is only a Jetson VDD_IN estimate)
+      internal_r_ohm: 0.0
       current_offset_a: 0.0
       warn_cell_v: 3.50
       error_cell_v: 3.30
