@@ -18,8 +18,8 @@ check() {
   if ! r true 2>/dev/null; then echo "안 됨 (젯슨 전원·Wi-Fi ROBOT 확인)"; return 1; fi
   echo "OK"
   r 'printf "  서비스: bench %s, balance %s\n" $(systemctl is-active gen2-bench) $(systemctl is-active gen2-balance);
-     printf "  SLAM: %s\n" "$(pgrep -f slam_toolbox >/dev/null && echo 켜짐 || echo 꺼짐)";
-     printf "  비전: %s\n" "$(pgrep -f "aruco_follow|gesture_node" >/dev/null && echo 켜짐 || echo 꺼짐)"'
+     printf "  SLAM: %s\n" "$(pgrep -f "[s]lam_toolbox" >/dev/null && echo 켜짐 || echo 꺼짐)";
+     printf "  사람 추종: %s\n" "$(pgrep -f "lib/gen2_tools/[p]erson_follow" >/dev/null && echo 켜짐 || echo 꺼짐)"'
   printf "  데스크톱: 패드 %s, joy %s, RViz %s\n" \
     "$(running_local 'lib/gen2_tools/pad_teleop' && echo 켜짐 || echo 꺼짐)" \
     "$(running_local 'lib/joy/joy_node' && echo 켜짐 || echo 꺼짐)" \
@@ -30,7 +30,7 @@ check() {
 slam() {
   case "${1:-start}" in
     start)
-      if r 'pgrep -f slam_toolbox >/dev/null'; then echo "SLAM 이미 켜짐"; return; fi
+      if r 'pgrep -f "[s]lam_toolbox" >/dev/null'; then echo "SLAM 이미 켜짐"; return; fi
       r 'setsid nohup ~/gen2_ws/logs/run_slam.sh > ~/gen2_ws/logs/slam.log 2>&1 < /dev/null &' && echo "SLAM 켬 (로봇, 지도 /map)" ;;
     stop)  r 'kill -INT $(cat ~/gen2_ws/logs/slam.pid) 2>/dev/null; sleep 2; pkill -INT -f slam_toolbox; echo SLAM 끔' ;;
     reset) r "$RENV"' ros2 service call /slam_toolbox/reset slam_toolbox/srv/Reset "{}"' | tail -2 ;;
@@ -43,10 +43,19 @@ slam() {
 
 vision() {
   case "${1:-start}" in
-    start) if r 'pgrep -f "aruco_follow|gesture_node" >/dev/null'; then echo "비전 이미 켜짐"; return; fi
+    start) if r 'pgrep -f "[a]ruco_follow|[g]esture_node" >/dev/null'; then echo "비전 이미 켜짐"; return; fi
            r 'setsid nohup ~/gen2_ws/logs/run_vision.sh > ~/gen2_ws/logs/vision.log 2>&1 < /dev/null &' && echo "비전 켬 (로봇)" ;;
     stop)  r 'kill -INT $(cat ~/gen2_ws/logs/vision.pids) 2>/dev/null; echo 비전 끔' ;;
     *) echo "cw vision [start|stop]" ;;
+  esac
+}
+
+follow() {
+  case "${1:-start}" in
+    start) if r 'pgrep -f "lib/gen2_tools/[p]erson_follow" >/dev/null'; then echo "사람 추종 이미 켜짐"; return; fi
+           r 'setsid nohup ~/gen2_ws/logs/run_follow.sh > ~/gen2_ws/logs/run_follow.out 2>&1 < /dev/null &' && echo "사람 추종 켬 (로봇: 다리·사람 검출·수신호·추종·Nav2) — 10–20 초 뒤 패드 X" ;;
+    stop)  r '~/gen2_ws/logs/stop_follow.sh' ;;
+    *) echo "cw follow [start|stop]" ;;
   esac
 }
 
@@ -68,10 +77,11 @@ down() {   # 데스크톱 쪽만 끈다 (로봇은 그대로 — 패드가 끊�
 }
 
 case "${1:-help}" in
-  up)     check || exit 1; slam start; sleep 2; pad; rviz; dash; echo; echo "준비 끝 — 패드 START 로 일어서기·균형" ;;
+  up)     check || exit 1; slam start; follow start; sleep 2; pad; rviz; dash; hud; echo; echo "준비 끝 — 패드 START 로 일어서기·균형, X 로 사람 추종" ;;
   check|st|status) check ;;
   slam)   shift; slam "$@" ;;
   vision) shift; vision "$@" ;;
+  follow) shift; follow "$@" ;;
   pad)    pad ;;
   rviz)   rviz ;;
   dash)   dash ;;
@@ -84,7 +94,8 @@ cw check              로봇 연결·서비스·SLAM·비전·패드·RViz 상�
 cw slam start|stop    로봇 SLAM 켜기/끄기
 cw slam reset         지도 지우고 지금 자리부터 새로
 cw slam save [이름]   지도 저장 (로봇 ~/maps/이름)
-cw vision start|stop  로봇 비전 (ArUco 추종 + 손동작) 켜기/끄기
+cw follow start|stop  로봇 사람 추종 묶음 (다리·사람 검출·수신호·추종·Nav2) 켜기/끄기 — 켠 뒤 패드 X
+cw vision start|stop  (예전) ArUco 추종 + 손동작
 cw pad | rviz | dash  하나씩 켜기
 cw hud                사람 추종 HUD (카메라 + 검출 상자·추종 대상·라이다 다리·상태·수신호·미니맵)
 cw down               데스크톱 쪽 끄기 (패드 끊기면 로봇은 스스로 멈춤·앉기)
