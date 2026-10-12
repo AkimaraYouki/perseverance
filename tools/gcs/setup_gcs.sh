@@ -9,7 +9,7 @@ say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 
 say "1/7 기본 도구"
 sudo apt-get update
-sudo apt-get install -y curl git wget software-properties-common python3-venv python3-opencv sshpass
+sudo apt-get install -y curl git wget software-properties-common python3-venv python3-opencv sshpass build-essential
 sudo add-apt-repository -y universe
 
 say "2/7 ROS 2 Jazzy 저장소"
