@@ -1,0 +1,31 @@
+#!/bin/bash
+# wifi [-r] [-1]   Wi-Fi 신호 세기를 % 로 (1 초마다). -r: 로봇 상태판 (전원·모터·센서·SSH·속도·가속·자세), -r -1: 신호만 한 번
+#   % = clamp(2·(dBm + 100), 0, 100)  (NetworkManager 와 같은 식: −50 dBm 이상 100 %, −100 dBm 0 %)
+ROBOT=parksudo@192.168.50.124
+robot=0; once=0
+for a in "$@"; do case "$a" in -r) robot=1 ;; -1) once=1 ;; *) echo "사용: wifi [-r] [-1]"; exit 1 ;; esac; done
+# -r (계속 보기) = 로봇 상태판: LCD 항목 (전원·모터·센서·SSH·CPU) + 속도·가속·자세 (~/gen2_desk/desk_dash.py)
+[ "$robot" = 1 ] && [ "$once" = 0 ] && exec /usr/bin/python3 ~/gen2_desk/desk_dash.py
+pct() { awk -v d="$1" 'BEGIN{p=2*(d+100); if(p>100)p=100; if(p<0)p=0; printf "%d", p}'; }
+bar() { local p=$1 n=$(( $1 / 5 )); printf '%*s' "$n" '' | tr ' ' '#'; printf '%*s' $((20 - n)) '' | tr ' ' '.'; }
+line() {   # 이름 dBm ssid
+  if [ -z "$2" ]; then printf "%s  연결 안 됨\n" "$1"; return; fi
+  local p; p=$(pct "$2"); printf "%s %3d%% [%s] %4s dBm  %s\n" "$1" "$p" "$(bar "$p")" "$2" "$3"
+}
+if [ "$robot" = 1 ]; then
+  CM=(-o ControlMaster=auto -o ControlPath=/tmp/wifi-ssh-%r@%h -o ControlPersist=60 -o BatchMode=yes -o ConnectTimeout=3)
+fi
+while :; do
+  out=""
+  for dev in $(ls /sys/class/net | grep '^wl'); do
+    l=$(iw dev "$dev" link 2>/dev/null)
+    out+=$(line "데스크톱" "$(awk '/signal:/{print $2}' <<<"$l")" "$(awk -F': ' '/SSID/{print $2}' <<<"$l") ($dev)")$'\n'
+  done
+  if [ "$robot" = 1 ]; then
+    r=$(ssh "${CM[@]}" "$ROBOT" 'd=$(ls /sys/class/net | grep -m1 ^wl); iw dev $d link' 2>/dev/null)
+    out+=$(line "로봇    " "$(awk '/signal:/{print $2}' <<<"$r")" "$(awk -F': ' '/SSID/{print $2}' <<<"$r")")$'\n'
+  fi
+  if [ "$once" = 1 ]; then printf "%s" "$out"; exit 0; fi
+  printf '\033[H\033[2J%s  (Ctrl+C 끝)\n%s' "$(date +%T)" "$out"
+  sleep 1
+done

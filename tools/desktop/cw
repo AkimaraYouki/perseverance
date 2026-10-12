@@ -1,0 +1,91 @@
+#!/bin/bash
+# cw — C-WANG 데스크톱 원스톱 명령 (사용법: cw help). 로봇 쪽 실행은 ssh 로 대신 해 준다.
+ROBOT=parksudo@192.168.50.124
+RENV='source /opt/ros/jazzy/setup.bash; source ~/gen2_ws/install/setup.bash; export ROS_DOMAIN_ID=42 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp CYCLONEDDS_URI=file://$HOME/.ros/gen2_cyclonedds.xml; '
+LENV='source ~/gen2_desk/env.sh'
+SSH=(ssh -o BatchMode=yes -o ConnectTimeout=4)
+export DISPLAY="${DISPLAY:-:0}"
+
+r() { "${SSH[@]}" "$ROBOT" "$@"; }
+tab() {   # 제목 명령 — 새 터미널 탭 (없으면 창)
+  gnome-terminal --tab --title="$1" -- bash -c "$LENV; $2; echo; echo '[끝남] Enter 로 닫기'; read" 2>/dev/null \
+    || gnome-terminal --window --title="$1" -- bash -c "$LENV; $2; read"
+}
+running_local() { pgrep -f "$1" > /dev/null; }
+
+check() {
+  printf "로봇 연결 ... "
+  if ! r true 2>/dev/null; then echo "안 됨 (젯슨 전원·Wi-Fi ROBOT 확인)"; return 1; fi
+  echo "OK"
+  r 'printf "  서비스: bench %s, balance %s\n" $(systemctl is-active gen2-bench) $(systemctl is-active gen2-balance);
+     printf "  SLAM: %s\n" "$(pgrep -f slam_toolbox >/dev/null && echo 켜짐 || echo 꺼짐)";
+     printf "  비전: %s\n" "$(pgrep -f "aruco_follow|gesture_node" >/dev/null && echo 켜짐 || echo 꺼짐)"'
+  printf "  데스크톱: 패드 %s, joy %s, RViz %s\n" \
+    "$(running_local 'lib/gen2_tools/pad_teleop' && echo 켜짐 || echo 꺼짐)" \
+    "$(running_local 'lib/joy/joy_node' && echo 켜짐 || echo 꺼짐)" \
+    "$(running_local 'rviz2 -d' && echo 켜짐 || echo 꺼짐)"
+  ls /dev/input/js* >/dev/null 2>&1 && echo "  게임패드: 연결됨" || echo "  게임패드: 없음 (블루투스 연결 확인)"
+}
+
+slam() {
+  case "${1:-start}" in
+    start)
+      if r 'pgrep -f slam_toolbox >/dev/null'; then echo "SLAM 이미 켜짐"; return; fi
+      r 'setsid nohup ~/gen2_ws/logs/run_slam.sh > ~/gen2_ws/logs/slam.log 2>&1 < /dev/null &' && echo "SLAM 켬 (로봇, 지도 /map)" ;;
+    stop)  r 'kill -INT $(cat ~/gen2_ws/logs/slam.pid) 2>/dev/null; sleep 2; pkill -INT -f slam_toolbox; echo SLAM 끔' ;;
+    reset) r "$RENV"' ros2 service call /slam_toolbox/reset slam_toolbox/srv/Reset "{}"' | tail -2 ;;
+    save)  n="${2:-room_$(date +%m%d_%H%M)}"
+           r "mkdir -p ~/maps; $RENV"' ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap "{name: {data: '"'/home/parksudo/maps/$n'"'}}"' | tail -2
+           echo "저장: 로봇 ~/maps/$n.pgm/.yaml" ;;
+    *) echo "cw slam [start|stop|reset|save 이름]" ;;
+  esac
+}
+
+vision() {
+  case "${1:-start}" in
+    start) if r 'pgrep -f "aruco_follow|gesture_node" >/dev/null'; then echo "비전 이미 켜짐"; return; fi
+           r 'setsid nohup ~/gen2_ws/logs/run_vision.sh > ~/gen2_ws/logs/vision.log 2>&1 < /dev/null &' && echo "비전 켬 (로봇)" ;;
+    stop)  r 'kill -INT $(cat ~/gen2_ws/logs/vision.pids) 2>/dev/null; echo 비전 끔' ;;
+    *) echo "cw vision [start|stop]" ;;
+  esac
+}
+
+pad() {
+  running_local 'lib/joy/joy_node' || tab "joy_node" "ros2 run joy joy_node --ros-args -p autorepeat_rate:=20.0"
+  sleep 1
+  running_local 'lib/gen2_tools/pad_teleop' && { echo "pad_teleop 이미 켜짐"; return; }
+  tab "pad_teleop" "ros2 run gen2_tools pad_teleop 2>/dev/null"
+  echo "패드 켬 (joy_node + pad_teleop 탭)"
+}
+
+rviz() { running_local 'rviz2 -d' && { echo "RViz 이미 켜짐"; return; }; tab "RViz" "rviz2 -d ~/gen2_desk/gen2_desktop.rviz 2>/dev/null"; echo "RViz 켬"; }
+dash() { tab "상태판" "wifi -r"; echo "상태판 켬 (wifi -r)"; }
+
+down() {   # 데스크톱 쪽만 끈다 (로봇은 그대로 — 패드가 끊기면 로봇은 멈춤·앉기·해제)
+  for p in $(pgrep -f 'lib/gen2_tools/pad_teleop|lib/joy/joy_node|rviz2 -d|desk_dash.py'); do kill -INT "$p" 2>/dev/null; done
+  echo "데스크톱 패드·joy·RViz·상태판 끔 (로봇 SLAM 은 그대로 — 끄려면 cw slam stop)"
+}
+
+case "${1:-help}" in
+  up)     check || exit 1; slam start; sleep 2; pad; rviz; dash; echo; echo "준비 끝 — 패드 START 로 일어서기·균형" ;;
+  check|st|status) check ;;
+  slam)   shift; slam "$@" ;;
+  vision) shift; vision "$@" ;;
+  pad)    pad ;;
+  rviz)   rviz ;;
+  dash)   dash ;;
+  down)   down ;;
+  ssh)    exec ssh "$ROBOT" ;;
+  *) cat <<'EOF'
+cw up                 한 번에: 로봇 확인 → SLAM 켬 → 패드(joy+pad_teleop) → RViz → 상태판   (각각 새 탭)
+cw check              로봇 연결·서비스·SLAM·비전·패드·RViz 상태
+cw slam start|stop    로봇 SLAM 켜기/끄기
+cw slam reset         지도 지우고 지금 자리부터 새로
+cw slam save [이름]   지도 저장 (로봇 ~/maps/이름)
+cw vision start|stop  로봇 비전 (ArUco 추종 + 손동작) 켜기/끄기
+cw pad | rviz | dash  하나씩 켜기
+cw down               데스크톱 쪽 끄기 (패드 끊기면 로봇은 스스로 멈춤·앉기)
+cw ssh                로봇 접속
+EOF
+  ;;
+esac

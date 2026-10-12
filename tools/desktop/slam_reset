@@ -1,0 +1,6 @@
+#!/bin/bash
+# slam_reset   로봇 slam_toolbox 지도를 지우고 새로 시작 (지금 자리가 새 지도 원점).
+#   데스크톱 Humble 에는 slam_toolbox/srv/Reset 타입이 없어 로봇에서 부른다.
+ssh -o BatchMode=yes parksudo@192.168.50.124 'source /opt/ros/jazzy/setup.bash; source ~/gen2_ws/install/setup.bash
+export ROS_DOMAIN_ID=42 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp CYCLONEDDS_URI=file://$HOME/.ros/gen2_cyclonedds.xml
+ros2 service call /slam_toolbox/reset slam_toolbox/srv/Reset "{}"'
