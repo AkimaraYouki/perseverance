@@ -11,7 +11,7 @@ tab() {   # 제목 명령 — 새 터미널 탭 (없으면 창)
   gnome-terminal --tab --title="$1" -- bash -c "$LENV; $2; echo; echo '[끝남] Enter 로 닫기'; read" 2>/dev/null \
     || gnome-terminal --window --title="$1" -- bash -c "$LENV; $2; read"
 }
-running_local() { pgrep -f "$1" > /dev/null; }
+running_local() { pgrep -f "$1" > /dev/null; }   # 실제 프로그램 명령줄만 맞게 패턴을 쓴다 (탭의 bash -c 줄은 안 맞게)
 
 check() {
   printf "로봇 연결 ... "
@@ -23,7 +23,7 @@ check() {
   printf "  데스크톱: 패드 %s, joy %s, RViz %s\n" \
     "$(running_local 'lib/gen2_tools/pad_teleop' && echo 켜짐 || echo 꺼짐)" \
     "$(running_local 'lib/joy/joy_node' && echo 켜짐 || echo 꺼짐)" \
-    "$(running_local 'rviz2 -d' && echo 켜짐 || echo 꺼짐)"
+    "$(pgrep -x rviz2 > /dev/null && echo 켜짐 || echo 꺼짐)"
   ls /dev/input/js* >/dev/null 2>&1 && echo "  게임패드: 연결됨" || echo "  게임패드: 없음 (블루투스 연결 확인)"
 }
 
@@ -58,9 +58,9 @@ pad() {
   echo "패드 켬 (joy_node + pad_teleop 탭)"
 }
 
-rviz() { running_local 'rviz2 -d' && { echo "RViz 이미 켜짐"; return; }; tab "RViz" "rviz2 -d ~/gen2_desk/gen2_desktop.rviz 2>/dev/null"; echo "RViz 켬"; }
+rviz() { pgrep -x rviz2 > /dev/null && { echo "RViz 이미 켜짐"; return; }; tab "RViz" "rviz2 -d ~/gen2_desk/gen2_desktop.rviz 2>/dev/null"; echo "RViz 켬"; }
 dash() { tab "상태판" "wifi -r"; echo "상태판 켬 (wifi -r)"; }
-hud() { running_local 'gen2_desk/hud.py' && { echo "HUD 이미 켜짐"; return; }; tab "HUD" "/usr/bin/python3 ~/gen2_desk/hud.py 2>/dev/null"; echo "HUD 켬 (카메라 + 사람 상자·추종 대상·라이다 다리·상태·수신호, q 끝, s 저장)"; }
+hud() { running_local '^/usr/bin/python3 /.*/gen2_desk/hud\.py' && { echo "HUD 이미 켜짐"; return; }; tab "HUD" "/usr/bin/python3 ~/gen2_desk/hud.py 2>/dev/null"; echo "HUD 켬 (카메라 + 사람 상자·추종 대상·라이다 다리·상태·수신호, q 끝, s 저장)"; }
 
 down() {   # 데스크톱 쪽만 끈다 (로봇은 그대로 — 패드가 끊기면 로봇은 멈춤·앉기·해제)
   for p in $(pgrep -f 'lib/gen2_tools/pad_teleop|lib/joy/joy_node|rviz2 -d|desk_dash.py|gen2_desk/hud.py'); do kill -INT "$p" 2>/dev/null; done
