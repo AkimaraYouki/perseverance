@@ -20,6 +20,8 @@ def generate_launch_description():
     return LaunchDescription([
         IncludeLaunchDescription(PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory('gen2_control'), 'launch', 'balance.launch.py'))),
+        # level + self-masked LiDAR for SLAM, the leg detector and cmd_mux (cheap, always on)
+        Node(package='gen2_tools', executable='scan_gate', name='scan_gate', output='screen'),
         static('laser', (-0.0774, 0.0, 0.1225)),
         static('camera_link', (0.1080, 0.0, 0.0153)),
         static('imu_link', (0.0500, -0.0050, 0.0700)),

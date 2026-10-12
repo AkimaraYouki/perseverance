@@ -1,4 +1,4 @@
-"""2D SLAM while driving: scan_gate (drops tilted scans) + slam_toolbox online async (lifecycle node,
+"""2D SLAM while driving: slam_toolbox on /scan_level (scan_gate runs in control.launch) online async (lifecycle node,
 configured and activated here). Needs gen2-balance (odom TF) running.
 Run: ros2 launch gen2_bringup slam.launch.py ; view /map in RViz on the desktop (gen2_bringup/rviz/gen2.rviz).
 Save: ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap "{name: {data: '/home/parksudo/maps/room'}}" """
@@ -25,6 +25,5 @@ def generate_launch_description():
         entities=[EmitEvent(event=ChangeState(lifecycle_node_matcher=matches_action(slam),
                                               transition_id=lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE))]))
     return LaunchDescription([
-        Node(package='gen2_tools', executable='scan_gate', name='scan_gate', output='screen'),
         slam, activate, configure,
     ])

@@ -7,7 +7,8 @@ Closed_Fist, Open_Palm, Pointing_Up, Thumb_Down, Thumb_Up, Victory, ILoveYou.
 
 A gesture counts after it is held for hold_s with score >= min_score; then its action runs once
 (again only after the hand changes). Actions (param `actions`, "Gesture:action" strings):
-  follow_on / follow_off  -> aruco/enable (SetBool)
+  stop / restart          -> follow/hold (SetBool true / false) — competition hand signals
+  follow_on / follow_off  -> follow/enable (SetBool)
   sit                     -> balance/sit
   start                   -> balance/start  (the robot must be held upright — off by default)
 Topics: gesture (std_msgs/String "name score"), gesture/action (std_msgs/String).
@@ -37,7 +38,7 @@ class GestureNode(Node):
         self.hz = p('process_hz', 5.0)
         self.min_score = p('min_score', 0.6)
         self.hold_s = p('hold_s', 0.6)
-        acts = p('actions', ['Open_Palm:follow_off', 'Thumb_Up:follow_on'])   # rules: only stop / restart hand signals
+        acts = p('actions', ['Open_Palm:stop', 'Thumb_Up:restart'])   # rules: only stop / restart hand signals
         self.actions = dict(a.split(':', 1) for a in acts)
         opt = vision.GestureRecognizerOptions(base_options=BaseOptions(model_asset_path=model),
                                               running_mode=vision.RunningMode.IMAGE, num_hands=1)
@@ -46,7 +47,8 @@ class GestureNode(Node):
         self.cur, self.cur_t, self.fired = None, 0.0, None
         self.pub = self.create_publisher(String, 'gesture', 10)
         self.pub_act = self.create_publisher(String, 'gesture/action', 10)
-        self.cli_follow = self.create_client(SetBool, 'aruco/enable')
+        self.cli_follow = self.create_client(SetBool, 'follow/enable')
+        self.cli_hold = self.create_client(SetBool, 'follow/hold')
         self.cli = {k: self.create_client(Trigger, f'balance/{k}') for k in ('sit', 'start')}
         self.create_subscription(CompressedImage, 'camera/image_raw/compressed', self._img, qos_profile_sensor_data)
         self.get_logger().info(f'gesture recognizer ready at {self.hz} Hz, actions {self.actions}')
@@ -82,7 +84,9 @@ class GestureNode(Node):
             return
         self.pub_act.publish(String(data=f'{name} -> {act}'))
         self.get_logger().info(f'gesture {name} -> {act}')
-        if act in ('follow_on', 'follow_off') and self.cli_follow.service_is_ready():
+        if act in ('stop', 'restart') and self.cli_hold.service_is_ready():
+            self.cli_hold.call_async(SetBool.Request(data=act == 'stop'))
+        elif act in ('follow_on', 'follow_off') and self.cli_follow.service_is_ready():
             self.cli_follow.call_async(SetBool.Request(data=act == 'follow_on'))
         elif act in self.cli and self.cli[act].service_is_ready():
             self.cli[act].call_async(Trigger.Request())

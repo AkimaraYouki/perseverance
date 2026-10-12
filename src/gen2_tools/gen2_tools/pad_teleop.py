@@ -12,7 +12,7 @@ balance/* services. Only standard messages, so it also runs on ROS 2 Humble.
   A              stop (vx = wz = 0 while held)
   B              default height
   LB + RB 0.5 s  emergency DISARM (0 A — the robot drops)
-  X              ArUco follow on / off (sticks override; release = follow resumes)
+  X              person follow on / off (registers the person ahead) (sticks override; release = follow resumes)
   Y              jump (balance/jump: needs >= 0.2 m/s forward, not turning — robot wb_core 2026-10-12)
 If /joy stops (pad unplugged, joy_node dead) the heartbeat stops: the robot stops, sits and disarms.
 
@@ -53,7 +53,7 @@ class PadTeleop(Node):
         self.cmd = self.create_publisher(Twist, 'cmd_vel/teleop', 10)
         self.hp = self.create_publisher(Float64, 'balance/height', 10)
         self.cli = {k: self.create_client(Trigger, f'balance/{k}') for k in ('start', 'sit', 'disarm', 'jump')}
-        self.cli_follow = self.create_client(SetBool, 'aruco/enable')
+        self.cli_follow = self.create_client(SetBool, 'follow/enable')    # person_follow
         self.follow = False
         self.active_t = 0.0      # last time the sticks / A were used: the pad only commands while in use,
         #                          so cmd_mux falls back to cmd_vel/auto (ArUco follow) when the sticks rest
@@ -113,9 +113,9 @@ class PadTeleop(Node):
             self.follow = not self.follow
             if self.cli_follow.service_is_ready():
                 self.cli_follow.call_async(SetBool.Request(data=self.follow))
-                self.get_logger().info(f'ArUco follow {"ON" if self.follow else "OFF"}')
+                self.get_logger().info(f'Person follow {"ON" if self.follow else "OFF"}')
             else:
-                self.get_logger().warn('aruco/enable not reachable (aruco_follow not running)')
+                self.get_logger().warn('follow/enable not reachable (person_follow not running)')
         t = Twist()
         if not self._btn('a'):
             t.linear.x = float(self.vx_max * self._dz(self._axis('vx')))
