@@ -12,4 +12,8 @@ models/*.onnx
 models/*.engine
 models/*.pt
 models/*.task
-models/trt_build.log
+models/*.log
+logs/*.log
+logs/*.pids
+logs/*.pgid
+logs/*.pid

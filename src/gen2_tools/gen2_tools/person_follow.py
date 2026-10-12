@@ -8,8 +8,10 @@ box) are kept and slowly updated, and every later choice prefers the track that 
 
 States: IDLE (not enabled) -> FOLLOW (seen) -> OCCLUDED (lost < occl_s: drive to the last seen place, slowly)
         -> SEARCH (turn slowly until the person is seen and matches again). HOLD = stop hand signal: stand still.
-Command: wz = k_yaw * bearing, vx = k_dist * (distance - follow_dist) * cos(bearing) -> cmd_vel/auto (cmd_mux;
-the pad always wins). Services: follow/enable (SetBool), follow/hold (SetBool: true = stop, false = resume).
+Command: with Nav2 up (nav_follow.launch) a path to 'follow_dist in front of the person' is planned on the LiDAR
+costmap every nav_replan_s and MPPI drives it (around obstacles); close to the person, without Nav2 or when the
+controller aborts: wz = k_yaw * bearing, vx = k_dist * (distance - follow_dist) * cos(bearing). Both go to
+cmd_vel/auto (cmd_mux; the pad always wins). Parameters can be changed live (ros2 param set). Services: follow/enable (SetBool), follow/hold (SetBool: true = stop, false = resume).
 Topic: follow/status (String).
 """
 
@@ -20,8 +22,12 @@ import time
 import numpy as np
 import rclpy
 import rclpy.executors
-from geometry_msgs.msg import PoseArray, Twist
+from action_msgs.msg import GoalStatus
+from geometry_msgs.msg import PoseArray, PoseStamped, Twist
+from nav2_msgs.action import ComputePathToPose, FollowPath
+from rclpy.action import ActionClient
 from rclpy.node import Node
+from tf2_ros import Buffer, TransformListener
 from std_msgs.msg import String
 from std_srvs.srv import SetBool
 
@@ -51,7 +57,32 @@ class PersonFollow(Node):
         self.create_subscription(PoseArray, 'people/legs', self._legs, 10)
         self.create_service(SetBool, 'follow/enable', self._enable)
         self.create_service(SetBool, 'follow/hold', self._hold)
+        # Nav2 (nav_follow.launch: planner + MPPI on the LiDAR costmap) drives around obstacles when available
+        self.use_nav = p('use_nav', True)
+        self.nav_period = p('nav_replan_s', 0.5)
+        self.tfb = Buffer()
+        self.tfl = TransformListener(self.tfb, self)
+        self.ac_plan = ActionClient(self, ComputePathToPose, 'compute_path_to_pose')
+        self.ac_follow = ActionClient(self, FollowPath, 'follow_path')
+        self.nav_goal_h = None          # FollowPath goal handle
+        self.nav_t = 0.0
+        self.nav_busy = False
+        self.add_on_set_parameters_callback(self._set_params)
         self.create_timer(0.05, self._step)
+
+    _LIVE = {'follow_dist_m': 'd_ref', 'k_dist': 'k_d', 'k_yaw': 'k_yaw', 'vx_max': 'vx_max', 'wz_max': 'wz_max',
+             'occluded_s': 'occl_s', 'search_wz': 'search_wz', 'appearance_min': 'app_min', 'use_nav': 'use_nav',
+             'nav_replan_s': 'nav_period'}
+
+    def _set_params(self, params):
+        """ros2 param set /person_follow <name> <value> takes effect immediately (tuning on the robot)."""
+        from rcl_interfaces.msg import SetParametersResult
+        for q in params:
+            if q.name in self._LIVE:
+                setattr(self, self._LIVE[q.name], q.value)
+            elif q.name == 'bearing_tol_deg':
+                self.tol = math.radians(q.value)
+        return SetParametersResult(successful=True)
 
     # ------------------------------------------------------------------ inputs
     def _cam(self, m):
@@ -69,11 +100,14 @@ class PersonFollow(Node):
         res.success, res.message = True, f'follow {"on: registering the person ahead" if self.enabled else "off"}'
         self.get_logger().info(res.message)
         if not self.enabled:
+            self._nav_cancel()
             self.pub.publish(Twist())
         return res
 
     def _hold(self, req, res):
         self.hold = bool(req.data)
+        if self.hold:
+            self._nav_cancel()
         res.success, res.message = True, 'hold' if self.hold else 'resume'
         self.get_logger().info(res.message)
         return res
@@ -156,6 +190,10 @@ class PersonFollow(Node):
         else:
             state = 'SEARCH'
             t.angular.z = self.search_wz
+        if state in ('FOLLOW', 'OCCLUDED') and self._nav(tgt, now, state == 'FOLLOW'):
+            self._status(state + '+nav', tgt)
+            return                                         # the Nav2 controller publishes cmd_vel/auto
+        self._nav_cancel()
         if state in ('FOLLOW', 'OCCLUDED'):
             x, y = tgt['p']
             b, d = math.atan2(y, x), math.hypot(x, y)
@@ -164,6 +202,73 @@ class PersonFollow(Node):
             t.linear.x = float(np.clip(k * self.k_d * (d - self.d_ref) * max(0.0, math.cos(b)), -self.vx_max * 0.5, self.vx_max))
         self.pub.publish(t)
         self._status(state, tgt)
+
+    # ------------------------------------------------------------------ Nav2
+    def _nav(self, tgt, now, seen):
+        """Plan to 'follow_dist in front of the person' (odom frame) every nav_replan_s; False = drive directly.
+        Not seen (OCCLUDED): the target position is relative to where the robot was, so keep the last (odom) goal."""
+        if not self.use_nav or not self.ac_plan.server_is_ready() or not self.ac_follow.server_is_ready():
+            return False
+        if now - self.nav_fail_t < 2.0:
+            return False
+        if not seen:
+            return self.nav_goal_h is not None
+        x, y = tgt['p']
+        d = math.hypot(x, y)
+        if d < self.d_ref + 0.15:                          # close enough: just face the person (direct)
+            return False
+        if self.nav_busy or now - self.nav_t < self.nav_period:
+            return self.nav_goal_h is not None
+        try:
+            tf = self.tfb.lookup_transform('odom', 'base_link', rclpy.time.Time())
+        except Exception:
+            return False
+        gx, gy = x - self.d_ref * x / d, y - self.d_ref * y / d          # goal in base_link
+        q = tf.transform.rotation
+        yaw0 = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+        c, s_ = math.cos(yaw0), math.sin(yaw0)
+        g = PoseStamped()
+        g.header.frame_id = 'odom'
+        g.header.stamp = self.get_clock().now().to_msg()
+        g.pose.position.x = tf.transform.translation.x + c * gx - s_ * gy
+        g.pose.position.y = tf.transform.translation.y + s_ * gx + c * gy
+        yaw = yaw0 + math.atan2(y, x)
+        g.pose.orientation.z, g.pose.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
+        req = ComputePathToPose.Goal(goal=g, planner_id='GridBased', use_start=False)
+        self.nav_busy, self.nav_t = True, now
+        self.ac_plan.send_goal_async(req).add_done_callback(self._plan_accepted)
+        return self.nav_goal_h is not None
+
+    def _plan_accepted(self, fut):
+        h = fut.result()
+        if not h or not h.accepted:
+            self.nav_busy = False
+            return
+        h.get_result_async().add_done_callback(self._plan_done)
+
+    def _plan_done(self, fut):
+        self.nav_busy = False
+        res = fut.result().result
+        if not res.path.poses or not self.enabled or self.hold:
+            return
+        g = FollowPath.Goal(path=res.path, controller_id='FollowPath', goal_checker_id='goal_checker')
+        self.ac_follow.send_goal_async(g).add_done_callback(self._follow_accepted)
+
+    def _follow_accepted(self, fut):
+        h = fut.result()
+        self.nav_goal_h = h if h and h.accepted else None
+        if self.nav_goal_h is not None:
+            h.get_result_async().add_done_callback(lambda f, h=h: self._follow_done(h, f.result().status))
+
+    def _follow_done(self, h, status):
+        if status == GoalStatus.STATUS_ABORTED and self.nav_goal_h is h:
+            self.get_logger().warn('Nav2 controller aborted: steering directly for 2 s')
+            self.nav_goal_h, self.nav_fail_t = None, time.monotonic()
+
+    def _nav_cancel(self):
+        if self.nav_goal_h is not None:
+            self.nav_goal_h.cancel_goal_async()
+            self.nav_goal_h = None
 
     def _status(self, state, tgt=None):
         if state != self.state:
