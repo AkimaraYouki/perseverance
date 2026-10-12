@@ -20,3 +20,6 @@ a = 1.5° (3° 는 무부하에서 1.5–2 Hz 공진으로 전류 6 A 가드), 0
 파일: attachments/2026-10-12_hip_chirp/ground_mitpos_1p5deg.csv (t,id,target_raw_deg,raw_deg,erpm,cur_a; id 3 = L dir +1, 4 = R dir −1),
 stand_hanging_at_stop_3deg.csv (받침 위, 다리가 펴짐 끝에 걸려 반쪽만 움직임 — 참고용).
 Kt 토크 팔 시험은 아직 (사용자 장비 필요).
+
+## 재현 (사용자가 바닥에 세워 잡고 다시) — ground_mitpos_1p5deg_run2.csv
+2.8 Hz: L 0.81∠−28°, R 0.89∠−29° / 8 Hz: L 0.86∠−73°, R 0.93∠−76° / 0.5 Hz: L 0.76∠−11°, R 0.88∠−12°. 평균 전류 −0.89 / +0.93 A. 첫 번과 ±0.02, ±2° 안 — 재현됨.
