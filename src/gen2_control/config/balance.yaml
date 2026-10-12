@@ -46,5 +46,6 @@ balance:
       contact_tau_min: 0.8
       roll_kp: 1.0            # 2026-10-12 retest with hip_mode mit_pos (legs -29 deg at 2.8 Hz instead of -150): step 2 of the desktop plan
       roll_ki: 8.0            # 10-09 with mit (host kp) this rocked at 2.8 Hz; 10-12 with mit_pos: quiet (roll sd 0.35 deg, no 2.8 Hz), pushes/ramp OK. fallback 0.5 / 3
-      roll_kd: 0.0
+      roll_kd: 0.1            # 2026-10-12 desktop step 3 (sim 80/80); user: "너무 잘됨". push recovery 0.13-0.26 s; hip current 10-100 Hz 0.24 A (0.05 with kd 0)
+      roll_rate_lpf_hz: 4.0   # roll-rate LPF for the kd term (wb_core default 8)
       turn_lean: 0.0          # needs the roll loop

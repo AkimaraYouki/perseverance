@@ -196,6 +196,7 @@ public:
     P.roll_kp = declare_parameter("tune.roll_kp", P.roll_kp);
     P.roll_ki = declare_parameter("tune.roll_ki", P.roll_ki);
     P.roll_kd = declare_parameter("tune.roll_kd", P.roll_kd);
+    P.roll_rate_lpf_hz = declare_parameter("tune.roll_rate_lpf_hz", P.roll_rate_lpf_hz);
     P.turn_lean = declare_parameter("tune.turn_lean", P.turn_lean);
     P.yaw_kd = declare_parameter("tune.yaw_kd", P.yaw_kd);
     P.yaw_ki = declare_parameter("tune.yaw_ki", P.yaw_ki);
