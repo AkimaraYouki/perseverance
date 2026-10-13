@@ -187,6 +187,8 @@ public:
     P.vmc_kd = declare_parameter("tune.vmc_kd", P.vmc_kd);
     P.vmax_kmh = declare_parameter("tune.vmax_kmh", P.vmax_kmh);
     P.accel_max = declare_parameter("tune.accel_max", P.accel_max);
+    P.v_ki = declare_parameter("tune.v_ki", P.v_ki);
+    P.v_boost_max = declare_parameter("tune.v_boost_max", P.v_boost_max);
     P.x_hold_moving = declare_parameter("tune.x_hold_moving", P.x_hold_moving);
     P.jerk_max = declare_parameter("tune.jerk_max", P.jerk_max);
     P.x_leak_moving = declare_parameter("tune.x_leak_moving", P.x_leak_moving);

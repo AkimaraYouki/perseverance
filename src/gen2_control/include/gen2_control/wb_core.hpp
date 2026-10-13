@@ -31,6 +31,9 @@ struct Params      // climb_test.py TUNE defaults (2026-10-07)
   double vmc_kp = 60.0, vmc_kd = 1.0;
   double vmax_kmh = 3.5, vmax_motor_frac = 0.75;
   double speed_lpf_hz = 4.0, brake_kp = 1.0, brake_ki = 5.5, accel_max = 1.5, speed_guard = 0.8;
+  // slope compensation (robot 2026-10-14; 0 = off = wbctrl): steady command + slower than commanded (uphill) ->
+  // the speed reference the LQR tracks is raised by v_ki * integral(v_ref - v), at most +-v_boost_max
+  double v_ki = 0.0, v_boost_max = 0.4;
   bool turn_slow = true, turn_limit = true;
   double wheel_margin = 0.85, yaw_kd = 0.5, wheel_tau_max = 7.0;
   double yaw_ki = 0.0, yaw_i_max = 0.5;   // yaw-rate integral (desktop 2026-10-08: beats wheel stiction in place)
@@ -109,6 +112,7 @@ private:
   Params P_;
   LqrTable lqr_;
   // state (names as wbctrl.py)
+  double v_i_ = 0.0;
   double x_err_, t_un_, t_ld_, g_vf_, g_i_, g_ref_, vf_, rf_, th_bias_, v_prev_, roll_i_, yaw_i_ = 0.0, g_acc_ = 0.0;
   bool lift_on_;
   int phase_ = kDrive;
