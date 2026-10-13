@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""C-WANG 관제 GUI — 기능 켜기/끄기 + 파라미터 튜닝 (GCS 노트북, 데스크톱 겸용).
+"""C-WANG 관제 GUI — 기능 켜기/끄기 + 동작 파라미터 튜닝 (GCS 노트북, 데스크톱 겸용).
 
-  source ~/gen2_desk/env.sh && python3 ~/gen2_desk/cw_gui.py      (바탕화면 아이콘 "C-WANG 관제" 도 같음)
+  cw-gui      (= source ~/gen2_desk/env.sh && python3 ~/gen2_desk/cw_gui.py, 바탕화면 아이콘 "C-WANG 관제")
 
 - 로봇 쪽 (추종 스택) 은 cw 와 같은 ssh 스크립트로, 노트북 쪽 (패드·손짓·SLAM·RViz·HUD) 은 터미널 없이 뒤에서 띄운다
   (로그 ~/gen2_desk/logs/*.log, '로그' 탭). cw check / cw down 과 같은 프로세스 패턴이라 섞어 써도 된다.
-- 튜닝 탭: 실시간 반영되는 파라미터만 (person_follow 전부, cmd_mux lidar_limit, Nav2 RPP·코스트맵 팽창).
-  패드·손짓은 '다시 시작' 때 적용. balance_node 는 시작할 때만 파라미터를 읽어서 여기서 다루지 않는다.
+- 튜닝 탭: 게인 (최적화된 값) 은 다루지 않는다. 속도 한계, 추종·인식·장애물 회피·SLAM 의 동작 파라미터만.
+  칸마다 언제 적용되는지 표시: 실시간 / 재시작 때 (노트북에서 도는 패드·손짓·SLAM) / 잠김 (노드가 실시간 변경을 안 받음).
+  노드가 `live_params` (string array) 를 내놓으면 그 이름들은 실시간으로 바뀐다 (comms 2026-10-13_1300).
 - 다른 컴퓨터 (데스크톱) 에서 패드·SLAM 이 이미 돌면 켜지 않는다 (heartbeat 2 개 / TF 충돌 방지).
 """
 import glob
@@ -36,74 +37,82 @@ DESK = f'{HOME}/gen2_desk'
 LOGS = f'{DESK}/logs'
 PRESETS = f'{DESK}/gui_presets'
 LENV = f'source {DESK}/env.sh'
+SLAM_BASE = f'{DESK}/install/gen2_bringup/share/gen2_bringup/config/slam.yaml'
+SLAM_YAML = f'{DESK}/slam_gui.yaml'
 SSH = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=4', '-o', 'ControlMaster=auto',
        '-o', f'ControlPath={HOME}/.ssh/cm-%r@%h:%p', '-o', 'ControlPersist=120']
 
-# ------------------------------------------------------------------ 파라미터 표
-# (이름, 설명, 최소, 최대, 간격, 기본값, 단위)  — 기본값 = 소스/설정 파일 값 (2026-10-13)
-FOLLOW = [
-    ('follow_dist_m', '따라갈 거리', 0.3, 2.0, 0.05, 0.8, 'm'),
-    ('vx_max', '최대 전진 속도', 0.0, 1.0, 0.05, 0.7, 'm/s'),
-    ('wz_max', '최대 회전 속도', 0.0, 2.5, 0.1, 1.0, 'rad/s'),
-    ('k_dist', '거리 게인', 0.0, 3.0, 0.05, 0.8, ''),
-    ('k_yaw', '방향 게인', 0.0, 5.0, 0.1, 1.5, ''),
-    ('bearing_tol_deg', '방향 허용 오차', 0.0, 30.0, 1.0, 10.0, '°'),
-    ('search_wz', '찾을 때 회전 속도', 0.0, 1.5, 0.05, 0.5, 'rad/s'),
-    ('occluded_s', '가려짐 허용 시간', 0.0, 15.0, 0.5, 5.0, 's'),
-    ('predict_s', '가려졌을 때 예측 시간', 0.0, 5.0, 0.1, 1.5, 's'),
-    ('grace_s', '잠깐 놓쳐도 추종 유지', 0.0, 3.0, 0.1, 0.5, 's'),
-    ('legs_only_s', '카메라 없이 다리만으로', 0.0, 5.0, 0.1, 1.0, 's'),
-    ('max_gate_m', '대상 이동 허용 범위', 0.5, 5.0, 0.1, 2.5, 'm'),
-    ('appearance_min', '옷 색 일치 (근처)', 0.0, 1.0, 0.05, 0.5, ''),
-    ('reacquire_min', '옷 색 일치 (재획득)', 0.0, 1.0, 0.05, 0.65, ''),
+# ------------------------------------------------------------------ 파라미터 표 (게인 제외)
+# (노드, 이름, 설명, 최소, 최대, 간격, 기본값, 단위)  기본값 = 소스/설정 파일 값 (2026-10-13). bool 이면 최소~단위 무시
+PF, RPP, LCM, GCM = '/person_follow', '/controller_server', '/local_costmap/local_costmap', '/global_costmap/global_costmap'
+GROUPS = [
+    ('주행 속도 한계', '조종·추종·우회 각각의 최대 속도. 균형 노드 한계 (맨 아래) 가 전체 상한', [
+        ('/pad_teleop', 'vx_max', '패드 최대 전진 속도', 0.1, 1.0, 0.05, 0.7, 'm/s'),
+        ('/pad_teleop', 'wz_max', '패드 최대 회전 속도', 0.2, 3.0, 0.1, 2.0, 'rad/s'),
+        (PF, 'vx_max', '추종 최대 전진 속도', 0.0, 1.0, 0.05, 0.7, 'm/s'),
+        (PF, 'wz_max', '추종 최대 회전 속도', 0.0, 2.5, 0.1, 1.0, 'rad/s'),
+        (PF, 'search_wz', '사람 찾을 때 회전 속도', 0.0, 1.5, 0.05, 0.5, 'rad/s'),
+        (RPP, 'FollowPath.desired_linear_vel', '우회 주행 속도 (Nav2)', 0.1, 1.0, 0.05, 0.7, 'm/s'),
+        (RPP, 'FollowPath.rotate_to_heading_angular_vel', '우회 제자리 회전 속도', 0.1, 2.5, 0.1, 1.0, 'rad/s'),
+        (RPP, 'FollowPath.regulated_linear_scaling_min_speed', '우회 곡선 최소 속도', 0.05, 0.7, 0.05, 0.25, 'm/s'),
+        (RPP, 'FollowPath.min_approach_linear_velocity', '우회 목표 근처 최소 속도', 0.0, 0.5, 0.05, 0.1, 'm/s'),
+        ('/balance', 'tune.vmax_kmh', '균형 노드 최고 속도 (전체 상한)', 1.0, 5.0, 0.1, 3.5, 'km/h'),
+    ]),
+    ('사람 추종', '누구를 얼마나 떨어져서 따라가는지, 놓쳤을 때 어떻게 하는지', [
+        (PF, 'follow_dist_m', '따라갈 거리', 0.3, 2.0, 0.05, 0.8, 'm'),
+        (PF, 'bearing_tol_deg', '방향 허용 오차 (이 안이면 회전 안 함)', 0.0, 30.0, 1.0, 10.0, '°'),
+        (PF, 'occluded_s', '가려짐 허용 시간 (넘으면 찾기)', 0.0, 15.0, 0.5, 5.0, 's'),
+        (PF, 'predict_s', '가려졌을 때 예측해서 갈 시간', 0.0, 5.0, 0.1, 1.5, 's'),
+        (PF, 'grace_s', '잠깐 놓쳐도 추종 유지', 0.0, 3.0, 0.1, 0.5, 's'),
+        (PF, 'legs_only_s', '카메라 없이 다리만으로 이어 가기', 0.0, 5.0, 0.1, 1.0, 's'),
+        (PF, 'max_gate_m', '대상이 한 번에 움직일 수 있는 거리', 0.5, 5.0, 0.1, 2.5, 'm'),
+        (PF, 'appearance_min', '옷 색 일치 기준 (근처)', 0.0, 1.0, 0.05, 0.5, ''),
+        (PF, 'reacquire_min', '옷 색 일치 기준 (오래 놓친 뒤)', 0.0, 1.0, 0.05, 0.65, ''),
+    ]),
+    ('사람 인식', '카메라 (YOLO) · 라이다 다리 검출 — 로봇이 live_params 로 열면 실시간', [
+        ('/person_detector', 'score_min', '사람 검출 최소 확신도', 0.1, 0.9, 0.05, 0.40, ''),
+        ('/person_detector', 'process_hz', '사람 검출 주기', 5.0, 30.0, 1.0, 30.0, 'Hz'),
+        ('/leg_detector', 'max_range_m', '다리 검출 최대 거리', 1.0, 8.0, 0.25, 4.0, 'm'),
+        ('/leg_detector', 'track_gate_m', '다리 추적 허용 이동', 0.1, 1.5, 0.05, 0.5, 'm'),
+        ('/leg_detector', 'track_keep_s', '다리 놓쳐도 유지', 0.2, 3.0, 0.1, 1.0, 's'),
+    ]),
+    ('장애물 회피', '직진 통로가 막히면 Nav2 로 돌아간다 (켜기/끄기는 첫 탭)', [
+        (PF, 'corridor_margin_m', '직진 통로 여유 폭', 0.0, 0.5, 0.01, 0.12, 'm'),
+        (PF, 'nav_hold_s', '막힌 뒤 Nav2 유지 시간', 0.0, 10.0, 0.5, 2.0, 's'),
+        (PF, 'nav_replan_s', 'Nav2 경로 다시 계산 주기', 0.1, 3.0, 0.1, 0.5, 's'),
+        (LCM, 'inflation_layer.inflation_radius', '장애물에서 떨어질 거리 (팽창 반경)', 0.1, 1.0, 0.05, 0.40, 'm'),
+    ]),
+    ('SLAM (노트북)', '"SLAM 다시 시작" 때 적용 — 지도가 지워지니 저장 먼저', [
+        ('/slam_toolbox', 'resolution', '지도 해상도 (칸 크기)', 0.02, 0.10, 0.01, 0.05, 'm'),
+        ('/slam_toolbox', 'max_laser_range', '라이다 최대 사용 거리', 2.0, 12.0, 0.5, 8.0, 'm'),
+        ('/slam_toolbox', 'minimum_travel_distance', '이만큼 움직이면 스캔 추가', 0.0, 0.5, 0.05, 0.10, 'm'),
+        ('/slam_toolbox', 'minimum_travel_heading', '이만큼 돌면 스캔 추가', 0.0, 0.5, 0.05, 0.10, 'rad'),
+        ('/slam_toolbox', 'minimum_time_interval', '스캔 최소 간격', 0.0, 1.0, 0.05, 0.2, 's'),
+        ('/slam_toolbox', 'map_update_interval', '지도 그림 갱신 주기', 0.5, 10.0, 0.5, 2.0, 's'),
+        ('/slam_toolbox', 'do_loop_closing', '루프 클로징 (한 바퀴 돌면 지도 맞추기)', 0, 0, 0, True, ''),
+    ]),
+    ('패드 · 손짓 (노트북)', '"다시 시작" 때 적용 (노드가 live_params 를 내놓으면 실시간)', [
+        ('/pad_teleop', 'deadzone', '스틱 데드존', 0.0, 0.3, 0.01, 0.08, ''),
+        ('/pad_teleop', 'height_rate', '몸 높이 바뀌는 속도 (RT/LT)', 0.01, 0.15, 0.01, 0.05, 'm/s'),
+        ('/gesture', 'process_hz', '손짓 처리 주기', 1.0, 30.0, 1.0, 15.0, 'Hz'),
+        ('/gesture', 'min_score', '손짓 최소 확신도', 0.3, 1.0, 0.05, 0.6, ''),
+        ('/gesture', 'hold_s', '손짓을 이만큼 유지해야 인정', 0.1, 2.0, 0.1, 0.6, 's'),
+    ]),
 ]
-AVOID = [
-    ('corridor_margin_m', '직진 통로 여유 폭', 0.0, 0.5, 0.01, 0.12, 'm'),
-    ('nav_hold_s', '막힌 뒤 Nav2 유지', 0.0, 10.0, 0.5, 2.0, 's'),
-    ('nav_replan_s', 'Nav2 경로 다시 계산 주기', 0.1, 3.0, 0.1, 0.5, 's'),
-]
-RPP = [
-    ('FollowPath.desired_linear_vel', '우회 주행 속도', 0.1, 1.0, 0.05, 0.7, 'm/s'),
-    ('FollowPath.lookahead_dist', '앞보기 거리', 0.2, 2.0, 0.05, 0.6, 'm'),
-    ('FollowPath.min_lookahead_dist', '앞보기 최소', 0.1, 1.5, 0.05, 0.3, 'm'),
-    ('FollowPath.max_lookahead_dist', '앞보기 최대', 0.3, 3.0, 0.05, 1.2, 'm'),
-    ('FollowPath.rotate_to_heading_angular_vel', '제자리 회전 속도', 0.1, 2.5, 0.1, 1.0, 'rad/s'),
-    ('FollowPath.max_angular_accel', '최대 회전 가속', 0.5, 6.0, 0.1, 3.0, 'rad/s²'),
-    ('FollowPath.regulated_linear_scaling_min_speed', '곡선에서 최소 속도', 0.05, 0.7, 0.05, 0.25, 'm/s'),
-    ('FollowPath.min_approach_linear_velocity', '목표 근처 최소 속도', 0.0, 0.5, 0.05, 0.1, 'm/s'),
-]
-COSTMAP = [
-    ('inflation_layer.inflation_radius', '장애물 팽창 반경', 0.1, 1.0, 0.05, 0.40, 'm'),
-    ('inflation_layer.cost_scaling_factor', '팽창 비용 감쇠', 0.5, 10.0, 0.5, 4.0, ''),
-]
-BALANCE = [   # balance_node — 로봇이 live_params 로 연 것만, disarmed 일 때만 (comms 2026-10-13_1200)
-    ('th_trim_deg', '균형점 보정 (+ = 뒤로)', -5.0, 5.0, 0.1, -1.2, '°'),
-    ('tune.yaw_kd', '회전 D 게인', 0.0, 0.5, 0.01, 0.15, ''),
-    ('tune.yaw_ki', '회전 I 게인', 0.0, 3.0, 0.1, 1.0, ''),
-    ('tune.accel_max', '최대 가속', 0.2, 1.5, 0.05, 0.8, 'm/s²'),
-    ('tune.jerk_max', '최대 저크 (S 곡선)', 0.0, 10.0, 0.5, 3.0, 'm/s³'),
-    ('tune.jump_min_v', '점프 최소 속도', 0.1, 0.5, 0.05, 0.2, 'm/s'),
-    ('tune.jump_max_v', '점프 최대 속도', 0.2, 0.8, 0.05, 0.4, 'm/s'),
-]
-PAD = [
-    ('vx_max', '패드 최대 전진 속도', 0.1, 1.0, 0.05, 0.7, 'm/s'),
-    ('wz_max', '패드 최대 회전 속도', 0.2, 3.0, 0.1, 2.0, 'rad/s'),
-    ('deadzone', '스틱 데드존', 0.0, 0.3, 0.01, 0.08, ''),
-    ('height_rate', '몸 높이 변화 속도', 0.01, 0.15, 0.01, 0.05, 'm/s'),
-]
-GESTURE = [
-    ('process_hz', '손짓 처리 주기', 1.0, 30.0, 1.0, 15.0, 'Hz'),
-    ('min_score', '최소 확신도', 0.3, 1.0, 0.05, 0.6, ''),
-    ('hold_s', '손짓 유지 시간', 0.1, 2.0, 0.1, 0.6, 's'),
-]
-# 실시간 그룹: (제목, 대상 노드들, 표, 설명)
-LIVE_GROUPS = [
-    ('사람 추종', ['/person_follow'], FOLLOW, '로봇 person_follow — 바로 반영'),
-    ('장애물 회피 — 추종 쪽', ['/person_follow'], AVOID, '직진 통로가 막히면 Nav2 로 우회'),
-    ('장애물 회피 — Nav2 RPP', ['/controller_server'], RPP, '우회 경로 따라가기 (Regulated Pure Pursuit)'),
-    ('장애물 회피 — 코스트맵', ['/local_costmap/local_costmap', '/global_costmap/global_costmap'], COSTMAP,
-     '로컬·글로벌 코스트맵 둘 다'),
-]
+# 소스에서 실시간 반영이 확인된 것 (add_on_set_parameters_callback / Nav2 동적 파라미터)
+KNOWN_LIVE = {
+    PF: {'follow_dist_m', 'vx_max', 'wz_max', 'occluded_s', 'search_wz', 'appearance_min', 'use_nav', 'nav_replan_s',
+         'reacquire_min', 'grace_s', 'legs_only_s', 'max_gate_m', 'predict_s', 'corridor_margin_m', 'nav_hold_s',
+         'bearing_tol_deg'},
+    RPP: {'FollowPath.desired_linear_vel', 'FollowPath.rotate_to_heading_angular_vel',
+          'FollowPath.regulated_linear_scaling_min_speed', 'FollowPath.min_approach_linear_velocity'},
+    LCM: {'inflation_layer.inflation_radius'},
+    '/cmd_mux': {'lidar_limit'},
+}
+MIRROR = {LCM: [GCM]}                       # 로컬 코스트맵 값을 글로벌에도
+RESTART = {'/pad_teleop': 'pad', '/gesture': 'gesture', '/slam_toolbox': 'slam'}   # 노트북에서 띄우는 노드
+ASK_LIVE = ['/balance', '/pad_teleop', '/gesture', '/person_detector', '/leg_detector', PF]   # live_params 물어볼 노드
+DISARMED_ONLY = {'/balance'}
 
 
 # ------------------------------------------------------------------ ROS (뒤 스레드)
@@ -121,10 +130,14 @@ def _from_pv(p):
             ParameterType.PARAMETER_STRING_ARRAY: list(p.string_array_value)}.get(p.type)
 
 
+def _fmt(v):
+    return str(v) if isinstance(v, bool) else f'{v:g}'
+
+
 class Ros(QtCore.QObject):
     """rclpy 노드를 뒤 스레드에서 돌린다. 결과는 Qt 신호로 GUI 스레드에 넘긴다."""
     graph = QtCore.pyqtSignal(set)                  # 지금 보이는 노드 이름들
-    params = QtCore.pyqtSignal(str, dict)            # 노드, {이름: 값}
+    params = QtCore.pyqtSignal(str, dict)            # 노드, {이름: 값 | None (없음)}
     done = QtCore.pyqtSignal(str, bool, str)         # 무엇, 성공, 메시지
     topic = QtCore.pyqtSignal(str, str)              # 토픽, 내용
     mode = QtCore.pyqtSignal(str)                    # balance mode (disarmed | stand | balance | fault | '' = 안 들어옴)
@@ -158,11 +171,11 @@ class Ros(QtCore.QObject):
             pass
 
     def _state(self, m):
-        self._cs = (time.monotonic(), m.mode, m.fault, m.pitch, m.v, m.vx_cmd, m.wz_cmd)
+        self._cs = (time.monotonic(), m.mode, m.fault, m.pitch, m.v)
 
     def _emit_state(self):
         if self._cs:
-            t, mode, fault, pitch, v, vx, wz = self._cs
+            t, mode, fault, pitch, v = self._cs
             if time.monotonic() - t < 1.5:
                 s = f'{mode}' + (f' ({fault})' if fault else '') + f' · 기울기 {pitch*57.3:+.1f}° · 속도 {v:+.2f} m/s'
                 self.topic.emit('controller/state', s)
@@ -197,12 +210,12 @@ class Ros(QtCore.QObject):
             if on_ok:
                 on_ok(r)
             else:
-                ok = getattr(r, 'success', True)
-                self.done.emit(what, ok, getattr(r, 'message', ''))
+                self.done.emit(what, getattr(r, 'success', True), getattr(r, 'message', ''))
         f.add_done_callback(cb)
 
     def get_params(self, node, names):
-        req = GetParameters.Request(names=list(names))
+        names = list(names)
+        req = GetParameters.Request(names=names)
 
         def ok(r):
             vals = {n: (None if v.type == ParameterType.PARAMETER_NOT_SET else _from_pv(v)) for n, v in zip(names, r.values)}
@@ -215,10 +228,10 @@ class Ros(QtCore.QObject):
 
         def ok(r):
             bad = [f'{n}: {x.reason}' for n, x in zip(vals, r.results) if not x.successful]
-            self.done.emit(f'적용 {node}', not bad, '; '.join(bad) or ', '.join(f'{n}={v:g}' if not isinstance(v, bool)
-                                                                                  else f'{n}={v}' for n, v in vals.items()))
-            if not bad:
-                self.params.emit(node, dict(vals))
+            self.done.emit(f'적용 {node}', not bad, '; '.join(bad) or ', '.join(f'{n}={_fmt(v)}' for n, v in vals.items()))
+            good = {n: v for (n, v), x in zip(vals.items(), r.results) if x.successful}
+            if good:
+                self.params.emit(node, good)
         self._call(SetParameters, f'{node}/set_parameters', req, f'적용 {node}', ok)
 
     def set_bool(self, srv, v, what):
@@ -268,7 +281,7 @@ def launch(name, cmd):
 
 
 def ros_args(vals):
-    return ' '.join(f'-p {k}:={v}' for k, v in vals.items())
+    return ' '.join(f'-p {k}:={str(v).lower() if isinstance(v, bool) else v}' for k, v in vals.items())
 
 
 # 노트북 쪽 기능: 키 → (이름, 프로세스 패턴, 다른 컴퓨터에서 돌면 막을 ROS 노드)
@@ -296,136 +309,129 @@ class Lamp(QtWidgets.QLabel):
 
 
 class ParamRow(QtWidgets.QWidget):
-    changed = QtCore.pyqtSignal(str, float)
+    """한 파라미터: 슬라이더 + 숫자 (bool 이면 체크박스) + 적용 시점 표시 + 로봇의 지금 값."""
+    changed = QtCore.pyqtSignal(object)
+    TAGS = {'live': ('실시간', '#27ae60'), 'restart': ('재시작 때', '#2980b9'),
+            'locked': ('잠김', '#999'), 'absent': ('노드 꺼짐', '#999')}
 
-    def __init__(self, name, label, lo, hi, step, default, unit):
+    def __init__(self, node, name, label, lo, hi, step, default, unit):
         super().__init__()
-        self.name, self.default, self.step, self.lo = name, default, step, lo
-        self.robot = None
-        self.touched = False             # 사용자가 바꾼 칸은 로봇 값으로 덮어쓰지 않는다
+        self.node, self.name, self.default = node, name, default
+        self.lo, self.step = lo, step
+        self.is_bool = isinstance(default, bool)
+        self.robot, self.touched, self.kind = None, False, 'absent'
         h = QtWidgets.QHBoxLayout(self)
         h.setContentsMargins(0, 1, 0, 1)
         lab = QtWidgets.QLabel(label)
-        lab.setToolTip(name)
-        lab.setMinimumWidth(170)
-        self.slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-        self.slider.setRange(0, int(round((hi - lo) / step)))
-        self.spin = QtWidgets.QDoubleSpinBox()
-        dec = max(0, len(f'{step:g}'.split('.')[1]) if '.' in f'{step:g}' else 0)
-        self.spin.setDecimals(dec)
-        self.spin.setRange(lo, hi)
-        self.spin.setSingleStep(step)
-        self.spin.setSuffix(f' {unit}' if unit else '')
-        self.spin.setFixedWidth(120)
-        self.cur = QtWidgets.QLabel('로봇: —')
-        self.cur.setMinimumWidth(95)
-        self.cur.setStyleSheet('color:#888')
+        lab.setToolTip(f'{node}  {name}  (기본 {_fmt(default)})')
+        lab.setMinimumWidth(250)
         h.addWidget(lab)
-        h.addWidget(self.slider, 1)
-        h.addWidget(self.spin)
+        if self.is_bool:
+            self.box = QtWidgets.QCheckBox('켜기')
+            self.box.toggled.connect(self._user)
+            h.addWidget(self.box, 1)
+        else:
+            self.slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+            self.slider.setRange(0, int(round((hi - lo) / step)))
+            self.spin = QtWidgets.QDoubleSpinBox()
+            self.spin.setDecimals(len(f'{step:g}'.split('.')[1]) if '.' in f'{step:g}' else 0)
+            self.spin.setRange(lo, hi)
+            self.spin.setSingleStep(step)
+            self.spin.setSuffix(f' {unit}' if unit else '')
+            self.spin.setFixedWidth(120)
+            self.slider.valueChanged.connect(lambda i: self.spin.setValue(self.lo + i * self.step))
+            self.spin.valueChanged.connect(self._user)
+            h.addWidget(self.slider, 1)
+            h.addWidget(self.spin)
+        self.tag = QtWidgets.QLabel()
+        self.tag.setFixedWidth(70)
+        self.tag.setAlignment(QtCore.Qt.AlignCenter)
+        self.cur = QtWidgets.QLabel('지금: —')
+        self.cur.setFixedWidth(95)
+        h.addWidget(self.tag)
         h.addWidget(self.cur)
-        self.slider.valueChanged.connect(lambda i: self.spin.setValue(self.lo + i * self.step))
-        self.spin.valueChanged.connect(self._spin)
         self.set_value(default)
+        self.set_kind('absent', '')
 
-    def _spin(self, v):
+    def _sync_slider(self, v):
         self.slider.blockSignals(True)
         self.slider.setValue(int(round((v - self.lo) / self.step)))
         self.slider.blockSignals(False)
-        self._mark()
+
+    def _user(self, v):
+        if not self.is_bool:
+            self._sync_slider(v)
         self.touched = True
-        self.changed.emit(self.name, v)
+        self._mark()
+        self.changed.emit(self)
 
     def value(self):
-        return self.spin.value()
+        return self.box.isChecked() if self.is_bool else self.spin.value()
 
     def set_value(self, v):
-        self.spin.blockSignals(True)
-        self.spin.setValue(v)
-        self.spin.blockSignals(False)
-        self._spin_silent(v)
-
-    def _spin_silent(self, v):
-        self.slider.blockSignals(True)
-        self.slider.setValue(int(round((v - self.lo) / self.step)))
-        self.slider.blockSignals(False)
+        if self.is_bool:
+            self.box.blockSignals(True)
+            self.box.setChecked(bool(v))
+            self.box.blockSignals(False)
+        else:
+            self.spin.blockSignals(True)
+            self.spin.setValue(float(v))
+            self.spin.blockSignals(False)
+            self._sync_slider(float(v))
         self._mark()
 
     def set_robot(self, v):
-        self.robot = v
-        if not self.touched and v is not None:   # 처음엔 로봇의 지금 값을 보여 준다
-            self.set_value(v)
-        self.cur.setText('로봇: —' if v is None else f'로봇: {v:g}')
+        if v is None or isinstance(v, (list, str)):
+            return
+        self.robot = bool(v) if self.is_bool else float(v)
+        if not self.touched:            # 처음엔 지금 값을 보여 준다
+            self.set_value(self.robot)
+        self.cur.setText(f'지금: {_fmt(self.robot)}')
         self._mark()
+
+    def set_kind(self, kind, reason):
+        self.kind = kind
+        text, color = self.TAGS[kind]
+        self.tag.setText(text)
+        self.tag.setStyleSheet(f'color:white; background:{color}; border-radius:3px; padding:1px')
+        self.tag.setToolTip(reason)
+        self.setEnabled(kind in ('live', 'restart', 'absent'))
+
+    def differs(self):
+        return self.robot is not None and (self.value() != self.robot if self.is_bool
+                                           else abs(self.value() - self.robot) > 1e-6)
 
     def _mark(self):
         if self.robot is None:
             self.cur.setStyleSheet('color:#888')
-        elif abs(self.robot - self.spin.value()) > 1e-6:
+        elif self.differs():
             self.cur.setStyleSheet('color:#e67e22; font-weight:bold')     # 아직 적용 안 됨
         else:
             self.cur.setStyleSheet('color:#27ae60')
 
 
 class Group(QtWidgets.QGroupBox):
-    """파라미터 묶음 — live: 노드에 바로 보냄 / 아니면 다음 시작 때 쓰는 값."""
-
-    def __init__(self, title, nodes, table, note, gui, live=True):
+    def __init__(self, title, note, specs, gui):
         super().__init__(title)
-        self.nodes, self.gui, self.live = nodes, gui, live
-        v = QtWidgets.QVBoxLayout(self)
-        self.note = n = QtWidgets.QLabel(note)
-        n.setStyleSheet('color:#888')
-        n.setWordWrap(True)
-        v.addWidget(n)
-        self.rows = {}
-        for spec in table:
+        self.gui = gui
+        self.v = QtWidgets.QVBoxLayout(self)
+        self.note = QtWidgets.QLabel(note)
+        self.note.setStyleSheet('color:#888')
+        self.note.setWordWrap(True)
+        self.v.addWidget(self.note)
+        self.rows = []
+        for spec in specs:
             r = ParamRow(*spec)
-            r.changed.connect(self._changed)
-            self.rows[spec[0]] = r
-            v.addWidget(r)
-        self.pending = {}
-        self.timer = QtCore.QTimer(self, singleShot=True, interval=300)
-        self.timer.timeout.connect(self.flush)
+            r.changed.connect(gui.on_row_changed)
+            self.rows.append(r)
+            self.v.addWidget(r)
 
-    def _changed(self, name, val):
-        self.pending[name] = val
-        if self.live and self.gui.auto.isChecked():
-            self.timer.start()
-
-    def flush(self, all_rows=False):
-        if not self.live or not self.isEnabled():
-            self.pending.clear()
-            return
-        vals = {n: r.value() for n, r in self.rows.items() if r.isEnabled()} if all_rows else \
-            {n: v for n, v in self.pending.items() if self.rows[n].isEnabled()}
-        self.pending.clear()
-        if vals:
-            for nd in self.nodes:
-                self.gui.ros.set_params(nd, vals)
-
-    def read(self):
-        if self.live:
-            for nd in self.nodes:
-                self.gui.ros.get_params(nd, list(self.rows))
-
-    def on_params(self, node, vals):
-        if node != self.nodes[0]:
-            return
-        for n, v in vals.items():
-            if n in self.rows and isinstance(v, (int, float)) and not isinstance(v, bool):
-                self.rows[n].set_robot(float(v))
-
-    def defaults(self):
-        for r in self.rows.values():
-            r.set_value(r.default)
-            r.touched = True
-            self.pending[r.name] = r.default
-        if self.live and self.gui.auto.isChecked():
-            self.timer.start()
-
-    def values(self):
-        return {n: r.value() for n, r in self.rows.items()}
+    def add_buttons(self, *buttons):
+        h = QtWidgets.QHBoxLayout()
+        for b in buttons:
+            h.addWidget(b)
+        h.addStretch()
+        self.v.addLayout(h)
 
 
 # ------------------------------------------------------------------ 창
@@ -435,15 +441,15 @@ class Gui(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle('C-WANG 관제')
-        self.resize(980, 760)
+        self.resize(1040, 780)
         self.ros = Ros()
         QtWidgets.QApplication.instance().aboutToQuit.connect(self.ros.shutdown)
         self.pool = ThreadPoolExecutor(4)
         self.nodes = set()
-        self.robot_ok = None
         self.robot_info = {}
-        self.follow_status = ''
-        self.follow_on = False
+        self.live_params = {}          # 노드 → live_params 에 적힌 이름들
+        self.bal_mode = ''
+        self.pending = {}              # 노드 → {이름: 값}
 
         w = QtWidgets.QWidget()
         self.setCentralWidget(w)
@@ -462,6 +468,8 @@ class Gui(QtWidgets.QMainWindow):
         self.ros.mode.connect(self._on_mode)
         self.sshres.connect(self._on_ssh)
 
+        self.send_timer = QtCore.QTimer(self, singleShot=True, interval=300)
+        self.send_timer.timeout.connect(self.flush)
         self.poll = QtCore.QTimer(self, interval=1000)
         self.poll.timeout.connect(self._poll_local)
         self.poll.start()
@@ -535,12 +543,10 @@ class Gui(QtWidgets.QMainWindow):
         h.addStretch()
         v.addLayout(h)
 
-        # 로봇
         box = QtWidgets.QGroupBox('로봇 (젯슨)')
         g = QtWidgets.QGridLayout(box)
         g.setColumnStretch(2, 1)
-        self.lamp = {}
-        self.note = {}
+        self.lamp, self.note = {}, {}
         rows = [
             ('stack', '사람 추종 스택', [self._btn('켜기', lambda: self.robot_cmd('stack_on')),
                                     self._btn('끄기', lambda: self.robot_cmd('stack_off'))]),
@@ -549,8 +555,8 @@ class Gui(QtWidgets.QMainWindow):
                     '/follow/enable', False, '추종 끄기'))]),
             ('hold', '일시 정지 (= 손바닥)', [self._btn('정지', lambda: self.ros.set_bool('/follow/hold', True, '일시 정지')),
                                         self._btn('재개', lambda: self.ros.set_bool('/follow/hold', False, '재개'))]),
-            ('nav', '장애물 우회 (Nav2)', [self._btn('켜기', lambda: self.ros.set_params('/person_follow', {'use_nav': True})),
-                                        self._btn('끄기', lambda: self.ros.set_params('/person_follow', {'use_nav': False}))]),
+            ('nav', '장애물 우회 (Nav2)', [self._btn('켜기', lambda: self.ros.set_params(PF, {'use_nav': True})),
+                                        self._btn('끄기', lambda: self.ros.set_params(PF, {'use_nav': False}))]),
             ('lidar', '장애물 앞 정지·감속 (라이다)', [
                 self._btn('켜기', lambda: self.ros.set_params('/cmd_mux', {'lidar_limit': True})),
                 self._btn('끄기', self.lidar_off, '로봇 기본 = 꺼짐. 켜면 자기 다리·바퀴를 장애물로 잡아 못 갈 수 있다 (2026-10-09)')]),
@@ -560,7 +566,6 @@ class Gui(QtWidgets.QMainWindow):
             self.note[k] = self._row(g, i, t, self.lamp[k], b)
         v.addWidget(box)
 
-        # 노트북
         box = QtWidgets.QGroupBox('이 노트북')
         g = QtWidgets.QGridLayout(box)
         g.setColumnStretch(2, 1)
@@ -591,16 +596,17 @@ class Gui(QtWidgets.QMainWindow):
         self.auto = QtWidgets.QCheckBox('바꾸면 바로 적용')
         self.auto.setChecked(True)
         h.addWidget(self.auto)
-        h.addWidget(self._btn('지금 값 모두 적용', lambda: [g.flush(True) for g in self.groups]))
-        h.addWidget(self._btn('로봇에서 다시 읽기', self.read_all))
+        h.addWidget(self._btn('지금 값 모두 적용', self.apply_all))
+        h.addWidget(self._btn('다시 읽기', self.read_all))
         h.addWidget(self._btn('기본값으로', self.defaults_all))
         h.addStretch()
         h.addWidget(self._btn('프리셋 저장', self.save_preset))
         h.addWidget(self._btn('프리셋 불러오기', self.load_preset))
         h.addWidget(self._btn('바뀐 값 복사 (comms 용)', self.copy_diff, '로봇 설정에 영구 반영하려면 comms 로 요청'))
         v.addLayout(h)
-        lg = QtWidgets.QLabel('주황 = 아직 로봇에 반영 안 됨, 초록 = 반영됨. 로봇을 재시작하면 기본값으로 돌아간다 '
-                              '(영구 반영은 "바뀐 값 복사" → comms/to-robot).')
+        lg = QtWidgets.QLabel('게인은 여기 없다 (최적화된 값). <b>실시간</b> = 바로 반영 · <b>재시작 때</b> = 노트북에서 다시 켤 때 · '
+                              '<b>잠김</b> = 노드가 실시간 변경을 아직 안 받음. 지금 값이 주황이면 아직 반영 안 됨. '
+                              '로봇 노드를 다시 켜면 설정 파일 값으로 돌아간다 (영구 반영은 "바뀐 값 복사" → comms).')
         lg.setStyleSheet('color:#888')
         lg.setWordWrap(True)
         v.addWidget(lg)
@@ -608,18 +614,19 @@ class Gui(QtWidgets.QMainWindow):
         sa.setWidgetResizable(True)
         inner = QtWidgets.QWidget()
         iv = QtWidgets.QVBoxLayout(inner)
-        self.groups = [Group(t, n, tb, note, self) for t, n, tb, note in LIVE_GROUPS]
-        self.g_bal = Group('균형 (해제 상태에서만)', ['/balance'], BALANCE, '', self)
-        self.groups.append(self.g_bal)
-        self.bal_live, self.bal_mode = None, ''
-        self._gate_bal()
-        self.g_pad = Group('패드 (pad_teleop)', [], PAD, '노트북 — "다시 시작" 또는 다음 켤 때 적용', self, live=False)
-        self.g_gest = Group('손짓 (gesture_node)', [], GESTURE, '노트북 — "다시 시작" 또는 다음 켤 때 적용', self, live=False)
-        for g in self.groups + [self.g_pad, self.g_gest]:
+        self.groups = [Group(t, n, s, self) for t, n, s in GROUPS]
+        self.rows = [r for g in self.groups for r in g.rows]
+        gmap = {g.title(): g for g in self.groups}
+        gmap['SLAM (노트북)'].add_buttons(self._btn('SLAM 다시 시작 (지도 지워짐)', self.slam_restart),
+                                       self._btn('지도 저장', self.slam_save))
+        gmap['패드 · 손짓 (노트북)'].add_buttons(self._btn('패드 다시 시작', lambda: self.local_restart('pad')),
+                                           self._btn('손짓 다시 시작', lambda: self.local_restart('gesture')))
+        for g in self.groups:
             iv.addWidget(g)
         iv.addStretch()
         sa.setWidget(inner)
         v.addWidget(sa, 1)
+        self.update_kinds()
         return w
 
     # ---------------- 로그 탭
@@ -654,8 +661,7 @@ class Gui(QtWidgets.QMainWindow):
         self.logsel.clear()
         self.logsel.addItem('이 창의 기록')
         self.logsel.addItems([os.path.basename(f) for f in files])
-        i = self.logsel.findText(cur)
-        self.logsel.setCurrentIndex(max(i, 0))
+        self.logsel.setCurrentIndex(max(self.logsel.findText(cur), 0))
         self.logsel.blockSignals(False)
         if self.logsel.currentIndex() == 0:
             self.logview.setPlainText('\n'.join(self.events))
@@ -679,7 +685,7 @@ class Gui(QtWidgets.QMainWindow):
 
     def robot_cmd(self, k):
         if k == 'stack_on':
-            if '/person_follow' in self.nodes:
+            if PF in self.nodes:
                 self.log('사람 추종 스택 이미 켜짐')
                 return
             self.ssh('추종 스택 켜기', 'setsid nohup ~/gen2_ws/logs/run_follow.sh > ~/gen2_ws/logs/run_follow.out 2>&1 '
@@ -694,12 +700,10 @@ class Gui(QtWidgets.QMainWindow):
 
     def _on_ssh(self, what, code, out):
         if what == '_poll':
-            self.robot_ok = code == 0
-            if self.robot_ok:
+            if code == 0:
                 p = (out.split() + ['?'] * 3)[:3]
                 self.robot_info = {'bench': p[0], 'balance': p[1], 'slam': p[2] == 'slam'}
-                ok = p[0] == 'active' and p[1] == 'active'
-                self.l_robot.set('on' if ok else 'warn')
+                self.l_robot.set('on' if p[0] == 'active' and p[1] == 'active' else 'warn')
                 self.t_robot.setText(f'로봇 연결됨 · bench {p[0]} · balance {p[1]}'
                                      + (' · ⚠ 로봇에서 SLAM 이 돎' if self.robot_info['slam'] else ''))
             else:
@@ -712,6 +716,21 @@ class Gui(QtWidgets.QMainWindow):
     def _other_pc(self, k):
         node = LOCAL[k][2]
         return node and node in self.nodes and not running(LOCAL[k][1])
+
+    def local_values(self, node):
+        return {r.name: r.value() for r in self.rows if r.node == node}
+
+    def write_slam_yaml(self):
+        try:
+            with open(SLAM_BASE) as f:
+                cfg = yaml.safe_load(f)
+        except OSError as e:
+            self.log(f'SLAM 설정 원본을 못 읽음: {e}', err=True)
+            return False
+        cfg['slam_toolbox']['ros__parameters'].update(self.local_values('/slam_toolbox'))
+        with open(SLAM_YAML, 'w') as f:
+            yaml.safe_dump(cfg, f)
+        return True
 
     def local_on(self, k):
         name, pat, _ = LOCAL[k]
@@ -726,17 +745,19 @@ class Gui(QtWidgets.QMainWindow):
         if k == 'pad':
             if not running('lib/joy/joy_node'):
                 launch('joy_node', 'ros2 run joy joy_node --ros-args -p autorepeat_rate:=20.0')
-            launch('pad_teleop', f'ros2 run gen2_tools pad_teleop --ros-args {ros_args(self.g_pad.values())}')
+            launch('pad_teleop', f'ros2 run gen2_tools pad_teleop --ros-args {ros_args(self.local_values("/pad_teleop"))}')
             if not glob.glob('/dev/input/js*'):
                 self.log('게임패드가 안 보임 (블루투스 연결 확인)', err=True)
         elif k == 'gesture':
             launch('gesture', f'{DESK}/venv_vision/bin/python -m gen2_tools.gesture_node --ros-args '
-                              f'{ros_args(self.g_gest.values())}')
+                              f'{ros_args(self.local_values("/gesture"))}')
         elif k == 'slam':
             if self.robot_info.get('slam'):
                 self.log('로봇에서 SLAM 이 돌고 있음 — 둘이면 지도·TF 가 싸운다', err=True)
                 return
-            launch('slam', 'ros2 launch gen2_bringup slam.launch.py')
+            if not self.write_slam_yaml():
+                return
+            launch('slam', f'ros2 launch {DESK}/slam_gui.launch.py params:={SLAM_YAML}')
         elif k == 'rviz':
             launch('rviz', f'rviz2 -d {DESK}/gen2_desktop.rviz')
         elif k == 'hud':
@@ -752,7 +773,7 @@ class Gui(QtWidgets.QMainWindow):
             kill('lib/gen2_tools/pad_teleop')
             kill('lib/joy/joy_node')
         elif k == 'slam':
-            kill('[a]sync_slam_toolbox_node|[g]en2_bringup slam.launch')
+            kill('[a]sync_slam_toolbox_node|[g]en2_bringup slam.launch|[s]lam_gui.launch')
         elif k == 'dash':
             kill('desk_dash_robot.py|wifi -r')
         else:
@@ -768,7 +789,14 @@ class Gui(QtWidgets.QMainWindow):
             kill('lib/gen2_tools/pad_teleop')
         else:
             kill(LOCAL[k][1])
-        QtCore.QTimer.singleShot(1200, lambda: self.local_on(k))
+        QtCore.QTimer.singleShot(1500, lambda: self.local_on(k))
+
+    def slam_restart(self):
+        if running(LOCAL['slam'][1]) and QtWidgets.QMessageBox.question(
+                self, 'SLAM 다시 시작', '지금 지도가 지워집니다 (먼저 "지도 저장"). 다시 시작할까요?') != QtWidgets.QMessageBox.Yes:
+            return
+        self.local_off('slam')
+        QtCore.QTimer.singleShot(2500, lambda: self.local_on('slam'))
 
     def slam_reset(self):
         self.pool.submit(lambda: self._svc_cli("ros2 service call /slam_toolbox/reset slam_toolbox/srv/Reset '{}'",
@@ -794,7 +822,7 @@ class Gui(QtWidgets.QMainWindow):
             self.ros.set_params('/cmd_mux', {'lidar_limit': False})
 
     def all_up(self):
-        if '/person_follow' not in self.nodes:
+        if PF not in self.nodes:
             self.robot_cmd('stack_on')
         for k in ('pad', 'gesture', 'rviz', 'hud', 'dash'):
             if not running(LOCAL[k][1]):
@@ -810,91 +838,95 @@ class Gui(QtWidgets.QMainWindow):
     def _poll_local(self):
         for k, (_, pat, node) in LOCAL.items():
             on = running(pat)
+            other = self._other_pc(k)
             if k == 'pad':
                 joy = running('lib/joy/joy_node')
                 pad = bool(glob.glob('/dev/input/js*'))
-                self.lamp[k].set('on' if on and joy and pad else 'warn' if on or joy else 'off')
+                self.lamp[k].set('on' if on and joy and pad else 'warn' if on or joy else 'err' if other else 'off')
                 self.note[k].setText(('켜짐' if on else '꺼짐') + (' · 게임패드 연결됨' if pad else ' · 게임패드 없음')
-                                     + (' · ⚠ 다른 컴퓨터에서 패드가 돎' if self._other_pc(k) else ''))
+                                     + (' · ⚠ 다른 컴퓨터에서 패드가 돎' if other else ''))
             else:
-                other = self._other_pc(k)
                 self.lamp[k].set('on' if on else 'err' if other else 'off')
                 self.note[k].setText('켜짐' if on else '⚠ 다른 컴퓨터에서 돎' if other else '꺼짐')
 
     def _on_graph(self, names):
+        appeared = {n for n in names - self.nodes}
         self.nodes = names
-        stack = '/person_follow' in names
+        stack = PF in names
         self.lamp['stack'].set('on' if stack else 'off')
         parts = [n for n, k in (('사람검출', '/person_detector'), ('다리', '/leg_detector'),
-                                ('추종', '/person_follow'), ('Nav2', '/controller_server')) if k in names]
+                                ('추종', PF), ('Nav2', RPP)) if k in names]
         self.note['stack'].setText(' · '.join(parts) if parts else '꺼짐')
-        self.l_ros.set('on' if '/balance_node' in names or any('balance' in n for n in names) else
-                       'warn' if names - {'/gcs_gui'} else 'off')
+        if not any('balance' in n for n in names):
+            self.l_ros.set('off')
         if stack:
-            self.ros.get_params('/person_follow', ['use_nav'])
+            self.ros.get_params(PF, ['use_nav'])
         else:
             for k in ('follow', 'hold', 'nav'):
                 self.lamp[k].set('off')
                 self.note[k].setText('추종 스택 꺼짐')
-        if '/balance' in names:
-            self.ros.get_params('/balance', ['live_params'])
-        elif self.bal_live is not None:
-            self.bal_live = None
-            self._gate_bal()
         if '/cmd_mux' in names:
             self.ros.get_params('/cmd_mux', ['lidar_limit'])
         else:
             self.lamp['lidar'].set('off')
             self.note['lidar'].setText('cmd_mux 안 보임')
-        self.show_log() if self.logsel.currentIndex() else None
+        for nd in ASK_LIVE:
+            if nd in names:
+                self.ros.get_params(nd, ['live_params'])
+            else:
+                self.live_params.pop(nd, None)
+        if appeared & {r.node for r in self.rows}:   # 새로 뜬 노드: 지금 값 읽기
+            self.read_all(only=appeared)
+        self.update_kinds()
+        if self.logsel.currentIndex():
+            self.show_log()
 
     def _on_params(self, node, vals):
-        if node == '/balance' and 'live_params' in vals:
+        if node in ASK_LIVE and 'live_params' in vals:
             lp = vals['live_params']
             live = set(lp) if isinstance(lp, list) else set()
-            if live != self.bal_live:
-                self.bal_live = live
-                self._gate_bal()
-        if node == '/person_follow' and vals.get('use_nav') is not None:
+            if live != self.live_params.get(node):
+                self.live_params[node] = live
+                self.update_kinds()
+        if node == PF and vals.get('use_nav') is not None:
             self.lamp['nav'].set('on' if vals['use_nav'] else 'warn')
             self.note['nav'].setText('켜짐 — 막히면 돌아감' if vals['use_nav'] else '꺼짐 — 직진만')
         if node == '/cmd_mux' and vals.get('lidar_limit') is not None:
             # 꺼짐이 로봇 기본 (2026-10-09 사용자: 자기 다리·바퀴가 잡혀 주행이 막힘). 회피는 person_follow 가 한다
             self.lamp['lidar'].set('on' if vals['lidar_limit'] else 'warn')
             self.note['lidar'].setText('켜짐' if vals['lidar_limit'] else '꺼짐 (의도 — 회피는 추종 쪽 Nav2 가 함)')
-        for g in self.groups:
-            g.on_params(node, vals)
+        for r in self.rows:
+            if r.node == node and r.name in vals:
+                r.set_robot(vals[r.name])
 
     def _on_mode(self, m):
         if m != self.bal_mode:
             self.bal_mode = m
-            self._gate_bal()
+            self.update_kinds()
 
-    def _gate_bal(self):
-        """균형 묶음: 로봇이 live_params 로 연 이름만, disarmed 일 때만 켠다 (균형 중 게인 변경 = 넘어짐)."""
-        live, mode = self.bal_live, self.bal_mode
-        ok = bool(live) and mode == 'disarmed'
-        self.g_bal.setEnabled(ok)
-        for n, r in self.g_bal.rows.items():
-            r.setEnabled(ok and n in live)
-        if live is None:
-            msg = '로봇 /balance 가 안 보임'
-        elif not live:
-            msg = '로봇이 아직 실시간 변경을 열지 않음 (live_params 없음 — comms 로 요청함 2026-10-13). 지금 값 표시만.'
-        elif mode != 'disarmed':
-            msg = f'지금 {mode or "상태 모름"} — 해제 (disarmed) 일 때만 바꿀 수 있음 (균형 중에 바꾸면 넘어질 수 있다)'
-        else:
-            msg = '해제 상태 — 바꾸면 바로 반영, 다음 일어서기부터 적용. 로봇이 범위 밖·상태 이상이면 거절'
-        self.g_bal.note.setText(msg)
-        self.g_bal.note.setStyleSheet('color:#27ae60' if ok else 'color:#e67e22')
+    def kind(self, node, name):
+        """(실시간 | 재시작 때 | 잠김 | 노드 꺼짐, 이유)"""
+        live = name in KNOWN_LIVE.get(node, ()) or name in self.live_params.get(node, ())
+        if node in RESTART and not (live and node in self.nodes):
+            return 'restart', '노트북에서 다시 시작할 때 이 값으로 띄운다'
+        if node not in self.nodes:
+            return ('absent', f'{node} 가 안 보임 — 켜지면 실시간으로 바꿀 수 있다') if live or node in KNOWN_LIVE else \
+                ('locked', f'{node} 가 안 보임')
+        if not live:
+            return 'locked', f'{node} 가 이 값을 실시간으로 안 받음 (시작할 때만 읽음) — live_params 로 열어 달라고 요청함'
+        if node in DISARMED_ONLY and self.bal_mode != 'disarmed':
+            return 'locked', f'균형 노드 값은 해제 (disarmed) 일 때만 — 지금 {self.bal_mode or "상태 모름"}'
+        return 'live', '바꾸면 바로 반영'
+
+    def update_kinds(self):
+        for r in self.rows:
+            r.set_kind(*self.kind(r.node, r.name))
 
     def _on_topic(self, t, s):
         if t == 'follow/status':
-            self.follow_status = s
             st = s.split()[0] if s else ''
             self.t_follow.setText(f'추종: {s}')
-            on = st not in ('', 'IDLE')
-            self.lamp['follow'].set('on' if on else 'off')
+            self.lamp['follow'].set('on' if st not in ('', 'IDLE') else 'off')
             self.note['follow'].setText(s or '—')
             hold = st == 'HOLD'
             self.lamp['hold'].set('warn' if hold else 'off')
@@ -903,8 +935,7 @@ class Gui(QtWidgets.QMainWindow):
             self.t_mux.setText(f'명령: {s}')
         elif t == 'controller/state':
             self.t_ros.setText(f'균형: {s}' if s else '균형: 상태 안 들어옴 (/controller/state)')
-            if s:
-                self.l_ros.set('err' if s.startswith('fault') else 'on')
+            self.l_ros.set(('err' if s.startswith('fault') else 'on') if s else 'off')
         elif t == 'gesture/action':
             self.log(f'손짓: {s}')
 
@@ -914,27 +945,57 @@ class Gui(QtWidgets.QMainWindow):
         self.log(f'{what}: {"OK" if ok else "실패"} {msg}', err=not ok)
 
     # ---------------- 튜닝 동작
-    def read_all(self):
-        for g in self.groups:
-            g.read()
+    def on_row_changed(self, r):
+        if r.kind != 'live':
+            return
+        self.pending.setdefault(r.node, {})[r.name] = r.value()
+        if self.auto.isChecked():
+            self.send_timer.start()
+
+    def flush(self):
+        pend, self.pending = self.pending, {}
+        for node, vals in pend.items():
+            vals = {n: v for n, v in vals.items() if self.kind(node, n)[0] == 'live'}
+            if vals:
+                for nd in [node] + MIRROR.get(node, []):
+                    if nd in self.nodes:
+                        self.ros.set_params(nd, vals)
+
+    def apply_all(self):
+        for r in self.rows:
+            if r.kind == 'live':
+                self.pending.setdefault(r.node, {})[r.name] = r.value()
+        self.flush()
+
+    def read_all(self, only=None):
+        by = {}
+        for r in self.rows:
+            if only is None or r.node in only:
+                by.setdefault(r.node, []).append(r.name)
+        for node, names in by.items():
+            if node in self.nodes:
+                self.ros.get_params(node, names)
 
     def defaults_all(self):
-        if QtWidgets.QMessageBox.question(self, '기본값', '모든 튜닝값을 기본값으로 돌릴까요?'
-                                          + ('\n(바로 적용 켜짐: 로봇에도 보냄)' if self.auto.isChecked() else '')) \
-                == QtWidgets.QMessageBox.Yes:
-            for g in self.groups + [self.g_pad, self.g_gest]:
-                g.defaults()
-
-    def _all_groups(self):
-        return {g.title(): g for g in self.groups + [self.g_pad, self.g_gest]}
+        if QtWidgets.QMessageBox.question(self, '기본값', '모든 값을 기본값 (설정 파일 값) 으로 돌릴까요?'
+                                          + ('\n(바로 적용 켜짐: 실시간 칸은 로봇에도 보냄)' if self.auto.isChecked() else '')) \
+                != QtWidgets.QMessageBox.Yes:
+            return
+        for r in self.rows:
+            r.set_value(r.default)
+            r.touched = True
+            self.on_row_changed(r)
 
     def save_preset(self):
         os.makedirs(PRESETS, exist_ok=True)
         f, _ = QtWidgets.QFileDialog.getSaveFileName(self, '프리셋 저장', f'{PRESETS}/{time.strftime("%m%d_%H%M")}.yaml',
                                                      'YAML (*.yaml)')
         if f:
+            data = {}
+            for r in self.rows:
+                data.setdefault(r.node, {})[r.name] = r.value()
             with open(f, 'w') as fh:
-                yaml.safe_dump({t: g.values() for t, g in self._all_groups().items()}, fh, allow_unicode=True)
+                yaml.safe_dump(data, fh, allow_unicode=True)
             self.log(f'프리셋 저장: {f}')
 
     def load_preset(self):
@@ -943,23 +1004,19 @@ class Gui(QtWidgets.QMainWindow):
             return
         with open(f) as fh:
             data = yaml.safe_load(fh) or {}
-        for t, g in self._all_groups().items():
-            for n, v in (data.get(t) or {}).items():
-                if n in g.rows:
-                    g.rows[n].set_value(float(v))
-                    g.rows[n].touched = True
-                    g.pending[n] = float(v)
-            if g.live and self.auto.isChecked():
-                g.flush()
-        self.log(f'프리셋 불러옴: {f}' + (' (로봇에 적용)' if self.auto.isChecked() else ' — "지금 값 모두 적용" 으로 보내기'))
+        n = 0
+        for r in self.rows:
+            v = (data.get(r.node) or {}).get(r.name)
+            if v is not None:
+                r.set_value(v)
+                r.touched = True
+                self.on_row_changed(r)
+                n += 1
+        self.log(f'프리셋 불러옴 ({n} 개): {f}' + ('' if self.auto.isChecked() else ' — "지금 값 모두 적용" 으로 보내기'))
 
     def copy_diff(self):
-        lines = []
-        for t, g in self._all_groups().items():
-            node = g.nodes[0] if g.nodes else ('pad_teleop' if g is self.g_pad else 'gesture_node')
-            for n, r in g.rows.items():
-                if abs(r.value() - r.default) > 1e-9:
-                    lines.append(f'- {node} `{n}`: {r.default:g} → **{r.value():g}**  ({t})')
+        lines = [f'- {r.node} `{r.name}`: {_fmt(r.default)} → **{_fmt(r.value())}**'
+                 for r in self.rows if (r.value() != r.default if r.is_bool else abs(r.value() - r.default) > 1e-9)]
         txt = '\n'.join(lines) or '(기본값과 다른 것 없음)'
         QtWidgets.QApplication.clipboard().setText(txt)
         self.log('바뀐 값 복사함:\n' + txt)

@@ -67,7 +67,7 @@ cp $T/cw $T/wifi $T/slam_reset ~/bin/ && chmod +x ~/bin/cw ~/bin/wifi ~/bin/slam
 cp $T/desk_dash.py $T/desk_dash_robot.py $T/hud.py $T/gen2_desktop.rviz ~/gen2_desk/
 # 관제 GUI (기능 켜기/끄기 + 튜닝): 바탕화면·앱 목록 아이콘 "C-WANG 관제"
 G=~/perseverance/tools/gcs
-cp $G/cw_gui.py ~/gen2_desk/ && cp $G/cw-gui ~/bin/ && chmod +x ~/bin/cw-gui
+cp $G/cw_gui.py $G/slam_gui.launch.py ~/gen2_desk/ && cp $G/cw-gui ~/bin/ && chmod +x ~/bin/cw-gui
 D=$(xdg-user-dir DESKTOP 2>/dev/null || echo ~/Desktop)
 mkdir -p ~/.local/share/applications "$D"
 for f in ~/.local/share/applications/cw-gui.desktop "$D/cw-gui.desktop"; do
