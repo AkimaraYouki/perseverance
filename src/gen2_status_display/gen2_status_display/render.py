@@ -2,10 +2,12 @@
 
 Layout (landscape):   header: C-WANG by suhopark [robot state]   HH:MM
   +-----------------+-----------------+
-  | 1. PC           | 2. SENSORS      |
+  | 1. PC           | 2. SENSORS      |   IMU / LIDAR / CAM
   +-----------------+-----------------+
-  | 3. MOTORS       | 4. NET & POWER  |
+  | 3. MOTORS       | 4. NET & POWER  |   Wi-Fi, SSH, PC power estimate, uptime
   +-----------------+-----------------+
+2026-10-14: the ESP32 sensor hub (GPS, magnetometer, PM02 battery voltage/current) was removed from the robot:
+no HUB / GPS / MAG rows, no battery rows (battery shown as "no sensor").
 """
 import math
 import time
@@ -182,27 +184,6 @@ def _sensors(d, box, s):
     x, y = _panel(d, box, '2. SENSORS')
     w = box[2] - x - 6
     rows = []
-    hub = s.get('hub', {})
-    if hub.get('fresh'):
-        col = OK if (hub.get('rate') or 0) > 80 and not hub.get('crc') else WARN
-        rows.append(('HUB', col, f"{_fmt(hub.get('rate'), '.0f')}Hz crc{hub.get('crc', 0)}"))
-    else:
-        rows.append(('HUB', BAD, 'no data'))
-    g = s.get('gps', {})
-    if not hub.get('fresh'):
-        rows.append(('GPS', DIM, '--'))
-    elif not g.get('seen'):
-        # not an alarm unless the GPS is supposed to be connected (gps_expected)
-        rows.append(('GPS', WARN, 'no NAV-PVT') if s.get('gps_expected') else
-                    ('GPS', DIM, 'not connected'))
-    elif g.get('fix', 0) < 2:
-        rows.append(('GPS', DIM, f"no fix sv{g.get('sv', 0)}"))  # normal indoors: no blink
-    else:
-        rows.append(('GPS', OK if g.get('usable') else WARN,
-                     f"{g.get('fix')}D sv{g.get('sv')} {_fmt(g.get('hacc'), '.1f')}m"))
-    mag = s.get('mag', {})
-    rows.append(('MAG', OK if mag.get('ok') else (DIM if not hub.get('fresh') else WARN),
-                 f"{_fmt(mag.get('rate'), '.0f')}Hz" if mag.get('ok') else '--'))
     for key, label in (('imu', 'IMU'), ('lidar', 'LIDAR'), ('camera', 'CAM')):
         st = s.get(key, {})
         rows.append((label, st.get('col', DIM), st.get('text', 'n/a')))
@@ -210,7 +191,11 @@ def _sensors(d, box, s):
         _dot(d, x, y, col)
         _txt(d, (x + 11, y), label, F_SB, FG)
         _txt(d, (x + w - d.textlength(txt, font=F_S), y), txt, F_S, col if col != OK else FG)
-        y += ROW
+        y += ROW + 4
+    dds = s.get('dds')
+    if dds:
+        _txt(d, (x, y + 2), 'DDS', F_SB, FG)
+        _txt(d, (x + w - d.textlength(dds, font=F_S), y + 2), dds, F_S, OK if 'local' not in dds else WARN)
 
 
 def _motors(d, box, s):
@@ -298,32 +283,21 @@ def _netpower(d, box, s):
     y += ROW + 1
     d.line([x, y - 1, x + w, y - 1], fill=BAR_BG)
 
-    def batt(label, b):
-        nonlocal y
-        if not b.get('fresh'):
-            txt, col = 'no data', BAD
-        elif not b.get('present'):
-            txt, col = 'not connected', DIM
-        else:
-            cv = b.get('cell_v')
-            col = BAD if cv < b.get('err', 3.3) else WARN if cv < b.get('warn', 3.5) else OK
-            est = '~' if b.get('estimated') else ''
-            txt = (f"{_fmt(b.get('voltage'), '4.1f')}V {est}{_fmt(b.get('power'), '.0f')}W "
-                   f"{_fmt(b.get('soc'), '3.0f')}% {_runtime(b.get('runtime_min'))}")
-        _txt(d, (x, y), label, F_SB, FG)
-        _txt(d, (x + w - d.textlength(txt, font=F_S), y), txt, F_S, col)
-        y += ROW
-
-    comp, mot = s.get('compute', {}), s.get('motor', {})
-    batt(f"C{comp.get('cells', 3)}S", comp)
-    batt(f"M{mot.get('cells', 6)}S", mot)
-    total = sum(b.get('power') or 0.0 for b in (comp, mot) if b.get('fresh') and b.get('present'))
-    wh = sum(b.get('wh') or 0.0 for b in (comp, mot) if b.get('fresh'))
-    any_batt = any(b.get('fresh') and b.get('present') for b in (comp, mot))
-    _txt(d, (x, y + 1), 'TOTAL', F_SB, FG)
-    t = f"{total:.0f}W {wh:.2f}Wh" if any_batt else '--'
-    d.text((x + w - d.textlength(t, font=F_BIG), y - 2), t, font=F_BIG,
-           fill=ACCENT if any_batt else DIM)
+    # no battery sensor (sensor hub removed): computer power estimated from the Jetson's own VDD_IN
+    # (Rigol two-point fit 2026-10-12: pack W = 1.08 x VDD_IN + 3.93); the motor battery is not measured
+    pc = sy.get('pc_w_est')
+    _txt(d, (x, y), 'PC', F_SB, FG)
+    t = f"~{_fmt(pc, '.1f')}W" if _ok(pc) else '--'
+    d.text((x + w - d.textlength(t, font=F_BIG), y - 2), t, font=F_BIG, fill=ACCENT if _ok(pc) else DIM)
+    y += ROW + 3
+    _txt(d, (x, y), 'BATT', F_SB, FG)
+    t = 'no sensor'
+    _txt(d, (x + w - d.textlength(t, font=F_S), y), t, F_S, DIM)
+    y += ROW
+    up = s.get('uptime_s')
+    _txt(d, (x, y), 'UP', F_SB, FG)
+    t = _runtime(up / 60.0) if _ok(up) else '--'
+    _txt(d, (x + w - d.textlength(t, font=F_S), y), t, F_S, DIM)
 
 
 def render(s, fast=True, slow=True):
@@ -333,14 +307,14 @@ def render(s, fast=True, slow=True):
     img = Image.new('RGB', (W, H), BG)
     d = _Draw(img)
     state = s.get('robot_state') or 'NO CTRL'
-    scol = {'ACTIVE': OK, 'ARMED': WARN, 'READY': ACCENT, 'DISARMED': DIM}.get(
+    scol = {'ACTIVE': OK, 'BALANCE': OK, 'ARMED': WARN, 'STAND': WARN, 'READY': ACCENT, 'DISARMED': DIM}.get(
         state, BAD if ('FAULT' in state or 'SAFE_STOP' in state) else DIM)
     d.text((5, 3), TITLE, font=F_H, fill=FG)
     x = 5 + d.textlength(TITLE, font=F_H) + 4
     d.text((x, 5), BYLINE, font=F_S, fill=DIM)
     x += d.textlength(BYLINE, font=F_S) + 6
     tw = d.textlength(state, font=F_S)
-    live = state in ('ARMED', 'ACTIVE')           # motors can move: badge blinks
+    live = state in ('ARMED', 'ACTIVE', 'STAND', 'BALANCE')   # motors can move: badge blinks
     if scol == BAD:
         USED['fast'] = True
     if (scol == BAD and fast) or (live and slow):

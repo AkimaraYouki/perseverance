@@ -1,4 +1,4 @@
-"""bench profile: sensor hub + IMU + LiDAR + read-only motor monitor + status LCD + camera + health log
+"""bench profile: (sensor hub, off: hub:=true) + IMU + LiDAR + read-only motor monitor + status LCD + camera + health log
 (logs/health: 1 Hz CSV + events, see gen2_tools/health_logger.py). No motor TX is possible."""
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
@@ -21,7 +21,9 @@ def generate_launch_description():
         DeclareLaunchArgument('camera', default_value='true'),
         DeclareLaunchArgument('sensors', default_value='true'),
         DeclareLaunchArgument('health', default_value='true'),
-        _inc('gen2_sensor_hub', 'sensor_hub.launch.py'),
+        # 2026-10-14: ESP32 sensor hub (GPS, magnetometer, PM02 battery V/I) removed from the robot -> off
+        DeclareLaunchArgument('hub', default_value='false'),
+        _inc('gen2_sensor_hub', 'sensor_hub.launch.py', LaunchConfiguration('hub')),
         _inc('gen2_sensors', 'sensors.launch.py', LaunchConfiguration('sensors')),
         _inc('gen2_hardware', 'motor_monitor.launch.py', LaunchConfiguration('motors')),
         _inc('gen2_status_display', 'status_display.launch.py', LaunchConfiguration('display')),

@@ -50,15 +50,22 @@ class StatusDisplay(Node):
             invert=p('invert_colors', True).value, bgr=p('bgr', False).value,
             rotate_180=p('rotate_180', False).value)
         self.snapshot = p('snapshot_path', '').value  # e.g. /tmp/gen2_lcd.png for remote viewing
-        self.gps_expected = p('gps_expected', False).value
+        self.pc_factor = p('pc_power_factor', 1.08).value   # computer W = factor x VDD_IN + offset
+        self.pc_offset = p('pc_power_offset_w', 3.93).value  # (Rigol 2026-10-12; carrier, LiDAR, camera, Wi-Fi, LCD)
         self.motors_expected = p('motors_expected', 4).value
-        self.warn = p('warn_cell_v', 3.5).value
-        self.err = p('error_cell_v', 3.3).value
         self.sys = SysInfo(p('wifi_iface', 'auto').value, p('eth_iface', 'auto').value)
         self.diag = {}  # name -> (recv_monotonic, level, message, {key: value})
         self.state, self.state_t = None, 0.0
         self.create_subscription(DiagnosticArray, 'diagnostics', self._on_diag, 20)
         self.create_subscription(String, 'robot/state', self._on_state, 10)
+        # balance_node mode (controller/state is 100 Hz: polled on a side node, no per-message callbacks)
+        from gen2_msgs.msg import ControllerState
+        from rclpy.qos import QoSProfile, ReliabilityPolicy
+        self._cs_type = ControllerState
+        self._side = rclpy.create_node('status_display_poll')
+        self._cs_sub = self._side.create_subscription(
+            ControllerState, 'controller/state', lambda m: None, QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
+        self._cs, self._cs_t = None, 0.0
         self.lcd = None
         self._last_status = None
         self._lcd_retry = 0.0
@@ -86,19 +93,6 @@ class StatusDisplay(Node):
                 return lvl, msg, kv
         return None
 
-    def _battery(self, suffix):
-        d = self._find(suffix)
-        if d is None:
-            return dict(fresh=False)
-        _, _, kv = d
-        return dict(fresh=True, present=kv.get('present') == 'True',
-                    voltage=_f(kv, 'voltage_v'), current=_f(kv, 'current_a'),
-                    power=_f(kv, 'power_w'), wh=_f(kv, 'energy_wh'),
-                    soc=_f(kv, 'soc_percent'), runtime_min=_finf(kv, 'runtime_min'),
-                    estimated=kv.get('current_source') == 'jetson_vdd_in',
-                    cells=int(_f(kv, 'cells') or 0), cell_v=_f(kv, 'cell_voltage_v'),
-                    warn=self.warn, err=self.err)
-
     def _status(self):
         now = time.monotonic()
         motors = []
@@ -116,31 +110,43 @@ class StatusDisplay(Node):
                     error_text=msg))
         # configured motors first (config order ~ name), then unconfigured drives by CAN id
         motors.sort(key=lambda m: (not m['configured'], m['name']))
-        link = self._find('sensor_hub: link')
-        hub = dict(fresh=link is not None)
-        if link:
-            hub.update(rate=_f(link[2], 'frame_rate_hz'), crc=int(_f(link[2], 'crc_errors') or 0))
-        gps = {}
-        g = self._find('sensor_hub: gnss')
-        if g is not None and int(_f(g[2], 'epochs') or 0) > 0:
-            gps = dict(seen=True, fix=int(_f(g[2], 'fix_type') or 0), sv=int(_f(g[2], 'num_sv') or 0),
-                       hacc=_f(g[2], 'h_acc_m'), usable=g[0] == DiagnosticStatus.OK)
-        m = self._find('sensor_hub: magnetometer')
-        mag = dict(ok=m is not None and m[0] == DiagnosticStatus.OK,
-                   rate=_f(m[2], 'sample_rate_hz') if m else None)
         sy = self.sys.sample()
+        jw = sy.get('jetson_w')
+        sy['pc_w_est'] = jw * self.pc_factor + self.pc_offset if jw is not None else None
+        try:
+            uptime = float(open('/proc/uptime').read().split()[0])
+        except (OSError, ValueError):
+            uptime = None
+        modes = []
+        for k in ('bench', 'control'):
+            try:
+                with open(os.path.expanduser(f'~/.ros/gen2_dds_mode.{k}')) as f:
+                    modes.append(f.read().strip())
+            except OSError:
+                pass
+        dds = ('local' if 'local' in modes else 'wifi') if modes else None
         can = self._find('can: bus')
+        last = None
+        with self._cs_sub.handle:
+            while True:
+                r = self._cs_sub.handle.take_message(self._cs_type, False)
+                if r is None:
+                    break
+                last = r[0] if isinstance(r, tuple) else r
+        if last is not None:
+            self._cs, self._cs_t = last, now
         state = self.state if self.state and now - self.state_t < 2.0 else None
-        return dict(robot_state=state, wall_time=time.time(), sys=sy,
-                    compute=self._battery('sensor_hub: power compute'),
-                    motor=self._battery('sensor_hub: power motor'),
-                    motors=motors, hub=hub, gps=gps, mag=mag,
+        if state is None and self._cs is not None and now - self._cs_t < 2.0:
+            m = self._cs.mode
+            state = f'FAULT {self._cs.fault[:18]}' if m == 'fault' else m.upper()
+        return dict(robot_state=state, wall_time=time.time(), sys=sy, uptime_s=uptime, dds=dds,
+                    motors=motors,
                     imu=self._device('imu', None, 'not connected'),
                     lidar=self._device('lidar', sy.get('lidar_port'), 'port, no driver'),
                     camera=self._device('camera', sy.get('video0'), '/dev/video0',
                                         missing='no /dev/video0', missing_col=BAD),
                     can_rate=_f(can[2], 'rx_rate_hz') if can else None, can_expected=True,
-                    gps_expected=self.gps_expected, motors_expected=self.motors_expected)
+                    motors_expected=self.motors_expected)
 
     def _device(self, key, present, present_text, missing='n/a', missing_col=DIM):
         # A driver's own diagnostic ("<key>: ...") wins; otherwise fall back to device presence.

@@ -96,6 +96,13 @@ static constexpr bool STATUS_LED_ACTIVE_LOW = true;
 // ============================================================================
 // Rates
 // ============================================================================
+// 2026-10-14 (user): GPS, IST8310 magnetometer and the I2C RGB LED / GPS safety LED were removed from the robot.
+// Only the two PM02 voltage/current channels remain. The HostFrame layout is unchanged (Jetson parser): the GPS
+// and magnetometer fields stay 0 and their valid flags are never set. Set these to true to bring them back.
+static constexpr bool ENABLE_GPS = false;   // Holybro GPS UART (GPIO20/21) + safety LED (GPIO5)
+static constexpr bool ENABLE_MAG = false;   // IST8310 on I2C (GPIO6/7)
+static constexpr bool ENABLE_RGB = false;   // Holybro RGB LED controller on I2C
+
 static constexpr uint32_t HOST_RATE_HZ = 100;
 static constexpr uint32_t HOST_PERIOD_US = 1000000UL / HOST_RATE_HZ;
 
@@ -1308,9 +1315,9 @@ void sendHostFrame(uint64_t nowUs) {
   // If the previous frame is still pending, this new frame is dropped.
   queueUsbFrame(frame);
 
-  updateGpsLed(frame.flags, nowUs);
+  if (ENABLE_GPS) {updateGpsLed(frame.flags, nowUs);}
   updateStatusLed(nowUs);
-  updateFancyRgb(frame.flags, nowUs);
+  if (ENABLE_RGB) {updateFancyRgb(frame.flags, nowUs);}
 }
 
 // ============================================================================
@@ -1321,8 +1328,10 @@ void setup() {
   // This allows the ESP32 to boot independently while Jetson is still starting.
   Serial.begin(921600);
 
-  pinMode(PIN_GPS_LED, OUTPUT_OPEN_DRAIN);
-  setGpsLed(false);
+  if (ENABLE_GPS) {
+    pinMode(PIN_GPS_LED, OUTPUT_OPEN_DRAIN);
+    setGpsLed(false);
+  }
 
   pinMode(PIN_STATUS_LED, OUTPUT);
   setStatusLed(false);
@@ -1347,8 +1356,10 @@ void setup() {
   analogSetPinAttenuation(PIN_PM2_I, ADC_0db);
 
   // I2C master for Holybro compass / LED devices.
-  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);
-  Wire.setTimeOut(10);
+  if (ENABLE_MAG || ENABLE_RGB) {
+    Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);
+    Wire.setTimeOut(10);
+  }
 
   // Do not trust I2C peripherals to be ready at ESP32 boot.
   // Probe/re-initialize them continuously from loop().
@@ -1356,17 +1367,19 @@ void setup() {
   rgb_led_ok = false;
 
   // M8N UART
-  Serial1.begin(
-    GPS_UART_BAUD,
-    SERIAL_8N1,
-    PIN_GPS_RX,
-    PIN_GPS_TX
-  );
+  if (ENABLE_GPS) {
+    Serial1.begin(
+      GPS_UART_BAUD,
+      SERIAL_8N1,
+      PIN_GPS_RX,
+      PIN_GPS_TX
+    );
 
-  delay(500);
-  configureGpsM9();
-  delay(10);
-  configureGps();
+    delay(500);
+    configureGpsM9();
+    delay(10);
+    configureGps();
+  }
 
   const uint64_t nowUs = esp_timer_get_time();
 
@@ -1391,13 +1404,19 @@ void loop() {
   serviceUsbTx(nowUs);
 
   // GPS is serviced every pass so the UART RX buffer is drained immediately.
-  serviceGps();
-  serviceGpsAutobaud(nowUs);
+  if (ENABLE_GPS) {
+    serviceGps();
+    serviceGpsAutobaud(nowUs);
+  }
 
   // Automatically recover peripherals that were not powered/ready during boot.
-  serviceI2cPeripheralRecovery(nowUs);
+  if (ENABLE_MAG || ENABLE_RGB) {
+    serviceI2cPeripheralRecovery(nowUs);
+  }
 
-  serviceMag(nowUs);
+  if (ENABLE_MAG) {
+    serviceMag(nowUs);
+  }
 
   if (nowUs >= next_power_us) {
     do {
@@ -1420,7 +1439,7 @@ void loop() {
 
   // Keep indicators responsive even between telemetry frames.
   updateStatusLed(nowUs);
-  updateFancyRgb(buildFlags(), nowUs);
+  if (ENABLE_RGB) {updateFancyRgb(buildFlags(), nowUs);}
 
   // Yield without deliberately sleeping a whole millisecond.
   taskYIELD();
