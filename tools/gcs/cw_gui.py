@@ -534,7 +534,7 @@ class Gui(QtWidgets.QMainWindow):
                                         self._btn('끄기', lambda: self.ros.set_params('/person_follow', {'use_nav': False}))]),
             ('lidar', '장애물 앞 정지·감속 (라이다)', [
                 self._btn('켜기', lambda: self.ros.set_params('/cmd_mux', {'lidar_limit': True})),
-                self._btn('끄기', self.lidar_off, '끄면 앞에 벽이 있어도 멈추지 않는다')]),
+                self._btn('끄기', self.lidar_off, '로봇 기본 = 꺼짐. 켜면 자기 다리·바퀴를 장애물로 잡아 못 갈 수 있다 (2026-10-09)')]),
         ]
         for i, (k, t, b) in enumerate(rows):
             self.lamp[k] = Lamp()
@@ -825,8 +825,9 @@ class Gui(QtWidgets.QMainWindow):
             self.lamp['nav'].set('on' if vals['use_nav'] else 'warn')
             self.note['nav'].setText('켜짐 — 막히면 돌아감' if vals['use_nav'] else '꺼짐 — 직진만')
         if node == '/cmd_mux' and 'lidar_limit' in vals:
-            self.lamp['lidar'].set('on' if vals['lidar_limit'] else 'err')
-            self.note['lidar'].setText('켜짐' if vals['lidar_limit'] else '⚠ 꺼짐 — 장애물 앞에서 안 멈춤')
+            # 꺼짐이 로봇 기본 (2026-10-09 사용자: 자기 다리·바퀴가 잡혀 주행이 막힘). 회피는 person_follow 가 한다
+            self.lamp['lidar'].set('on' if vals['lidar_limit'] else 'warn')
+            self.note['lidar'].setText('켜짐' if vals['lidar_limit'] else '꺼짐 (의도 — 회피는 추종 쪽 Nav2 가 함)')
         for g in self.groups:
             g.on_params(node, vals)
 
