@@ -1,6 +1,6 @@
 #!/bin/sh
 # NetworkManager dispatcher: when the Wi-Fi or wired IPv4 address appears, disappears or changes,
-# restart gen2-bench so gen2_dds.sh re-selects the CycloneDDS interfaces. Cyclone 0.10 keeps using
+# restart gen2-bench so gen2_dds.sh re-selects the CycloneDDS interfaces (gen2-balance only if it came up local). Cyclone 0.10 keeps using
 # a vanished address otherwise and robot-internal topics stop (tested 2026-09-25).
 IFACE="$1"; ACTION="$2"
 case "$IFACE" in wlP1p1s0|enP8p1s0) ;; *) exit 0 ;; esac
@@ -12,4 +12,10 @@ OLD=$(cat "$STATE" 2>/dev/null)
 echo "$NEW" > "$STATE"
 logger -t gen2-dds "$IFACE $ACTION: '${OLD:-none}' -> '${NEW:-none}', restarting gen2-bench"
 systemctl try-restart gen2-bench.service
+# gen2-balance is NOT restarted on every change (it may be balancing). Only when it started in local mode (no
+# network at its start, written by gen2_run.sh): then it is unreachable off-board, so nobody can have armed it.
+if [ -n "$NEW" ] && [ "$(cat /home/parksudo/.ros/gen2_dds_mode.control 2>/dev/null)" = local ]; then
+  logger -t gen2-dds "gen2-balance started in local mode -> restarting it on the network"
+  systemctl try-restart gen2-balance.service
+fi
 exit 0
