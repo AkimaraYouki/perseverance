@@ -12,6 +12,7 @@
 """
 import glob
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -26,7 +27,7 @@ import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+from rcl_interfaces.msg import Log, Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import GetParameters, SetParameters
 from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
@@ -152,6 +153,8 @@ class Ros(QtCore.QObject):
         self.lock = threading.Lock()
         for t in ('follow/status', 'cmd_mux/status', 'gesture/action'):
             self.node.create_subscription(String, t, lambda m, t=t: self.topic.emit(t, m.data), 10)
+        # 점프 결과 — balance_node 는 거절을 로그 (/rosout) 로만 남긴다. pad_teleop 의 "ok: jump requested" 는 접수일 뿐
+        self.node.create_subscription(Log, 'rosout', self._rosout, 100)
         try:   # 균형 상태 (100 Hz) — 최신 것만, 0.5 초마다 GUI 로
             from gen2_msgs.msg import ControllerState
             self._cs = None
@@ -171,6 +174,10 @@ class Ros(QtCore.QObject):
             self.ex.spin()
         except Exception:   # 종료 때
             pass
+
+    def _rosout(self, m):
+        if m.name == 'balance' and m.msg.startswith('jump: '):
+            self.topic.emit('jump', m.msg)
 
     def _state(self, m):
         self._cs = (time.monotonic(), m.mode, m.fault, m.pitch, m.v)
@@ -951,6 +958,18 @@ class Gui(QtWidgets.QMainWindow):
             self.l_ros.set(('err' if s.startswith('fault') else 'on') if s else 'off')
         elif t == 'gesture/action':
             self.log(f'손짓: {s}')
+        elif t == 'jump':
+            self._on_jump(s)
+
+    def _on_jump(self, s):
+        # balance_node.cpp: "jump: refused (v 0.76 m/s, need 0.20-0.40 forward and |wz| <= 1.0)" / "jump: start (v 0.37 m/s)"
+        m = re.match(r'jump: refused \(v (\S+) m/s, need (\S+)-(\S+) forward and \|wz\| <= (\S+)\)', s)
+        if m:
+            v, lo, hi, wz = m.groups()
+            self.log(f'점프 거절: 속도 {v} m/s — {lo}–{hi} m/s 로 직진 중 (회전 {wz} rad/s 이하) 에 Y', err=True)
+            return
+        m = re.match(r'jump: start \(v (\S+) m/s\)', s)
+        self.log(f'점프 시작 (속도 {m.group(1)} m/s)' if m else f'점프: {s[6:]}')
 
     def _on_done(self, what, ok, msg):
         if what.startswith('읽기'):
