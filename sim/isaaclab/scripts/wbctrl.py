@@ -253,7 +253,7 @@ class WBController:
         self.air_pmin = np.where(air, np.minimum(self.air_pmin, np.degrees(S["pitch"])), self.air_pmin)
         ffF = np.zeros(n)
         ctl = (ph == DRIVE) | (ph == RETRACT) | (ph == EXTRACT) | (ph == LAND)
-        th_ref = np.where(ph == RETRACT, math.radians(P.retract_lean), 0.0)
+        th_ref = np.where(ph == RETRACT, np.radians(P.retract_lean), 0.0)      # 점프 파라미터는 로봇마다 배열이어도 됨 (CMA 튜닝)
         vm = np.minimum(P.vmax_kmh / 3.6, P.vmax_motor_frac * w_max * R_WHEEL)
         g_vf = self.g_vf + (1.0 - math.exp(-2 * math.pi * P.speed_lpf_hz * DT)) * (v_now - self.g_vf)
         e = np.abs(g_vf) - vm
@@ -366,13 +366,13 @@ class WBController:
         # 점프 단계의 다리 목표와 공중 바퀴 pitch PD
         legT = (ph != DRIVE)
         if legT.any():
-            tgt_h = np.select([ph == RETRACT, ph == EXTRACT, ph == FLY], [H_MIN, H_MAX, H_MIN], P.h_land)
+            tgt_h = np.where((ph == RETRACT) | (ph == FLY), H_MIN, np.where(ph == EXTRACT, H_MAX, P.h_land))
             tgt_h = np.where(ph == RETRACT, self.h0 + (H_MIN - self.h0) * np.minimum(1.0, tp / (0.75 * P.t_retract)), tgt_h)
             act[:, 0:2] = np.where(legT[:, None], ((tgt_h - h_ref) / 0.12)[:, None], act[:, 0:2])
             pd_set = (FLY, DESCEND) if P.pd_from == "fly" or P.extract_wheels != "pd" else (EXTRACT, FLY, DESCEND)
             pd = np.isin(ph, pd_set)
             if P.air_ctrl:
-                ref = np.select([ph == EXTRACT, ph == DESCEND], [P.extract_pitch, getattr(P, "land_pitch", P.air_pitch)], P.air_pitch)
+                ref = np.where(ph == EXTRACT, P.extract_pitch, np.where(ph == DESCEND, getattr(P, "land_pitch", P.air_pitch), P.air_pitch))
                 u = P.air_kp * (S["pitch"] - np.radians(ref)) + P.air_kd * S["gy"]
                 act[:, 2:] = np.where(pd[:, None], np.clip(u / P.air_tau, -1.0, 1.0)[:, None], act[:, 2:])
             else:

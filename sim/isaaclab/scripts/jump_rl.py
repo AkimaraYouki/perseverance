@@ -10,6 +10,7 @@
 """
 import argparse
 import collections
+import json
 import math
 import os
 import re
@@ -51,6 +52,9 @@ ap.add_argument("--edge_max", type=float, default=1.15)
 ap.add_argument("--res_leg", type=float, default=0.04)
 ap.add_argument("--res_wheel", type=float, default=2.5)
 ap.add_argument("--seed", type=int, default=1)
+ap.add_argument("--cma", type=int, default=0, help="점프 상태기계 파라미터 CMA-ES 세대 수 (정책 없음, 로봇을 후보 수로 나눠 동시 평가)")
+ap.add_argument("--cma_pop", type=int, default=16)
+ap.add_argument("--cma_eps", type=int, default=1, help="세대마다 로봇 한 대당 에피소드 (처음 k 판만 센다)")
 ap.add_argument("--debug", type=int, default=0, help="로봇 몇 대의 시간 흐름을 0.25 s 마다 출력")
 for k, v in TUNE.items():
     if isinstance(v, bool):
@@ -197,6 +201,8 @@ class JumpEnv:
         self.res = np.zeros((N, 4)); self.resq = collections.deque([np.zeros((N, 4))] * 4, maxlen=4)  # noqa: E702
         self.base = np.zeros((N, 4)); self.x_prev = np.zeros(N)  # noqa: E702
         self.stats = collections.defaultdict(list)
+        self.cnt = np.zeros((N, 4))                                       # 로봇별 success / short / fell / timeout (CMA)
+        self.ep_n = np.zeros(N, int); self.ep_k = 1 << 30                 # CMA: 로봇마다 처음 ep_k 판만 센다 (빨리 끝나는 넘어짐 쏠림 방지)  # noqa: E702
         self.f = None
         self._reset(np.ones(N, bool))
         self.obs = self._observe()
@@ -341,6 +347,9 @@ class JumpEnv:
         timeout = self.episode_length_buf.cpu().numpy() >= self.max_episode_length
         rew += 30.0 * success - 15.0 * short - 20.0 * fell + 0.5 * (self.jumped & on_top & (self.h > 0.01) & (f.wx > self.edge))   # 턱 위에 올라가 있으면 매 스텝 (2026-10-13 jr2: jr1 은 덜 뛰어 턱 앞 착지로 수렴)
         done = success | short | fell | timeout
+        cm = done & (self.ep_n < self.ep_k)
+        self.cnt[cm] += np.stack([success, short, fell, timeout & ~(success | short | fell)], 1)[cm]
+        self.ep_n += done
         for k_, v_ in (("success", success), ("short", short), ("fell", fell), ("timeout", timeout & ~(success | short | fell))):
             if done.any():
                 self.stats[k_].append(float(v_[done].sum()))
@@ -362,6 +371,83 @@ class JumpEnv:
 venv = JumpEnv()
 print(f"[점프 RL] 로봇 {N} 대, 관측 policy {venv.obs['policy'].shape[1]} critic {venv.obs['critic'].shape[1]}, 행동 4, "
       f"턱 {args.h_min:.2f}–{args.h_max:.2f} m (평지 {args.p_flat:.0%}), 고관절 실효 0.5–1.0, 지연 {P.delay_ms:.0f} ms", flush=True)
+
+# --- 점프 상태기계 CMA-ES: 결과 = 로봇 tune.* 값 그대로 (2026-10-13, RL 잔차는 0 % 로 실패) ------------------------
+CMA_SPACE = [   # 이름, 하한, 상한 (climb_test TUNE 기본값에서 시작)
+    ("t_retract", 0.15, 0.40), ("retract_lean", -3.0, 6.0), ("extract_pitch", -8.0, 6.0), ("t_tuck", 0.04, 0.25),
+    ("air_kp", 8.0, 60.0), ("air_kd", 0.5, 10.0), ("air_pitch", -12.0, 4.0), ("land_pitch", -6.0, 6.0),
+    ("land_kp", 8.0, 60.0), ("land_kd", 0.3, 4.0), ("land_s", 0.10, 0.60), ("h_land", 0.13, 0.23),
+    ("contact_tau", 0.5, 5.0), ("leg_kp", 30.0, 90.0), ("leg_kd", 0.5, 4.0)]
+
+
+def cma_eval(cands, k_eps):
+    """후보 K 개를 로봇 N 대에 번갈아 (i % K) 나눠 동시 평가, 로봇마다 처음 k_eps 판. 반환 (K, 4) 비율 success/short/fell/timeout, 판 수."""
+    K = len(cands); grp = np.arange(N) % K
+    for j, (k, _, _) in enumerate(CMA_SPACE):
+        setattr(P, k, np.array([c[j] for c in cands])[grp])
+    venv._reset(np.ones(N, bool)); venv.obs = venv._observe(); venv.cnt[:] = 0; venv.ep_n[:] = 0; venv.ep_k = k_eps  # noqa: E702
+    zero = torch.zeros(N, 4, device=dev)
+    for s in range(k_eps * venv.max_episode_length + 10):
+        venv.step(zero)
+        if s % 50 == 49 and (venv.ep_n >= k_eps).all():
+            break
+    c = np.stack([venv.cnt[grp == j].sum(0) for j in range(K)])
+    return c / np.maximum(1, c.sum(1, keepdims=True)), c.sum(1)
+
+
+def cma_score(r):
+    return r[:, 0] - 0.7 * r[:, 2]                                       # 성공 − 0.7 × 넘어짐 (턱 앞 착지 short 는 0)
+
+
+if args.cma:
+    lo = np.array([b[1] for b in CMA_SPACE]); hi = np.array([b[2] for b in CMA_SPACE])  # noqa: E702
+    x0 = np.array([float(getattr(P, k)) for k, _, _ in CMA_SPACE])
+    dec = lambda z: lo + (hi - lo) * np.clip(z, 0, 1)                    # noqa: E731
+    D, lam = len(CMA_SPACE), args.cma_pop - 1                             # 마지막 칸 = 지금 평균 (기록용)
+    mu = lam // 2; w = np.log(mu + 0.5) - np.log(np.arange(1, mu + 1)); w /= w.sum(); mueff = 1 / (w ** 2).sum()  # noqa: E702
+    cc, cs = (4 + mueff / D) / (D + 4 + 2 * mueff / D), (mueff + 2) / (D + mueff + 5)
+    c1 = 2 / ((D + 1.3) ** 2 + mueff); cmu = min(1 - c1, 2 * (mueff - 2 + 1 / mueff) / ((D + 2) ** 2 + mueff))
+    ds = 1 + 2 * max(0, np.sqrt((mueff - 1) / (D + 1)) - 1) + cs; chiN = np.sqrt(D) * (1 - 1 / (4 * D) + 1 / (21 * D * D))  # noqa: E702
+    m = (x0 - lo) / (hi - lo); sig = 0.15; C = np.eye(D); pc = np.zeros(D); ps = np.zeros(D)  # noqa: E702
+    out = os.path.join(os.path.dirname(HERE), "logs", "jump_cma", time.strftime("%Y-%m-%d_%H-%M-%S") + "_" + args.run)
+    os.makedirs(out, exist_ok=True)
+    best = (-9.0, None, None); rng = np.random.default_rng(args.seed)  # noqa: E702
+    print(f"[점프 CMA] 파라미터 {D}, 후보 {lam}+평균, 세대 {args.cma}, 로봇 {N} -> {out}", flush=True)
+    for gen in range(args.cma):
+        t0 = time.time()
+        ev, B = np.linalg.eigh(C); Dd = np.sqrt(np.maximum(ev, 1e-12))  # noqa: E702
+        zs = rng.standard_normal((lam, D)); ys = zs @ (B * Dd).T; xs = m + sig * ys  # noqa: E702
+        r, ne = cma_eval([dec(x) for x in xs] + [dec(m)], args.cma_eps)
+        sc = cma_score(r)
+        if sc[-1] > best[0]:
+            best = (sc[-1], dec(m), r[-1])
+        o = np.argsort(-sc[:lam]); yw = (w[:, None] * ys[o[:mu]]).sum(0)  # noqa: E702
+        m = np.clip(m + sig * yw, 0, 1)
+        Ci = B @ np.diag(1 / Dd) @ B.T
+        ps = (1 - cs) * ps + np.sqrt(cs * (2 - cs) * mueff) * Ci @ yw
+        hs = np.linalg.norm(ps) / np.sqrt(1 - (1 - cs) ** (2 * (gen + 1))) < (1.4 + 2 / (D + 1)) * chiN
+        pc = (1 - cc) * pc + hs * np.sqrt(cc * (2 - cc) * mueff) * yw
+        C = (1 - c1 - cmu) * C + c1 * (np.outer(pc, pc) + (1 - hs) * cc * (2 - cc) * C) + cmu * (w[:, None] * ys[o[:mu]]).T @ ys[o[:mu]]
+        sig = min(0.5, sig * np.exp((cs / ds) * (np.linalg.norm(ps) / chiN - 1)))
+        rec = dict(gen=gen, sigma=round(float(sig), 4), mean_score=round(float(sc[-1]), 3), mean_rates=r[-1].round(3).tolist(),
+                   top_score=round(float(sc[o[0]]), 3), eps=int(ne.min()), s=round(time.time() - t0, 1),
+                   mean=dict(zip([k for k, _, _ in CMA_SPACE], dec(m).round(4).tolist())))
+        with open(os.path.join(out, "gens.jsonl"), "a") as fh:
+            fh.write(json.dumps(rec) + "\n")
+        print(f"[CMA {gen:3d}] 평균후보 성공 {r[-1, 0]:.0%} 넘어짐 {r[-1, 2]:.0%} 점수 {sc[-1]:+.3f} | 1등 {sc[o[0]]:+.3f} | "
+              f"sigma {sig:.3f} | {ne.min()} 판 {time.time() - t0:.0f} s", flush=True)
+    # 검증: 기본 vs 최고 (평지 / 6 cm / 8 cm), 각 조건 로봇 절반씩
+    bx = dict(zip([k for k, _, _ in CMA_SPACE], best[1].round(4).tolist()))
+    json.dump(dict(best=bx, score=best[0], rates=best[2].tolist()), open(os.path.join(out, "best.json"), "w"), indent=1)
+    for nm, h_, pf in (("평지", None, 1.0), ("턱 6 cm", 0.06, 0.0), ("턱 8 cm", 0.08, 0.0)):
+        args.h, args.p_flat = h_, pf
+        r, ne = cma_eval([x0, best[1]], 3)
+        line = f"[검증 {nm}] 기본 성공 {r[0, 0]:.1%} 넘어짐 {r[0, 2]:.1%} | 최고 성공 {r[1, 0]:.1%} 넘어짐 {r[1, 2]:.1%} ({ne.min()} 판)"
+        print(line, flush=True)
+        with open(os.path.join(out, "verify.txt"), "a") as fh:
+            fh.write(line + "\n")
+    print("[점프 CMA] 끝 best =", bx, flush=True)
+    os._exit(0)
 
 if args.eval:
     pol = None
