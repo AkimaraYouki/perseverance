@@ -39,6 +39,7 @@ PRESETS = f'{DESK}/gui_presets'
 LENV = f'source {DESK}/env.sh'
 SLAM_BASE = f'{DESK}/install/gen2_bringup/share/gen2_bringup/config/slam.yaml'
 SLAM_YAML = f'{DESK}/slam_gui.yaml'
+os.environ['PATH'] = f'{HOME}/bin:' + os.environ.get('PATH', '')   # 바탕화면 아이콘으로 켜면 ~/bin 이 없다 (wifi, cw)
 SSH = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=4', '-o', 'ControlMaster=auto',
        '-o', f'ControlPath={HOME}/.ssh/cm-%r@%h:%p', '-o', 'ControlPersist=120']
 
@@ -292,7 +293,7 @@ LOCAL = {
     'slam':    ('SLAM 지도 (노트북)', '[a]sync_slam_toolbox_node', '/slam_toolbox'),
     'rviz':    ('RViz (지도·라이다·코스트맵·카메라)', '^rviz2 -d', None),
     'hud':     ('HUD (카메라 + 사람 상자)', f'^/usr/bin/python3 {DESK}/hud.py', None),
-    'dash':    ('상태판 (전원·배터리·모터)', 'desk_dash_robot.py|wifi -r', None),
+    'dash':    ('상태판 (전원·배터리·모터)', f'^/usr/bin/python3 {DESK}/desk_dash.py', None),   # = wifi -r (exec 로 바뀜)
 }
 
 
@@ -505,7 +506,7 @@ class Gui(QtWidgets.QMainWindow):
         sit.clicked.connect(lambda: self.ros.trigger('/balance/sit', '로봇 앉기'))
         stop = QtWidgets.QPushButton('추종 정지')
         stop.setStyleSheet('background:#e67e22; color:white; font-weight:bold; padding:8px 14px')
-        stop.clicked.connect(lambda: self.ros.set_bool('/follow/enable', False, '추종 끄기'))
+        stop.clicked.connect(self.follow_off)
         g.addWidget(stop, 0, 4, 2, 1)
         g.addWidget(sit, 0, 5, 2, 1)
         return f
@@ -552,8 +553,7 @@ class Gui(QtWidgets.QMainWindow):
             ('stack', '사람 추종 스택', [self._btn('켜기', lambda: self.robot_cmd('stack_on')),
                                     self._btn('끄기', lambda: self.robot_cmd('stack_off'))]),
             ('follow', '추종 활성화 (= 패드 X)', [self._btn('켜기 (앞사람 등록)', lambda: self.ros.set_bool(
-                '/follow/enable', True, '추종 켜기')), self._btn('끄기', lambda: self.ros.set_bool(
-                    '/follow/enable', False, '추종 끄기'))]),
+                '/follow/enable', True, '추종 켜기')), self._btn('끄기', self.follow_off)]),
             ('hold', '일시 정지 (= 손바닥)', [self._btn('정지', lambda: self.ros.set_bool('/follow/hold', True, '일시 정지')),
                                         self._btn('재개', lambda: self.ros.set_bool('/follow/hold', False, '재개'))]),
             ('nav', '장애물 우회 (Nav2)', [self._btn('켜기', lambda: self.ros.set_params(PF, {'use_nav': True})),
@@ -695,6 +695,14 @@ class Gui(QtWidgets.QMainWindow):
             self.log('추종 스택 켜는 중 — 10–20 초 뒤 "추종 활성화" 또는 패드 X')
         elif k == 'stack_off':
             self.ssh('추종 스택 끄기', '~/gen2_ws/logs/stop_follow.sh')
+            if running(LOCAL['hud'][1]):
+                self.local_off('hud')
+
+    def follow_off(self):
+        """추종 끄기 (= 패드 X 끄기) + 추종 HUD 닫기"""
+        self.ros.set_bool('/follow/enable', False, '추종 끄기')
+        if running(LOCAL['hud'][1]):
+            self.local_off('hud')
 
     def _poll_robot(self):
         self.ssh('_poll', 'printf "%s %s %s\\n" $(systemctl is-active gen2-bench) $(systemctl is-active gen2-balance) '
@@ -764,8 +772,10 @@ class Gui(QtWidgets.QMainWindow):
             launch('rviz', f'rviz2 -d {DESK}/gen2_desktop.rviz')
         elif k == 'hud':
             launch('hud', f'/usr/bin/python3 {DESK}/hud.py')
-        elif k == 'dash':   # 터미널 화면 프로그램이라 창 하나
-            subprocess.Popen(['gnome-terminal', '--title=상태판', '--', 'bash', '-c', f'{LENV}; wifi -r'],
+        elif k == 'dash':   # 터미널 화면 프로그램이라 창 하나 (wifi -r 과 같은 것). 오류로 끝나면 창을 남긴다
+            subprocess.Popen(['gnome-terminal', '--title=상태판', '--', 'bash', '-c',
+                              f'{LENV}; /usr/bin/python3 {DESK}/desk_dash.py; rc=$?; '   # 오류로 끝나면 창을 남긴다 (Ctrl+C·GUI 끄기 제외)
+                              f'case $rc in 0|130|143) ;; *) echo; echo "[오류 $rc] Enter 로 닫기"; read ;; esac'],
                              start_new_session=True, stderr=subprocess.DEVNULL)
         self.log(f'{name}: 켬')
 
@@ -776,8 +786,9 @@ class Gui(QtWidgets.QMainWindow):
             kill('lib/joy/joy_node')
         elif k == 'slam':
             kill('[a]sync_slam_toolbox_node|[g]en2_bringup slam.launch|[s]lam_gui.launch')
-        elif k == 'dash':
-            kill('desk_dash_robot.py|wifi -r')
+        elif k == 'hud':   # SIGINT 로 안 끝나면 (창 이벤트 대기 중) 2 초 뒤 SIGTERM
+            kill(pat)
+            QtCore.QTimer.singleShot(2000, lambda: kill(pat, signal.SIGTERM))
         else:
             kill(pat)
         self.log(f'{name}: 끔')
