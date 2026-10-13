@@ -8,6 +8,7 @@ than split_m -> keep leg-sized clusters (width leg_min..leg_max) -> pair legs wh
 apart (a single leg also counts: legs often occlude each other) -> people candidates in the laser frame.
 Simple nearest-neighbour tracks with a constant-velocity filter keep an id per candidate.
 
+Rate: every scan while following, every idle_every-th scan when follow is off (follow/status IDLE).
 Out: people/legs (geometry_msgs/PoseArray, frame laser: one pose per person candidate, orientation = velocity heading),
      people/debug (std_msgs/String). Range limited to max_range_m.
 """
@@ -60,6 +61,14 @@ class LegDetector(Node):
         self.pub = self.create_publisher(PoseArray, 'people/legs', 10)
         self.dbg = self.create_publisher(String, 'people/debug', 10)
         self.create_subscription(LaserScan, 'scan', self._scan, qos_profile_sensor_data)
+        # follow off (follow/status IDLE / no person_follow): only every idle_every-th scan (10 Hz -> 2 Hz)
+        self.idle_every = p('idle_every', 5)
+        self.active_t, self.n_scan = -1e9, 0
+        self.create_subscription(String, 'follow/status', self._follow_status, 10)
+
+    def _follow_status(self, m):
+        if not m.data.startswith('IDLE'):
+            self.active_t = time.monotonic()
 
     def _tilt(self):
         try:
@@ -110,6 +119,9 @@ class LegDetector(Node):
 
     def _scan(self, m):
         t = time.monotonic()
+        self.n_scan += 1
+        if t - self.active_t > 1.0 and self.n_scan % max(1, self.idle_every):
+            return
         legs = self._clusters(m)
         used, people = set(), []
         for i in range(len(legs)):                       # pair legs (closest partner first)

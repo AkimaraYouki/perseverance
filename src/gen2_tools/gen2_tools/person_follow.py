@@ -32,6 +32,7 @@ import rclpy
 import rclpy.executors
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseArray, PoseStamped, Twist
+from gen2_msgs.msg import ControllerState
 from nav_msgs.msg import Odometry
 from nav2_msgs.action import ComputePathToPose, FollowPath
 from rclpy.action import ActionClient
@@ -75,8 +76,15 @@ class PersonFollow(Node):
         # Nav2 (nav_follow.launch: planner + MPPI on the LiDAR costmap) drives around obstacles when available
         self.use_nav = p('use_nav', True)
         self.nav_period = p('nav_replan_s', 0.5)
-        self.odom = (0.0, 0.0, 0.0)     # robot pose in odom from /odom (a Python TF listener on the 200 Hz /tf cost ~25 % CPU)
-        self.create_subscription(Odometry, 'odom', self._odom, 1)
+        # robot pose in odom: /odom is 100 Hz and every executor wake-up costs (measured 19 % CPU just for that; a TF
+        # listener was 25 %) -> a subscription on a side node the executor never spins, polled for the newest in _pose()
+        self.odom = (0.0, 0.0, 0.0)
+        self._odom_node = rclpy.create_node('person_follow_odom')
+        self._odom_sub = self._odom_node.create_subscription(Odometry, 'odom', lambda m: None, 1)
+        # robot mode (controller/state, 100 Hz, polled the same way): follow switches itself off when the robot is
+        # not balancing (disarmed / fell / fault) — no tracking, detectors go idle, X again after the next START
+        self._mode_sub = self._odom_node.create_subscription(ControllerState, 'controller/state', lambda m: None, 1)
+        self.robot_mode = None
         self.ac_plan = ActionClient(self, ComputePathToPose, 'compute_path_to_pose')
         self.ac_follow = ActionClient(self, FollowPath, 'follow_path')
         self.nav_goal_h = None          # FollowPath goal handle
@@ -134,6 +142,13 @@ class PersonFollow(Node):
         return int(hit.sum()) >= 3
 
     def _enable(self, req, res):
+        st = self._poll(self._mode_sub, ControllerState)
+        if st is not None:
+            self.robot_mode = st.mode
+        if req.data and self.robot_mode is not None and self.robot_mode != 'balance':
+            res.success, res.message = False, f'follow refused: robot {self.robot_mode} (START first)'
+            self.get_logger().warn(res.message)
+            return res
         self.enabled = bool(req.data)
         self.hold = False
         self.target = None
@@ -174,13 +189,23 @@ class PersonFollow(Node):
         return out
 
     # ------------------------------------------------------------------ frames
-    def _odom(self, m):
-        q = m.pose.pose.orientation
-        self.odom = (m.pose.pose.position.x, m.pose.pose.position.y,
-                     math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)))
+    def _poll(self, sub, typ):
+        last = None
+        with sub.handle:
+            while True:
+                r = sub.handle.take_message(typ, False)
+                if r is None:
+                    break
+                last = r[0] if isinstance(r, tuple) else r
+        return last
 
     def _pose(self):
-        """Robot pose in odom (x, y, yaw); stays (0, 0, 0) without /odom (targets are then robot-relative)."""
+        """Robot pose in odom (x, y, yaw), newest /odom; stays (0, 0, 0) without /odom (targets then robot-relative)."""
+        last = self._poll(self._odom_sub, Odometry)
+        if last is not None:
+            q = last.pose.pose.orientation
+            self.odom = (last.pose.pose.position.x, last.pose.pose.position.y,
+                         math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)))
         return self.odom
 
     @staticmethod
@@ -200,6 +225,14 @@ class PersonFollow(Node):
     # ------------------------------------------------------------------ main loop
     def _step(self):
         now = time.monotonic()
+        st = self._poll(self._mode_sub, ControllerState)
+        if st is not None:
+            self.robot_mode = st.mode
+        if self.enabled and self.robot_mode is not None and self.robot_mode != 'balance':
+            self.get_logger().warn(f'robot {self.robot_mode}: follow off (press X again after START)')
+            self.enabled, self.hold, self.target = False, False, None
+            self._nav_cancel()
+            self.pub.publish(Twist())
         if not self.enabled:
             self._status('IDLE')
             return

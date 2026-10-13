@@ -8,6 +8,7 @@ Engine: ~/gen2_ws/models/yolo11n_320_fp16.engine (built locally: trtexec --onnx=
 Out: people/camera (std_msgs/String, JSON): {"stamp": s, "w": W, "h": H, "people": [
        {"box": [x0, y0, x1, y1] (pixels), "score": s, "bearing_deg": +left (from the ankles / knees / hips when seen,
         else the box centre; "bearing_from"), "kps": 17 x [u, v, conf] (pose engine), "hsv_hist": [...] (appearance)}]}
+Rate: process_hz (30) while following (follow/status not IDLE), idle_hz (2) otherwise.
 Bearing uses the camera intrinsics (fx, cx) — data-sheet values until calibrated. The appearance is a small
 HSV histogram of the box (hue x saturation, 8 x 4) for telling two people apart by clothes.
 """
@@ -74,6 +75,9 @@ class PersonDetector(Node):
         p = lambda n, v: self.declare_parameter(n, v).value  # noqa: E731
         self.yolo = TrtYolo(os.path.expanduser(p('engine', '~/gen2_ws/models/yolo11n-pose_320_fp16.engine')))
         self.hz = p('process_hz', 30.0)          # = camera rate
+        self.hz_idle = p('idle_hz', 2.0)         # follow off (follow/status IDLE or no person_follow): save GPU / CPU
+        self.active_t = -1e9
+        self.create_subscription(String, 'follow/status', self._follow_status, 10)
         self.conf = p('score_min', 0.40)
         self.fx, self.cx = p('fx', 530.0), p('cx', 320.0)
         self.last_t, self.n, self.t_inf = 0.0, 0, 0.0
@@ -87,9 +91,14 @@ class PersonDetector(Node):
             self.get_logger().info(f'{self.n / 10.0:.1f} frames/s, preprocess+infer+post {self.t_inf / self.n * 1e3:.1f} ms')
         self.n, self.t_inf = 0, 0.0
 
+    def _follow_status(self, m):
+        if not m.data.startswith('IDLE'):
+            self.active_t = time.monotonic()
+
     def _img(self, msg):
         now = time.monotonic()
-        if now - self.last_t < 0.7 / self.hz:      # 0.7: frame-arrival jitter must not skip every other frame
+        hz = self.hz if now - self.active_t < 1.0 else self.hz_idle
+        if now - self.last_t < 0.7 / hz:           # 0.7: frame-arrival jitter must not skip every other frame
             return
         self.last_t = now
         # half-resolution JPEG decode (libjpeg DCT scaling): 320x240 is the network size anyway, ~3x faster
