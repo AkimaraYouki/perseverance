@@ -368,7 +368,11 @@ class JumpEnv:
         hm = f.h.mean(1)
         td_now = (ph_before == wbctrl.DESCEND) & (CTRL.phase == wbctrl.LAND)          # 접지 판정 순간
         self.h_td = np.where(td_now, hm, self.h_td)
-        self.slip_td = np.where(td_now, np.abs(f.w_wheel_abs.mean(1) * R - f.truth_v), self.slip_td)
+        # 닿기 직전 (바퀴가 아직 지면·턱 윗면 위 3 mm 넘게 떠 있는 마지막 순간) 의 바퀴 둘레 속도 - 몸 속도.
+        # 시뮬 강체 접촉은 닿는 1–2 ms 안에 마찰로 맞춰 버려서, 접지 판정 (고관절 토크) 순간 값은 작게 나온다 (2026-10-13 CMA 1: 0.08 m/s vs 실기 1.4)
+        surf = np.where(f.wx > self.edge, self.h, 0.0)
+        up = np.isin(CTRL.phase, (wbctrl.FLY, wbctrl.DESCEND)) & (f.wheel_z_min - surf > 0.003)
+        self.slip_td = np.where(up, np.abs(f.w_wheel_abs.mean(1) * R - f.truth_v), self.slip_td)
         self.wair = np.where(np.isin(CTRL.phase, (wbctrl.FLY, wbctrl.DESCEND)), np.maximum(self.wair, np.abs(f.w_wheel_joint).max(1)), self.wair)
         inl = CTRL.phase == wbctrl.LAND
         self.hmin = np.where(inl, np.minimum(self.hmin, hm), self.hmin)
@@ -536,7 +540,7 @@ if args.eval:
              f" (정지 때 바퀴 하나 {(float(m_nom.sum()) - float(m_nom[wheel_bodies].sum())) * 9.81 / 2:.0f} N)" if venv.hub else "")
           + ((lambda a: f" | 접지 순간 다리 {np.median(a[:, 0]) * 1000:.0f} mm (h_land {np.mean(P.h_land) * 1000:.0f}, 최소 {wbctrl.H_MIN * 1000:.0f}), "
              f"착지 중 최저 {np.median(a[:, 1]) * 1000:.0f} mm, 눌림 {np.median(a[:, 0] - a[:, 1]) * 1000:.0f} mm, 바닥 닿음 {np.mean(a[:, 1] < wbctrl.H_MIN + 0.005):.0%}, "
-             f"고관절 최대 {np.median(a[:, 2]):.1f} N·m, 접지 미끄럼 중간 {np.median(a[:, 3]):.2f} m/s (95 % {np.percentile(a[:, 3], 95):.2f}), "
+             f"고관절 최대 {np.median(a[:, 2]):.1f} N·m, 닿기 직전 미끄럼 중간 {np.median(a[:, 3]):.2f} m/s (95 % {np.percentile(a[:, 3], 95):.2f}), "
              f"공중 바퀴 |ω| 최대 중간 {np.median(a[:, 4]):.1f} rad/s, 17 넘음 {np.mean(a[:, 4] > 17):.0%}")(np.array(venv.td)) if venv.td else ""), flush=True)
     os._exit(0)                                                          # app.close() 가 가끔 멈춤
 
