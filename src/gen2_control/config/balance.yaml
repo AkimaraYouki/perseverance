@@ -53,4 +53,21 @@ balance:
       turn_lean: 0.0          # needs the roll loop
       jump_max_v: 0.4         # 2026-10-13 desktop: jump only at 0.2-0.4 m/s (0.5-0.74 fell forward 4/5 real, 0/8 sim at 0.74:
                               # the wheels saturate at ~19 rad/s in flight -> no pitch reaction left)
-      retract_lean: 0.0       # crouch lean (wb_core default 3 deg): sim take-off pitch +11 -> +6 deg on flat ground
+      # jump state machine (only used outside DRIVE): desktop sim CMA-ES 2026-10-13 (comms 1500; real plant: delays, backlash,
+      # hip 9 N.m, DR). Approach 0.2-0.4 m/s, 2048 runs each: flat 66 -> 86 % success, 6 cm 26 -> 63 %, 8 cm 24 -> 56 %.
+      # Use as one set. Previous value in [] (wb_core defaults; retract_lean was 0 from 10-13 morning).
+      t_retract: 0.256        # [0.25]
+      retract_lean: 5.0       # [0.0] the set's stronger air PD takes the lean
+      extract_pitch: -1.6     # [0.0]
+      t_tuck: 0.235           # [0.12]
+      air_kp: 46.2            # [30.0]
+      air_kd: 3.64            # [5.0]
+      air_pitch: -6.7         # [-5.0]
+      land_pitch: -1.0        # [0.0]
+      land_kp: 11.4           # [20.0]
+      land_kd: 2.10           # [1.0]
+      land_s: 0.166           # [0.30]
+      h_land: 0.183           # [0.1825]
+      contact_tau: 1.79       # [2.0]
+      leg_kp: 90.0            # [60.0] (search bound; hip_pd_tau_max 9 N.m still caps it)
+      leg_kd: 1.125           # [1.5]
