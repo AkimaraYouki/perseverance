@@ -11,6 +11,7 @@
 - 다른 컴퓨터 (데스크톱) 에서 패드·SLAM 이 이미 돌면 켜지 않는다 (heartbeat 2 개 / TF 충돌 방지).
 """
 import glob
+import math
 import os
 import re
 import signal
@@ -22,6 +23,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import yaml
 from PyQt5 import QtCore, QtGui, QtWidgets
+
+from status_panel import StatusPanel      # cw_gui.py 옆 파일들 (setup_gcs.sh 가 같이 복사)
 
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
@@ -144,6 +147,7 @@ class Ros(QtCore.QObject):
     done = QtCore.pyqtSignal(str, bool, str)         # 무엇, 성공, 메시지
     topic = QtCore.pyqtSignal(str, str)              # 토픽, 내용
     mode = QtCore.pyqtSignal(str)                    # balance mode (disarmed | stand | balance | fault | '' = 안 들어옴)
+    panel = QtCore.pyqtSignal(dict)                  # 상태판 값 (status_panel.py)
 
     def __init__(self):
         super().__init__()
@@ -162,7 +166,19 @@ class Ros(QtCore.QObject):
             self.node.create_timer(0.5, self._emit_state)
         except ImportError:
             pass
+        # 상태판 (오른쪽) — 값마다 (받은 시각, 값), 0.2 초마다 GUI 로
+        self._panel, self._v_last, self._acc = {}, None, 0.0
+        from sensor_msgs.msg import BatteryState
+        for k in ('motor', 'compute'):
+            self.node.create_subscription(BatteryState, f'power/{k}', lambda m, k=k: self._power(k, m), 10)
+        try:
+            from gen2_msgs.msg import MotorStateArray
+            self.node.create_subscription(MotorStateArray, 'motors/state', self._motors, qos_profile_sensor_data)
+        except ImportError:
+            pass
+        self.node.create_timer(0.2, self._emit_panel)
         self.node.create_timer(2.0, self._graph)
+        self._imu, self._imu_sub = None, None
         self.ex = SingleThreadedExecutor()
         self.ex.add_node(self.node)
         self.th = threading.Thread(target=self._spin, daemon=True)
@@ -179,8 +195,47 @@ class Ros(QtCore.QObject):
         if m.name == 'balance' and m.msg.startswith('jump: '):
             self.topic.emit('jump', m.msg)
 
+    def imu_on(self, on):
+        """/imu/data (500 Hz) 는 자세 창이 열려 있는 동안만 받는다."""
+        from sensor_msgs.msg import Imu
+        with self.lock:
+            if on and self._imu_sub is None:
+                self._imu_sub = self.node.create_subscription(Imu, 'imu/data', self._on_imu, qos_profile_sensor_data)
+            elif not on and self._imu_sub is not None:
+                self.node.destroy_subscription(self._imu_sub)
+                self._imu_sub, self._imu = None, None
+
+    def _on_imu(self, m):
+        q, g = m.orientation, m.angular_velocity
+        self._imu = (time.monotonic(), q.w, q.x, q.y, q.z, g.x, g.y, g.z)
+
+    def imu(self):
+        return self._imu
+
     def _state(self, m):
-        self._cs = (time.monotonic(), m.mode, m.fault, m.pitch, m.v)
+        now = time.monotonic()
+        self._cs = (now, m.mode, m.fault, m.pitch, m.v)
+        if self._v_last is not None and now - self._v_last[0] > 1e-3:      # 가속도 = dv/dt, 0.2 초 평활
+            dt = now - self._v_last[0]
+            a = (m.v - self._v_last[1]) / dt
+            self._acc = a if dt > 0.5 else self._acc + (a - self._acc) * min(1.0, dt / 0.2)
+        self._v_last = (now, m.v)
+        # roll: ControllerState 는 + = 왼쪽 내려감 → 자세 창 (/imu/data, REP-103) 과 같게 + = 오른쪽 내려감 으로
+        self._panel['cs'] = (now, dict(mode=m.mode, fault=m.fault, v=m.v, acc=self._acc, vx_cmd=m.vx_cmd, wz_cmd=m.wz_cmd,
+                                       pitch=math.degrees(m.pitch), roll=-math.degrees(m.roll), h=tuple(m.h)))
+
+    def _power(self, k, m):
+        self._panel[k] = (time.monotonic(), (m.voltage, m.percentage, m.present))
+
+    def _motors(self, m):
+        ok = [x for x in m.motors if not x.stale and not math.isnan(x.temperature_c)]
+        if ok:
+            hot = max(ok, key=lambda x: x.temperature_c)
+            self._panel['temp'] = (time.monotonic(), (hot.temperature_c, hot.name))
+
+    def _emit_panel(self):
+        now = time.monotonic()
+        self.panel.emit({k: v for k, (t, v) in list(self._panel.items()) if now - t < 1.5})
 
     def _emit_state(self):
         if self._cs:
@@ -450,7 +505,7 @@ class Gui(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle('C-WANG 관제')
-        self.resize(1040, 780)
+        self.resize(1340, 800)
         self.ros = Ros()
         QtWidgets.QApplication.instance().aboutToQuit.connect(self.ros.shutdown)
         self.pool = ThreadPoolExecutor(4)
@@ -459,13 +514,18 @@ class Gui(QtWidgets.QMainWindow):
         self.live_params = {}          # 노드 → live_params 에 적힌 이름들
         self.bal_mode = ''
         self.pending = {}              # 노드 → {이름: 값}
+        self.att_win = None            # 자세 창
 
         w = QtWidgets.QWidget()
         self.setCentralWidget(w)
         top = QtWidgets.QVBoxLayout(w)
         top.addWidget(self._status_bar())
+        mid = QtWidgets.QHBoxLayout()
+        top.addLayout(mid, 1)
         self.tabs = QtWidgets.QTabWidget()
-        top.addWidget(self.tabs, 1)
+        mid.addWidget(self.tabs, 1)
+        self.spanel = StatusPanel()
+        mid.addWidget(self.spanel)
         self.tabs.addTab(self._features_tab(), '기능 켜기/끄기')
         self.tabs.addTab(self._tune_tab(), '파라미터 튜닝')
         self.tabs.addTab(self._log_tab(), '로그')
@@ -475,6 +535,7 @@ class Gui(QtWidgets.QMainWindow):
         self.ros.done.connect(self._on_done)
         self.ros.topic.connect(self._on_topic)
         self.ros.mode.connect(self._on_mode)
+        self.ros.panel.connect(self.spanel.update_values)
         self.sshres.connect(self._on_ssh)
 
         self.send_timer = QtCore.QTimer(self, singleShot=True, interval=300)
@@ -514,9 +575,22 @@ class Gui(QtWidgets.QMainWindow):
         stop = QtWidgets.QPushButton('추종 정지')
         stop.setStyleSheet('background:#e67e22; color:white; font-weight:bold; padding:8px 14px')
         stop.clicked.connect(self.follow_off)
-        g.addWidget(stop, 0, 4, 2, 1)
-        g.addWidget(sit, 0, 5, 2, 1)
+        att = QtWidgets.QPushButton('자세 보기')
+        att.setToolTip('롤 · 피치 · 요를 축마다 따로 (자세계 · 위/옆/뒤에서 본 로봇 · 10 초 기록) — /imu/data')
+        att.setStyleSheet('padding:8px 14px; font-weight:bold')
+        att.clicked.connect(self.show_attitude)
+        g.addWidget(att, 0, 4, 2, 1)
+        g.addWidget(stop, 0, 5, 2, 1)
+        g.addWidget(sit, 0, 6, 2, 1)
         return f
+
+    def show_attitude(self):
+        if self.att_win is None:
+            from attitude_view import AttitudeWindow
+            self.att_win = AttitudeWindow(self.ros)
+        self.att_win.show()
+        self.att_win.raise_()
+        self.att_win.activateWindow()
 
     # ---------------- 기능 탭
     def _row(self, grid, r, title, lamp, buttons, note=''):
@@ -1054,6 +1128,8 @@ class Gui(QtWidgets.QMainWindow):
         self.log('바뀐 값 복사함:\n' + txt)
 
     def closeEvent(self, e):
+        if self.att_win is not None:
+            self.att_win.close()
         self.poll.stop()
         self.rpoll.stop()
         self.pool.shutdown(wait=False, cancel_futures=True)
