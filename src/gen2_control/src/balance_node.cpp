@@ -326,6 +326,34 @@ public:
     pub_timer_ = create_wall_timer(10ms, [this] {publish();});
     step_log_ = declare_parameter("step_log", true);
     step_log_dir_ = declare_parameter("step_log_dir", std::string(std::getenv("HOME") ? std::getenv("HOME") : "/tmp") + "/gen2_ws/logs/steps");
+    // runtime change (GCS GUI, comms 2026-10-13_1300): only the overall speed cap, only while disarmed — no gains
+    {
+      rcl_interfaces::msg::ParameterDescriptor ro;
+      ro.read_only = true;
+      ro.description = "set at runtime, robot disarmed only";
+      declare_parameter("live_params", std::vector<std::string>{"tune.vmax_kmh"}, ro);
+      vmax_kmh_req_ = params_.vmax_kmh;
+    }
+    live_cb_ = add_on_set_parameters_callback([this](const std::vector<rclcpp::Parameter> & ps) {
+      rcl_interfaces::msg::SetParametersResult r;
+      r.successful = false;
+      for (const auto & q : ps) {
+        if (q.get_name() != "tune.vmax_kmh") {r.reason = q.get_name() + ": read at start only"; return r;}
+        if (q.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE || !(q.as_double() >= 0.5 && q.as_double() <= 3.5)) {
+          r.reason = "tune.vmax_kmh: a double in 0.5..3.5"; return r;
+        }
+      }
+      {
+        std::lock_guard<std::mutex> lk(mode_m_);
+        if (mode_ != Mode::kDisarmed) {r.reason = std::string("only while disarmed (now ") + mode_name(mode_) + ")"; return r;}
+      }
+      for (const auto & q : ps) {
+        vmax_kmh_req_ = q.as_double();
+        RCLCPP_INFO(get_logger(), "live tune.vmax_kmh = %.2f", q.as_double());
+      }
+      r.successful = true;
+      return r;
+    });
     if (step_log_) {log_th_ = std::thread([this] {log_writer();});}
     th_ = std::thread([this] {loop();});
     RCLCPP_INFO(get_logger(), "balance_node ready (model %s): modes disarmed/stand%s",
@@ -563,6 +591,10 @@ private:
       prev = t;
       dt_max_ms_ = std::max(dt_max_ms_.load(), dt_ms);
       if (dt_ms > 2e3 / rate_hz_) {++overruns_;}
+      if (mode_ == Mode::kDisarmed && vmax_kmh_req_.load() != params_.vmax_kmh) {   // live speed cap, applied while disarmed
+        params_.vmax_kmh = vmax_kmh_req_.load();
+        if (core_) {core_->set_vmax_kmh(params_.vmax_kmh);}
+      }
       step(t);
     }
   }
@@ -1070,6 +1102,8 @@ private:
   int64_t shm_try_ns_ = 0;
   bool use_shm_ = true;
   double th_trim_ = 0.0;
+  std::atomic<double> vmax_kmh_req_{3.5};
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr live_cb_;
   std::atomic<bool> imu_src_shm_{false};
   std::atomic<double> dt_max_ms_{0.0};
   std::atomic<uint32_t> overruns_{0};

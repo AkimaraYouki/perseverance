@@ -21,6 +21,7 @@ import time
 import numpy as np
 import rclpy
 import rclpy.executors
+from gen2_tools.live import Live
 from geometry_msgs.msg import Pose, PoseArray
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -65,6 +66,7 @@ class LegDetector(Node):
         self.idle_every = p('idle_every', 5)
         self.active_t, self.n_scan = -1e9, 0
         self.create_subscription(String, 'follow/status', self._follow_status, 10)
+        Live(self, {'max_range_m': 'max_range', 'track_gate_m': 'gate', 'track_keep_s': 'keep_s'})
 
     def _follow_status(self, m):
         if not m.data.startswith('IDLE'):

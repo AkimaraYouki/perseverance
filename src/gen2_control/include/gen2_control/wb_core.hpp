@@ -102,6 +102,7 @@ public:
   Output step(const Frame & f, double vx, double wz, double h_ref, double h_mid = -1.0, bool jump = false);
   int phase() const {return phase_;}
   const Params & params() const {return P_;}
+  void set_vmax_kmh(double v) {P_.vmax_kmh = v;}     // runtime speed cap (balance_node live param, disarmed only)
 
 private:
   double lqr_torque(double l, double x_err, double v_err, double th, double thd) const;

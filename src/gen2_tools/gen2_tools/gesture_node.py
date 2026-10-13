@@ -22,6 +22,7 @@ import mediapipe as mp
 import numpy as np
 import rclpy
 import rclpy.executors
+from gen2_tools.live import Live
 from mediapipe.tasks.python import BaseOptions, vision
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -52,6 +53,7 @@ class GestureNode(Node):
         self.cli = {k: self.create_client(Trigger, f'balance/{k}') for k in ('sit', 'start')}
         self.create_subscription(CompressedImage, 'camera/image_raw/compressed', self._img, qos_profile_sensor_data)
         self.get_logger().info(f'gesture recognizer ready at {self.hz} Hz, actions {self.actions}')
+        Live(self, {'process_hz': 'hz', 'min_score': 'min_score', 'hold_s': 'hold_s'})
 
     def _img(self, msg):
         now = time.monotonic()

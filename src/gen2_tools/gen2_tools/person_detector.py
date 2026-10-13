@@ -22,6 +22,7 @@ import cv2
 import numpy as np
 import rclpy
 import rclpy.executors
+from gen2_tools.live import Live
 import tensorrt as trt
 from cuda.bindings import runtime as cudart
 from rclpy.node import Node
@@ -85,6 +86,7 @@ class PersonDetector(Node):
         self.create_subscription(CompressedImage, 'camera/image_raw/compressed', self._img, qos_profile_sensor_data)
         self.create_timer(10.0, self._report)
         self.get_logger().info(f'YOLO TRT input {self.yolo.size}px, {self.hz} Hz')
+        Live(self, {'score_min': 'conf', 'process_hz': 'hz', 'idle_hz': 'hz_idle'})
 
     def _report(self):
         if self.n:

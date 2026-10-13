@@ -26,6 +26,7 @@ import time
 
 import rclpy
 import rclpy.executors
+from gen2_tools.live import Live
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
@@ -60,6 +61,7 @@ class PadTeleop(Node):
         self.create_subscription(Joy, 'joy', self._joy, 10)
         self.create_timer(0.05, self._tick)
         self.get_logger().info('pad_teleop ready: START = start, BACK = sit, LB+RB 0.5 s = disarm')
+        Live(self, {'vx_max': 'vx_max', 'wz_max': 'wz_max', 'deadzone': 'dead', 'height_rate': 'h_rate'})
 
     def _joy(self, m):
         self.joy, self.joy_t = m, time.monotonic()

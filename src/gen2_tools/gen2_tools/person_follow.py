@@ -19,7 +19,7 @@ sluggish on a balancing robot). Obstacle in the corridor (robot width + corridor
 person) -> Nav2 (nav_follow.launch): a path to 'follow_dist in front of the person' on the LiDAR costmap every
 nav_replan_s, MPPI drives it around; kept nav_hold_s after the corridor is free again. After a controller abort only
 turn towards the person for 1 s, then plan again. Both go to cmd_vel/auto (cmd_mux; the pad always wins).
-Parameters can be changed live (ros2 param set). Services: follow/enable (SetBool), follow/hold (SetBool: true =
+Parameters in _LIVE (+ bearing_tol_deg) can be changed while the robot is disarmed (gen2_tools.live). Services: follow/enable (SetBool), follow/hold (SetBool: true =
 stop, false = resume). Topic: follow/status (String).
 """
 
@@ -30,6 +30,7 @@ import time
 import numpy as np
 import rclpy
 import rclpy.executors
+from gen2_tools.live import Live
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseArray, PoseStamped, Twist
 from gen2_msgs.msg import ControllerState
@@ -96,24 +97,17 @@ class PersonFollow(Node):
         self.blocked_t = -1e9           # last time the corridor to the person was blocked
         self.scan_b = np.zeros((0, 2))  # scan_level points in base_link
         self.create_subscription(LaserScan, 'scan_level', self._scan, qos_profile_sensor_data)          # controller gave up (boxed in / no progress): steer directly for a while
-        self.add_on_set_parameters_callback(self._set_params)
+        live = dict(self._LIVE)
+        live['bearing_tol_deg'] = lambda v: setattr(self, 'tol', math.radians(v))
+        Live(self, live)
         self.create_timer(0.05, self._step)
 
-    _LIVE = {'follow_dist_m': 'd_ref', 'k_dist': 'k_d', 'k_yaw': 'k_yaw', 'vx_max': 'vx_max', 'wz_max': 'wz_max',
+    # runtime-changeable (robot disarmed only, gen2_tools.live): limits / tracking / avoidance — no gains (k_dist, k_yaw)
+    _LIVE = {'follow_dist_m': 'd_ref', 'vx_max': 'vx_max', 'wz_max': 'wz_max',
              'occluded_s': 'occl_s', 'search_wz': 'search_wz', 'appearance_min': 'app_min', 'use_nav': 'use_nav',
              'nav_replan_s': 'nav_period', 'reacquire_min': 'app_reacq', 'grace_s': 'grace',
              'legs_only_s': 'legs_only', 'max_gate_m': 'max_gate', 'predict_s': 'pred_s',
              'corridor_margin_m': 'margin', 'nav_hold_s': 'nav_hold'}
-
-    def _set_params(self, params):
-        """ros2 param set /person_follow <name> <value> takes effect immediately (tuning on the robot)."""
-        from rcl_interfaces.msg import SetParametersResult
-        for q in params:
-            if q.name in self._LIVE:
-                setattr(self, self._LIVE[q.name], q.value)
-            elif q.name == 'bearing_tol_deg':
-                self.tol = math.radians(q.value)
-        return SetParametersResult(successful=True)
 
     # ------------------------------------------------------------------ inputs
     def _cam(self, m):
