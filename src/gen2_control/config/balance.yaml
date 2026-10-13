@@ -51,8 +51,8 @@ balance:
       roll_kd: 0.1            # 2026-10-12 desktop step 3 (sim 80/80); user: "너무 잘됨". push recovery 0.13-0.26 s; hip current 10-100 Hz 0.24 A (0.05 with kd 0)
       roll_rate_lpf_hz: 4.0   # roll-rate LPF for the kd term (wb_core default 8)
       turn_lean: 0.0          # needs the roll loop
-      jump_max_v: 0.4         # 2026-10-13 desktop: jump only at 0.2-0.4 m/s (0.5-0.74 fell forward 4/5 real, 0/8 sim at 0.74:
-                              # the wheels saturate at ~19 rad/s in flight -> no pitch reaction left)
+      jump_max_v: 0.0         # JUMP OFF (any request refused: v > 0): 2026-10-13 the CMA-1 set below landed with legs tucked and
+                              # wheels spinning backwards -> broke a wheel; desktop 1800: no jumps until CMA-3. Was 0.4 (0.2-0.4 m/s).
       # jump state machine (only used outside DRIVE): desktop sim CMA-ES 2026-10-13 (comms 1500; real plant: delays, backlash,
       # hip 9 N.m, DR). Approach 0.2-0.4 m/s, 2048 runs each: flat 66 -> 86 % success, 6 cm 26 -> 63 %, 8 cm 24 -> 56 %.
       # Use as one set. Previous value in [] (wb_core defaults; retract_lean was 0 from 10-13 morning).
