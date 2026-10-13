@@ -77,7 +77,7 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
   const double t = f.t;
   const int ph0 = phase_;
   const double tp = t - t_phase_;
-  const bool blocked = jump && ph0 == kDrive && (v_now < P.jump_min_v || std::fabs(wz_now) > P.jump_max_wz);
+  const bool blocked = jump && ph0 == kDrive && (v_now < P.jump_min_v || v_now > P.jump_max_v || std::fabs(wz_now) > P.jump_max_wz);
   o.jump_blocked = blocked;
   jump = jump && !blocked;
   const bool m0 = ph0 == kDrive && !lift_on_ && jump;

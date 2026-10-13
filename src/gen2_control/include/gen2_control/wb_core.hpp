@@ -49,6 +49,7 @@ struct Params      // climb_test.py TUNE defaults (2026-10-07)
   double m_pend = 4.02;             // nominal mass without wheels [kg] (export 7)
   // --- jump state machine (climb_test.py TUNE 2026-10-12, docs: comms/to-robot/attachments/jump_state_machine.md)
   double jump_min_v = 0.2, jump_max_wz = 1.0;        // a request is ignored below this speed / above this yaw rate
+  double jump_max_v = 1e9;                           // ... and above this speed (robot: tune.jump_max_v 0.4; wbctrl has none)
   double t_retract = 0.25, retract_lean = 3.0;       // crouch time [s], lean while crouching [deg]
   double t_tuck = 0.12, t_fly_max = 0.45;            // legs tucked after take-off [s], forced landing after [s]
   double contact_tau = 2.0;                          // landing: max |hip torque| above this [N·m] (after 0.04 s)
@@ -97,7 +98,7 @@ public:
   WBCore(const Params & p, const LqrTable & lqr);
   void reset();
   // vx [m/s], wz [rad/s] commands, h_ref (= idle_h in auto), h_mid (< 0 -> idle_h),
-  // jump: operator request this step (pad Y edge) — honoured only in DRIVE, not lifted, v >= jump_min_v, |gz| <= jump_max_wz
+  // jump: operator request this step (pad Y edge) — honoured only in DRIVE, not lifted, jump_min_v <= v <= jump_max_v, |gz| <= jump_max_wz
   Output step(const Frame & f, double vx, double wz, double h_ref, double h_mid = -1.0, bool jump = false);
   int phase() const {return phase_;}
   const Params & params() const {return P_;}

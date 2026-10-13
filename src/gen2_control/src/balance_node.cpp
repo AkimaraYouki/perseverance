@@ -162,7 +162,10 @@ public:
       throw std::runtime_error("hip_mode: servo_pos|current_pd|mit");
     }
     mit_kt_drive_ = declare_parameter("mit_kt_drive", 0.5994);
-    mit_kp_scale_ = declare_parameter("mit_kp_scale", 1.0);   // mit_pos: drive kp correction (probe hinted ~0.56 effective)   // Kt the drive uses for t -> current (measured 2026-10-07)
+    mit_kp_scale_ = declare_parameter("mit_kp_scale", 1.0);
+    // mit_pos: the drive's PD sees the whole step M_tgt - M (jump extension -> 28-32 A, 2026-10-12): clip the
+    // position error so kp * err + |ff| stays within this joint torque (sim hip limit 9 N.m)
+    hip_pd_tau_max_ = declare_parameter("hip_pd_tau_max", 9.0);   // mit_pos: drive kp correction (probe hinted ~0.56 effective)   // Kt the drive uses for t -> current (measured 2026-10-07)
     osc_flips_ = static_cast<int>(declare_parameter("osc_flips", 6));
     osc_window_s_ = declare_parameter("osc_window_s", 0.3);
     osc_vel_ = declare_parameter("osc_vel_rad_s", 1.0);
@@ -204,6 +207,7 @@ public:
     P.yaw_i_max = declare_parameter("tune.yaw_i_max", P.yaw_i_max);
     // jump state machine (wb_core, desktop 2026-10-12) — same names as climb_test.py TUNE
     P.jump_min_v = declare_parameter("tune.jump_min_v", P.jump_min_v);
+    P.jump_max_v = declare_parameter("tune.jump_max_v", P.jump_max_v);
     P.jump_max_wz = declare_parameter("tune.jump_max_wz", P.jump_max_wz);
     P.t_retract = declare_parameter("tune.t_retract", P.t_retract);
     P.retract_lean = declare_parameter("tune.retract_lean", P.retract_lean);
@@ -313,7 +317,7 @@ public:
           if (mode_ != Mode::kBalance || sit_) {rs->success = false; rs->message = "not balancing"; return;}
           jump_req_ = true;
           rs->success = true;
-          rs->message = "ok: jump requested (needs >= " + std::to_string(params_.jump_min_v).substr(0, 4) + " m/s forward, not turning)";
+          rs->message = "ok: jump requested (needs " + std::to_string(params_.jump_min_v).substr(0, 4) + "-" + std::to_string(params_.jump_max_v).substr(0, 4) + " m/s forward, not turning)";
         });
     pub_ = create_publisher<gen2_msgs::msg::ControllerState>("controller/state", 10);
     // wheel + gyro odometry (odom -> base_link, planar) for SLAM / RViz; integrated while standing/balancing
@@ -823,7 +827,7 @@ private:
       const Output o = core_->step(f, sit_u >= 0 ? 0.0 : vx, sit_u >= 0 ? 0.0 : wz, params_.idle_h, h_mid, jreq);
       if (jreq) {
         if (o.phase == gen2_control::kRetract) {RCLCPP_INFO(get_logger(), "jump: start (v %.2f m/s)", o.v);}
-        else {RCLCPP_WARN(get_logger(), "jump: refused (v %.2f m/s, need >= %.2f forward and |wz| <= %.1f)", o.v, params_.jump_min_v, params_.jump_max_wz);}
+        else {RCLCPP_WARN(get_logger(), "jump: refused (v %.2f m/s, need %.2f-%.2f forward and |wz| <= %.1f)", o.v, params_.jump_min_v, params_.jump_max_v, params_.jump_max_wz);}
       }
       if (o.phase != last_.phase) {RCLCPP_INFO(get_logger(), "jump phase %d -> %d", last_.phase, o.phase);}
       last_ = o;
@@ -861,11 +865,15 @@ private:
         gen2_hardware::mit::Command mc;
         mc.t = tau * c.direction * sc;
         if (in_drive) {
+          // joint torque of the drive PD = kp * kp_scale * err (sc cancels: kp and t both scaled by sc)
+          const double kpj = std::max(1e-6, kp * mit_kp_scale_);
+          const double elim = std::max(0.0, hip_pd_tau_max_ - std::fabs(ff)) / kpj;
+          const double err = std::clamp(M_tgt[k] - M[k], -elim, elim);
           const double p_raw_deg = fb[k].status.position_deg +
-            (M_tgt[k] - M[k]) * 180.0 / M_PI * c.raw_deg_per_output_rev / 360.0 / c.direction;
+            err * 180.0 / M_PI * c.raw_deg_per_output_rev / 360.0 / c.direction;
           mc.p = p_raw_deg * M_PI / 180.0 * 360.0 / c.raw_deg_per_output_rev;
           mc.kp = kp * sc * mit_kp_scale_;
-          tau = std::clamp(kp * (M_tgt[k] - M[k]) + ff, -tmax, tmax);   // logging: what the drive should produce
+          tau = std::clamp(kpj * err + ff, -tmax, tmax);   // logging: what the drive should produce
         }
         mc.kd = (homing_ || home_done_ ? home_kd_ : kd) * sc;
         bus_->send(gen2_hardware::mit::encode(gen2_hardware::mit::Proto::kV3, c.can_id, c.mit_ranges, mc), err);
@@ -1021,6 +1029,7 @@ private:
   bool stand_ff_;
   std::string hip_mode_;
   double mit_kp_scale_ = 1.0;
+  double hip_pd_tau_max_ = 9.0;
   double hip_speed_, hip_accel_, mit_kt_drive_, osc_window_s_, osc_vel_, sat_frac_, sat_time_s_, sit_sat_a_;
   int osc_flips_;
   int osc_sign_[2] = {0, 0};
