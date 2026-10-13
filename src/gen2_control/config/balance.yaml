@@ -21,7 +21,7 @@ balance:
                               # 2026-10-12 first real jumps: the extension step gave 28-32 A (desktop comms 2235 / 0335)
     osc_flips: 6              # fault: hip velocity (|w| > osc_vel) changes sign this often within osc_window_s
     osc_window_s: 0.3
-    osc_vel_rad_s: 1.0
+    osc_vel_rad_s: 4.0        # 2026-10-14: 1.0 tripped on bumps at 0.75 m/s (hip 10-12 Hz chatter, |w| 1.8-2.9, legs/currents fine) -> 0 A, robot sat
     sat_frac: 0.9             # fault: hip current > sat_frac x current_limit for sat_time_s
     sat_time_s: 0.1
     sit_sat_current_a: 5.0    # while sitting: hip |I| above this for sat_time_s = leg blocked -> fault (2026-10-08 leg_r link slipped at 9.9 A)
