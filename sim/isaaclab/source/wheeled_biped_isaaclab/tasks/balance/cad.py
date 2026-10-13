@@ -44,7 +44,8 @@ WHEEL_SIGN = (-1.0, +1.0)                     # (L, R): CAD 바퀴축 -> 정책�
 LEG_JOINTS = ["L_joint_M", "R_joint_M"]
 WHEEL_JOINTS = ["L_joint_W", "R_joint_W"]
 # 로봇 USD (WB_WHEEL_R 로 고름):
-#   70 mm = usd_loop          CAD export 8 = 새 바퀴 (지름·고무 같고 안쪽 허브만, CAD 94.7 g, 자체 izz 3.378e-4, 2026-10-13) = 4.214 kg (기본)
+#   70 mm = usd_loop          CAD export 8 + 새 바퀴 실측 (허브 66 g + 고무 26 g = 92.0 g, 메시 모양으로 자체 izz 3.363e-4, 2026-10-13) = 4.208 kg (기본)
+#           usd_loop_e8       CAD export 8 그대로 (새 바퀴 허브만 바뀜, CAD 94.7 g, 자체 izz 3.378e-4)
 #           usd_loop_e7b      CAD export 7 + 바퀴 실측 (휠 + 고무 72.5 g, 고무 16.5 g, 2026-10-07) = 4.170 kg. 형상은 6 과 같음
 #           usd_loop_e7       CAD export 7 그대로 (질량 실측, 바퀴 CAD 70.2 g, 4.165 kg)
 #           usd_loop_e6       CAD export 6 (바퀴 140 mm, 2026-09-27, 4.037 kg CAD 밀도) — WB_USD_DIR=usd_loop_e6 로 비교
@@ -55,10 +56,10 @@ _USD_DIR = os.environ.get("WB_USD_DIR") or {70: "usd_loop", 60: "usd_loop_e5_R60
 USD_PATH = os.path.expanduser(f"~/wheeled_biped_isaaclab/{_USD_DIR}/robot_simple.usd")
 # 바퀴 축 관성 (한 개) = 모터 회전자 반사관성 (fix_urdf: 157.33e-7 x 10^2 = 1.573e-3) + 바퀴 자체.
 #   CAD: 120 mm 자체 1.82e-4 -> 1.755e-3, 140 mm 자체 2.661e-4 -> 1.839e-3. 140 mm 실측 질량 (고무 16.5 g + 휠 56.0 g, 메시 모양) 2.681e-4 -> 1.841e-3. 사본은 make_wheel_variant 와 같은 식
-#   export 8 새 바퀴 (CAD 94.7 g): 자체 3.378e-4 -> 1.9111e-3
-_E7 = _USD_DIR in ("usd_loop_e7b", "usd_loop_e7", "usd_loop_e6")
-WHEEL_IZZ = {70: 1.8414e-3 if _E7 else 1.9111e-3, 60: 1.755e-3}.get(_R_MM, 1.625e-3 + 1.3e-4 * (R_WHEEL / 0.060) ** 4)
-WHEEL_SELF_IZZ = {70: 2.6814e-4 if _E7 else 3.378e-4, 60: 1.82e-4}.get(_R_MM, 2.68e-4)   # 바퀴 자체 (고무 + 휠, 회전자 제외) — 백래시 모델용
+#   export 8 새 바퀴: CAD 94.7 g 자체 3.378e-4 -> 1.9111e-3, 실측 92.0 g (메시 + 실측 질량) 3.3633e-4 -> 1.9096e-3 (기본)
+_SELF = {"usd_loop_e7b": 2.6814e-4, "usd_loop_e7": 2.6614e-4, "usd_loop_e6": 2.6614e-4, "usd_loop_e8": 3.378e-4}.get(_USD_DIR, 3.3633e-4)
+WHEEL_IZZ = {70: 1.5733e-3 + _SELF, 60: 1.755e-3}.get(_R_MM, 1.625e-3 + 1.3e-4 * (R_WHEEL / 0.060) ** 4)
+WHEEL_SELF_IZZ = {70: _SELF, 60: 1.82e-4}.get(_R_MM, 2.68e-4)   # 바퀴 자체 (고무 + 휠, 회전자 제외) — 백래시 모델용
 
 # --- leg_map 표 (theta -> 다리 관절값, dh/dtheta) -------------------------------
 _TH = torch.linspace(leg_map.THETA_MIN - 0.08, leg_map.THETA_MAX + 0.08, 2001, dtype=torch.float64)
