@@ -243,6 +243,7 @@ for i, g in enumerate(rngs):
     kv = 1.0 - g.uniform(0, 1) * P.dr_motor
     masses[i, 0] *= km; coms[i, 0, 0] += dx; coms[i, 0, 2] += dz; vlim[i] *= kv
     dr.append(dict(mass=round(km, 3), com_x_cm=round(dx * 100, 2), com_z_cm=round(dz * 100, 2), wheel_motor=round(kv, 3)))
+masses[:, wheel_bodies] += float(os.environ.get("WB_WHEEL_DM_G", "0")) / 1000.0   # 바퀴 실제 질량 오차 [g] (제어기 명목은 그대로, 2026-10-13 새 바퀴 ±10 g 분석)
 idx = torch.arange(N, device="cpu")
 view.set_masses(masses, idx); view.set_coms(coms, idx)
 wheels_act.velocity_limit = vlim.to(dev)

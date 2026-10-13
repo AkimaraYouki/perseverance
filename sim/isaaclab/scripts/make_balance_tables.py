@@ -26,8 +26,8 @@ import leg_map  # noqa: E402
 import lqr_vmc  # noqa: E402
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--urdf", default=os.path.join(MODEL, "cad_export7_robot.urdf"))
-ap.add_argument("--loop", default=os.path.join(MODEL, "cad_export7_loop_closure.json"))
+ap.add_argument("--urdf", default=os.path.join(MODEL, "cad_export8_robot.urdf"))
+ap.add_argument("--loop", default=os.path.join(MODEL, "cad_export8_loop_closure.json"))
 ap.add_argument("--out", default=os.path.join(MODEL, "balance_tables.yaml"))
 ap.add_argument("--step_deg", type=float, default=0.5)
 ap.add_argument("--I_pend", type=float, default=0.02912,
@@ -40,7 +40,7 @@ ns = {}
 exec(src[i0:src.index("\n)\n", i0) + 3], ns)
 T = ns["TUNE"]
 THETA0 = math.radians(45.002)                                      # cad.THETA0
-WHEEL_IZZ = 1.8414e-3                                              # cad.WHEEL_IZZ (R 70 mm, 바퀴 실측)
+WHEEL_IZZ = 1.9111e-3 if "export8" in args.urdf else 1.8414e-3      # cad.WHEEL_IZZ (R 70 mm): export 8 새 바퀴 CAD 94.7 g / export 7 바퀴 실측 72.5 g
 M_SIGN = {"L": 1.0, "R": -1.0}
 
 
@@ -193,7 +193,7 @@ def fl(a, nd=6):
 
 
 yaml = f"""# 실기 제어기 (gen2_control balance_node) 모델 표 — wheeled_biped_isaaclab/scripts/make_balance_tables.py 가 만든다 (손으로 고치지 말 것)
-# 모델: {os.path.basename(args.urdf)} (CAD export 7 + 바퀴 실측, 시뮬 usd_loop 와 같음), 총 {sum(v['m'] for v in LINK.values()):.4f} kg, 바퀴 반지름 R {leg_map.R_WHEEL} m
+# 모델: {os.path.basename(args.urdf)} ({"CAD export 8 새 바퀴 (CAD 94.7 g)" if "export8" in args.urdf else "CAD export 7 + 바퀴 실측"}, 시뮬 usd_loop 와 같음), 총 {sum(v['m'] for v in LINK.values()):.4f} kg, 바퀴 반지름 R {leg_map.R_WHEEL} m
 # LQR: climb_test.build_lqr() 와 같은 식 — CAD 영점 자세 (M = 0, θ 45.002°) 에서 m_pend {m_pend:.4f} kg (바퀴 뺀 전체), I {I_use:.5f} kg·m² (시뮬 Isaac 값, URDF 로 풀면 {I_sim:.5f}),
 #      바퀴 두 개 m_w {m_w:.4f} kg, I_w = 2·(WHEEL_IZZ {WHEEL_IZZ} + armature {T['wheel_armature']}) = {I_w:.6f} kg·m²,
 #      Q = diag({T['lqr_qx']}, {T['lqr_qv']}, {T['lqr_qth']}, {T['lqr_qthd']}), R = {T['lqr_r']}.  τ (두 바퀴 합) = -K [x_err, v_err, θ, θ̇], l 사이 선형 보간

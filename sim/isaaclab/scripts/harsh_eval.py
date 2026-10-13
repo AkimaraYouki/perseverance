@@ -249,6 +249,7 @@ view = robot.root_physx_view
 com_b_nom = view.get_coms().clone()[..., :3].to(dev)                # 모델 오차 전 링크 좌표 무게중심 (명목, 제어기용)
 masses, coms = view.get_masses().clone(), view.get_coms().clone()
 masses[:, 0] *= torch.tensor(km, dtype=masses.dtype)
+masses[:, wheel_bodies] += float(os.environ.get("WB_WHEEL_DM_G", "0")) / 1000.0   # 바퀴 실제 질량 오차 [g] (제어기 명목은 그대로, 2026-10-13 새 바퀴 ±10 g 분석)
 coms[:, 0, 0] += torch.tensor(dxz[:, 0], dtype=coms.dtype); coms[:, 0, 2] += torch.tensor(dxz[:, 1], dtype=coms.dtype)  # noqa: E702
 idx = torch.arange(N, device="cpu")
 view.set_masses(masses, idx); view.set_coms(coms, idx)  # noqa: E702
