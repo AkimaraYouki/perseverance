@@ -897,15 +897,20 @@ private:
         gen2_hardware::mit::Command mc;
         mc.t = tau * c.direction * sc;
         if (in_drive) {
-          // joint torque of the drive PD = kp * kp_scale * err (sc cancels: kp and t both scaled by sc)
+          // joint torque the drive makes = kp * kp_scale * err - kd * Md + ff (sc cancels: kp, kd, t all scaled by sc).
+          // Clip err so that total stays within +-hip_pd_tau_max. The damping must be inside the clip: 2026-10-13
+          // first jumps with the clip on kp * err alone: extension at 2.7 rad/s, kd 1.5 ate 4 N.m -> only 2-3 N.m
+          // pushed (2-4 A), legs 0.29 m/s, no take-off.
           const double kpj = std::max(1e-6, kp * mit_kp_scale_);
-          const double elim = std::max(0.0, hip_pd_tau_max_ - std::fabs(ff)) / kpj;
-          const double err = std::clamp(M_tgt[k] - M[k], -elim, elim);
+          const double kdj = homing_ || home_done_ ? home_kd_ : kd;
+          const double damp = kdj * Md[k];
+          const double err = std::clamp(M_tgt[k] - M[k],
+            (-hip_pd_tau_max_ - ff + damp) / kpj, (hip_pd_tau_max_ - ff + damp) / kpj);
           const double p_raw_deg = fb[k].status.position_deg +
             err * 180.0 / M_PI * c.raw_deg_per_output_rev / 360.0 / c.direction;
           mc.p = p_raw_deg * M_PI / 180.0 * 360.0 / c.raw_deg_per_output_rev;
           mc.kp = kp * sc * mit_kp_scale_;
-          tau = std::clamp(kpj * err + ff, -tmax, tmax);   // logging: what the drive should produce
+          tau = std::clamp(kpj * err - damp + ff, -tmax, tmax);   // logging: what the drive should produce (PD + ff)
         }
         mc.kd = (homing_ || home_done_ ? home_kd_ : kd) * sc;
         bus_->send(gen2_hardware::mit::encode(gen2_hardware::mit::Proto::kV3, c.can_id, c.mit_ranges, mc), err);
