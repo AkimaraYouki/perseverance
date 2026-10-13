@@ -99,7 +99,7 @@ class PersonFollow(Node):
         self.create_subscription(LaserScan, 'scan_level', self._scan, qos_profile_sensor_data)          # controller gave up (boxed in / no progress): steer directly for a while
         live = dict(self._LIVE)
         live['bearing_tol_deg'] = lambda v: setattr(self, 'tol', math.radians(v))
-        Live(self, live)
+        Live(self, live, always=('use_nav',))
         self.create_timer(0.05, self._step)
 
     # runtime-changeable (robot disarmed only, gen2_tools.live): limits / tracking / avoidance — no gains (k_dist, k_yaw)

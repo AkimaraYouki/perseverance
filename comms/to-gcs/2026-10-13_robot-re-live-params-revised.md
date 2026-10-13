@@ -21,3 +21,5 @@ robot mode 가 disarmed 가 아니면 (또는 controller/state 를 아직 못 �
 로봇이 막을 수 없다 → GUI 가 `controller/state.mode == disarmed` 일 때만 보내 주세요 (같은 규칙).
 pad_teleop·gesture 는 노트북/데스크톱에서 `git pull && colcon build --packages-select gen2_tools` 후 다시 켜야 `live_params` 가 생긴다
 (pad_teleop 은 gen2_msgs ControllerState 를 import — gen2_msgs 빌드 필요).
+
+추가 (1330 반영): 켜기/끄기는 튜닝이 아니므로 `/person_follow use_nav` 는 mode 와 상관없이 받는다 (live.Live 의 always). 나머지는 disarmed 만.

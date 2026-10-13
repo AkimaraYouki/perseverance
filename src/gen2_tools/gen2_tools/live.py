@@ -14,8 +14,9 @@ from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 
 
 class Live:
-    def __init__(self, node, mapping):
-        self.node, self.mapping, self.mode = node, dict(mapping), None
+    def __init__(self, node, mapping, always=()):
+        # always: on/off switches (not tuning) accepted in any mode, e.g. person_follow use_nav (GCS 1330)
+        self.node, self.mapping, self.mode, self.always = node, dict(mapping), None, set(always)
         node.declare_parameter('live_params', list(self.mapping),
                                ParameterDescriptor(read_only=True, description='set at runtime, robot disarmed only'))
         self._side = rclpy.create_node(node.get_name() + '_live')
@@ -36,7 +37,7 @@ class Live:
             if q.name not in self.mapping:
                 return SetParametersResult(successful=False, reason=f'{q.name}: read at start only')
         mode = self.robot_mode()
-        if mode != 'disarmed':
+        if mode != 'disarmed' and not all(q.name in self.always for q in params):
             return SetParametersResult(successful=False, reason=f'only while the robot is disarmed (now {mode})')
         for q in params:
             t = self.mapping[q.name]
