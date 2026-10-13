@@ -76,6 +76,15 @@ COSTMAP = [
     ('inflation_layer.inflation_radius', '장애물 팽창 반경', 0.1, 1.0, 0.05, 0.40, 'm'),
     ('inflation_layer.cost_scaling_factor', '팽창 비용 감쇠', 0.5, 10.0, 0.5, 4.0, ''),
 ]
+BALANCE = [   # balance_node — 로봇이 live_params 로 연 것만, disarmed 일 때만 (comms 2026-10-13_1200)
+    ('th_trim_deg', '균형점 보정 (+ = 뒤로)', -5.0, 5.0, 0.1, -1.2, '°'),
+    ('tune.yaw_kd', '회전 D 게인', 0.0, 0.5, 0.01, 0.15, ''),
+    ('tune.yaw_ki', '회전 I 게인', 0.0, 3.0, 0.1, 1.0, ''),
+    ('tune.accel_max', '최대 가속', 0.2, 1.5, 0.05, 0.8, 'm/s²'),
+    ('tune.jerk_max', '최대 저크 (S 곡선)', 0.0, 10.0, 0.5, 3.0, 'm/s³'),
+    ('tune.jump_min_v', '점프 최소 속도', 0.1, 0.5, 0.05, 0.2, 'm/s'),
+    ('tune.jump_max_v', '점프 최대 속도', 0.2, 0.8, 0.05, 0.4, 'm/s'),
+]
 PAD = [
     ('vx_max', '패드 최대 전진 속도', 0.1, 1.0, 0.05, 0.7, 'm/s'),
     ('wz_max', '패드 최대 회전 속도', 0.2, 3.0, 0.1, 2.0, 'rad/s'),
@@ -108,7 +117,8 @@ def _pv(v):
 
 def _from_pv(p):
     return {ParameterType.PARAMETER_BOOL: p.bool_value, ParameterType.PARAMETER_INTEGER: p.integer_value,
-            ParameterType.PARAMETER_DOUBLE: p.double_value, ParameterType.PARAMETER_STRING: p.string_value}.get(p.type)
+            ParameterType.PARAMETER_DOUBLE: p.double_value, ParameterType.PARAMETER_STRING: p.string_value,
+            ParameterType.PARAMETER_STRING_ARRAY: list(p.string_array_value)}.get(p.type)
 
 
 class Ros(QtCore.QObject):
@@ -117,6 +127,7 @@ class Ros(QtCore.QObject):
     params = QtCore.pyqtSignal(str, dict)            # 노드, {이름: 값}
     done = QtCore.pyqtSignal(str, bool, str)         # 무엇, 성공, 메시지
     topic = QtCore.pyqtSignal(str, str)              # 토픽, 내용
+    mode = QtCore.pyqtSignal(str)                    # balance mode (disarmed | stand | balance | fault | '' = 안 들어옴)
 
     def __init__(self):
         super().__init__()
@@ -155,8 +166,10 @@ class Ros(QtCore.QObject):
             if time.monotonic() - t < 1.5:
                 s = f'{mode}' + (f' ({fault})' if fault else '') + f' · 기울기 {pitch*57.3:+.1f}° · 속도 {v:+.2f} m/s'
                 self.topic.emit('controller/state', s)
+                self.mode.emit(mode)
                 return
         self.topic.emit('controller/state', '')
+        self.mode.emit('')
 
     def _graph(self):
         names = {(ns.rstrip('/') + '/' + n) for n, ns in self.node.get_node_names_and_namespaces()}
@@ -192,7 +205,8 @@ class Ros(QtCore.QObject):
         req = GetParameters.Request(names=list(names))
 
         def ok(r):
-            vals = {n: _from_pv(v) for n, v in zip(names, r.values) if v.type != ParameterType.PARAMETER_NOT_SET}
+            vals = {n: (None if v.type == ParameterType.PARAMETER_NOT_SET else _from_pv(v)) for n, v in zip(names, r.values)}
+            vals.update({n: None for n in names[len(r.values):]})
             self.params.emit(node, vals)
         self._call(GetParameters, f'{node}/get_parameters', req, f'읽기 {node}', ok)
 
@@ -360,8 +374,9 @@ class Group(QtWidgets.QGroupBox):
         super().__init__(title)
         self.nodes, self.gui, self.live = nodes, gui, live
         v = QtWidgets.QVBoxLayout(self)
-        n = QtWidgets.QLabel(note)
+        self.note = n = QtWidgets.QLabel(note)
         n.setStyleSheet('color:#888')
+        n.setWordWrap(True)
         v.addWidget(n)
         self.rows = {}
         for spec in table:
@@ -379,9 +394,11 @@ class Group(QtWidgets.QGroupBox):
             self.timer.start()
 
     def flush(self, all_rows=False):
-        if not self.live:
+        if not self.live or not self.isEnabled():
+            self.pending.clear()
             return
-        vals = {n: r.value() for n, r in self.rows.items()} if all_rows else dict(self.pending)
+        vals = {n: r.value() for n, r in self.rows.items() if r.isEnabled()} if all_rows else \
+            {n: v for n, v in self.pending.items() if self.rows[n].isEnabled()}
         self.pending.clear()
         if vals:
             for nd in self.nodes:
@@ -420,6 +437,7 @@ class Gui(QtWidgets.QMainWindow):
         self.setWindowTitle('C-WANG 관제')
         self.resize(980, 760)
         self.ros = Ros()
+        QtWidgets.QApplication.instance().aboutToQuit.connect(self.ros.shutdown)
         self.pool = ThreadPoolExecutor(4)
         self.nodes = set()
         self.robot_ok = None
@@ -441,6 +459,7 @@ class Gui(QtWidgets.QMainWindow):
         self.ros.params.connect(self._on_params)
         self.ros.done.connect(self._on_done)
         self.ros.topic.connect(self._on_topic)
+        self.ros.mode.connect(self._on_mode)
         self.sshres.connect(self._on_ssh)
 
         self.poll = QtCore.QTimer(self, interval=1000)
@@ -590,6 +609,10 @@ class Gui(QtWidgets.QMainWindow):
         inner = QtWidgets.QWidget()
         iv = QtWidgets.QVBoxLayout(inner)
         self.groups = [Group(t, n, tb, note, self) for t, n, tb, note in LIVE_GROUPS]
+        self.g_bal = Group('균형 (해제 상태에서만)', ['/balance'], BALANCE, '', self)
+        self.groups.append(self.g_bal)
+        self.bal_live, self.bal_mode = None, ''
+        self._gate_bal()
         self.g_pad = Group('패드 (pad_teleop)', [], PAD, '노트북 — "다시 시작" 또는 다음 켤 때 적용', self, live=False)
         self.g_gest = Group('손짓 (gesture_node)', [], GESTURE, '노트북 — "다시 시작" 또는 다음 켤 때 적용', self, live=False)
         for g in self.groups + [self.g_pad, self.g_gest]:
@@ -813,6 +836,11 @@ class Gui(QtWidgets.QMainWindow):
             for k in ('follow', 'hold', 'nav'):
                 self.lamp[k].set('off')
                 self.note[k].setText('추종 스택 꺼짐')
+        if '/balance' in names:
+            self.ros.get_params('/balance', ['live_params'])
+        elif self.bal_live is not None:
+            self.bal_live = None
+            self._gate_bal()
         if '/cmd_mux' in names:
             self.ros.get_params('/cmd_mux', ['lidar_limit'])
         else:
@@ -821,15 +849,44 @@ class Gui(QtWidgets.QMainWindow):
         self.show_log() if self.logsel.currentIndex() else None
 
     def _on_params(self, node, vals):
-        if node == '/person_follow' and 'use_nav' in vals:
+        if node == '/balance' and 'live_params' in vals:
+            lp = vals['live_params']
+            live = set(lp) if isinstance(lp, list) else set()
+            if live != self.bal_live:
+                self.bal_live = live
+                self._gate_bal()
+        if node == '/person_follow' and vals.get('use_nav') is not None:
             self.lamp['nav'].set('on' if vals['use_nav'] else 'warn')
             self.note['nav'].setText('켜짐 — 막히면 돌아감' if vals['use_nav'] else '꺼짐 — 직진만')
-        if node == '/cmd_mux' and 'lidar_limit' in vals:
+        if node == '/cmd_mux' and vals.get('lidar_limit') is not None:
             # 꺼짐이 로봇 기본 (2026-10-09 사용자: 자기 다리·바퀴가 잡혀 주행이 막힘). 회피는 person_follow 가 한다
             self.lamp['lidar'].set('on' if vals['lidar_limit'] else 'warn')
             self.note['lidar'].setText('켜짐' if vals['lidar_limit'] else '꺼짐 (의도 — 회피는 추종 쪽 Nav2 가 함)')
         for g in self.groups:
             g.on_params(node, vals)
+
+    def _on_mode(self, m):
+        if m != self.bal_mode:
+            self.bal_mode = m
+            self._gate_bal()
+
+    def _gate_bal(self):
+        """균형 묶음: 로봇이 live_params 로 연 이름만, disarmed 일 때만 켠다 (균형 중 게인 변경 = 넘어짐)."""
+        live, mode = self.bal_live, self.bal_mode
+        ok = bool(live) and mode == 'disarmed'
+        self.g_bal.setEnabled(ok)
+        for n, r in self.g_bal.rows.items():
+            r.setEnabled(ok and n in live)
+        if live is None:
+            msg = '로봇 /balance 가 안 보임'
+        elif not live:
+            msg = '로봇이 아직 실시간 변경을 열지 않음 (live_params 없음 — comms 로 요청함 2026-10-13). 지금 값 표시만.'
+        elif mode != 'disarmed':
+            msg = f'지금 {mode or "상태 모름"} — 해제 (disarmed) 일 때만 바꿀 수 있음 (균형 중에 바꾸면 넘어질 수 있다)'
+        else:
+            msg = '해제 상태 — 바꾸면 바로 반영, 다음 일어서기부터 적용. 로봇이 범위 밖·상태 이상이면 거절'
+        self.g_bal.note.setText(msg)
+        self.g_bal.note.setStyleSheet('color:#27ae60' if ok else 'color:#e67e22')
 
     def _on_topic(self, t, s):
         if t == 'follow/status':
@@ -920,7 +977,6 @@ def main():
     app.setApplicationName('C-WANG 관제')
     signal.signal(signal.SIGINT, lambda *_: app.quit())
     g = Gui()
-    app.aboutToQuit.connect(g.ros.shutdown)
     g.show()
     if os.environ.get('CW_GUI_SHOT'):   # 시험: 화면 저장 후 끝
         def shot():
