@@ -56,7 +56,7 @@ GROUPS = [
         (RPP, 'FollowPath.rotate_to_heading_angular_vel', '우회 제자리 회전 속도', 0.1, 2.5, 0.1, 1.0, 'rad/s'),
         (RPP, 'FollowPath.regulated_linear_scaling_min_speed', '우회 곡선 최소 속도', 0.05, 0.7, 0.05, 0.25, 'm/s'),
         (RPP, 'FollowPath.min_approach_linear_velocity', '우회 목표 근처 최소 속도', 0.0, 0.5, 0.05, 0.1, 'm/s'),
-        ('/balance', 'tune.vmax_kmh', '균형 노드 최고 속도 (전체 상한)', 1.0, 5.0, 0.1, 3.5, 'km/h'),
+        ('/balance', 'tune.vmax_kmh', '균형 노드 최고 속도 (전체 상한)', 0.5, 3.5, 0.1, 3.5, 'km/h'),   # 로봇이 0.5–3.5 밖은 거절
     ]),
     ('사람 추종', '누구를 얼마나 떨어져서 따라가는지, 놓쳤을 때 어떻게 하는지', [
         (PF, 'follow_dist_m', '따라갈 거리', 0.3, 2.0, 0.05, 0.8, 'm'),
@@ -71,7 +71,8 @@ GROUPS = [
     ]),
     ('사람 인식', '카메라 (YOLO) · 라이다 다리 검출 — 로봇이 live_params 로 열면 실시간', [
         ('/person_detector', 'score_min', '사람 검출 최소 확신도', 0.1, 0.9, 0.05, 0.40, ''),
-        ('/person_detector', 'process_hz', '사람 검출 주기', 5.0, 30.0, 1.0, 30.0, 'Hz'),
+        ('/person_detector', 'process_hz', '사람 검출 주기 (추종 중)', 5.0, 30.0, 1.0, 30.0, 'Hz'),
+        ('/person_detector', 'idle_hz', '사람 검출 주기 (추종 꺼짐)', 0.5, 10.0, 0.5, 2.0, 'Hz'),
         ('/leg_detector', 'max_range_m', '다리 검출 최대 거리', 1.0, 8.0, 0.25, 4.0, 'm'),
         ('/leg_detector', 'track_gate_m', '다리 추적 허용 이동', 0.1, 1.5, 0.05, 0.5, 'm'),
         ('/leg_detector', 'track_keep_s', '다리 놓쳐도 유지', 0.2, 3.0, 0.1, 1.0, 's'),
