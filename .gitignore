@@ -17,3 +17,5 @@ logs/*.log
 logs/*.pids
 logs/*.pgid
 logs/*.pid
+logs/health/
+logs/boot/

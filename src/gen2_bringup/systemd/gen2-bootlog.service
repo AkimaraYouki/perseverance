@@ -1,0 +1,15 @@
+# Boot report: ~/gen2_ws/logs/boot/<date>_boot<idx>.txt, 90 s after boot (see scripts/gen2_bootlog.sh)
+# Install: sudo cp gen2-bootlog.service /etc/systemd/system/ && sudo systemctl enable gen2-bootlog
+[Unit]
+Description=Gen2 boot report (previous boot end, errors, services, CAN, motors, power, network)
+After=gen2-bench.service gen2-balance.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/parksudo/gen2_ws/src/gen2_bringup/scripts/gen2_bootlog.sh
+TimeoutStartSec=300
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
