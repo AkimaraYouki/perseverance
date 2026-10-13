@@ -6,7 +6,7 @@
 - 로봇 쪽 (추종 스택) 은 cw 와 같은 ssh 스크립트로, 노트북 쪽 (패드·손짓·SLAM·RViz·HUD) 은 터미널 없이 뒤에서 띄운다
   (로그 ~/gen2_desk/logs/*.log, '로그' 탭). cw check / cw down 과 같은 프로세스 패턴이라 섞어 써도 된다.
 - 튜닝 탭: 게인 (최적화된 값) 은 다루지 않는다. 속도 한계, 추종·인식·장애물 회피·SLAM 의 동작 파라미터만.
-  칸마다 언제 적용되는지 표시: 실시간 / 재시작 때 (노트북에서 도는 패드·손짓·SLAM) / 잠김 (노드가 실시간 변경을 안 받음).
+  칸마다 언제 적용되는지 표시: 실시간 (= 로봇 해제 (disarmed) 하고 변경, 서 있으면 잠김) / 재시작 때 (노트북에서 도는 패드·손짓·SLAM) / 잠김 (노드가 실시간 변경을 안 받음).
   노드가 `live_params` (string array) 를 내놓으면 그 이름들은 실시간으로 바뀐다 (comms 2026-10-13_1300).
 - 다른 컴퓨터 (데스크톱) 에서 패드·SLAM 이 이미 돌면 켜지 않는다 (heartbeat 2 개 / TF 충돌 방지).
 """
@@ -112,7 +112,7 @@ KNOWN_LIVE = {
 MIRROR = {LCM: [GCM]}                       # 로컬 코스트맵 값을 글로벌에도
 RESTART = {'/pad_teleop': 'pad', '/gesture': 'gesture', '/slam_toolbox': 'slam'}   # 노트북에서 띄우는 노드
 ASK_LIVE = ['/balance', '/pad_teleop', '/gesture', '/person_detector', '/leg_detector', PF]   # live_params 물어볼 노드
-DISARMED_ONLY = {'/balance'}
+# 실시간 = 해제 (disarmed) 하고 변경 (사용자 2026-10-13): 균형·주행 중에는 어떤 값도 보내지 않는다
 
 
 # ------------------------------------------------------------------ ROS (뒤 스레드)
@@ -604,7 +604,8 @@ class Gui(QtWidgets.QMainWindow):
         h.addWidget(self._btn('프리셋 불러오기', self.load_preset))
         h.addWidget(self._btn('바뀐 값 복사 (comms 용)', self.copy_diff, '로봇 설정에 영구 반영하려면 comms 로 요청'))
         v.addLayout(h)
-        lg = QtWidgets.QLabel('게인은 여기 없다 (최적화된 값). <b>실시간</b> = 바로 반영 · <b>재시작 때</b> = 노트북에서 다시 켤 때 · '
+        lg = QtWidgets.QLabel('게인은 여기 없다 (최적화된 값). <b>실시간</b> = 로봇을 해제 (disarmed) 하고 바꾸면 바로 반영 '
+                              '(서 있거나 주행 중엔 잠김) · <b>재시작 때</b> = 노트북에서 다시 켤 때 · '
                               '<b>잠김</b> = 노드가 실시간 변경을 아직 안 받음. 지금 값이 주황이면 아직 반영 안 됨. '
                               '로봇 노드를 다시 켜면 설정 파일 값으로 돌아간다 (영구 반영은 "바뀐 값 복사" → comms).')
         lg.setStyleSheet('color:#888')
@@ -914,8 +915,8 @@ class Gui(QtWidgets.QMainWindow):
                 ('locked', f'{node} 가 안 보임')
         if not live:
             return 'locked', f'{node} 가 이 값을 실시간으로 안 받음 (시작할 때만 읽음) — live_params 로 열어 달라고 요청함'
-        if node in DISARMED_ONLY and self.bal_mode != 'disarmed':
-            return 'locked', f'균형 노드 값은 해제 (disarmed) 일 때만 — 지금 {self.bal_mode or "상태 모름"}'
+        if self.bal_mode != 'disarmed':
+            return 'locked', f'실시간 = 해제 (disarmed) 하고 변경 — 지금 {self.bal_mode or "상태 모름"}. 패드 BACK 으로 앉혀서 해제한 뒤'
         return 'live', '바꾸면 바로 반영'
 
     def update_kinds(self):
