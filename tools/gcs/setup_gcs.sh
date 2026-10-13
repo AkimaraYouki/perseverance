@@ -60,11 +60,19 @@ source ~/gen2_desk/install/setup.bash
 export ROS_DOMAIN_ID=42 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp CYCLONEDDS_URI=file://$HOME/gen2_desk/cyclonedds.xml
 ENV
 
-say "6/7 관제 도구 (cw, wifi, 상태판, HUD, RViz 설정)"
+say "6/7 관제 도구 (cw, wifi, 상태판, HUD, RViz 설정, 관제 GUI)"
 mkdir -p ~/bin
 T=~/perseverance/tools/desktop
 cp $T/cw $T/wifi $T/slam_reset ~/bin/ && chmod +x ~/bin/cw ~/bin/wifi ~/bin/slam_reset
 cp $T/desk_dash.py $T/desk_dash_robot.py $T/hud.py $T/gen2_desktop.rviz ~/gen2_desk/
+# 관제 GUI (기능 켜기/끄기 + 튜닝): 바탕화면·앱 목록 아이콘 "C-WANG 관제"
+G=~/perseverance/tools/gcs
+cp $G/cw_gui.py ~/gen2_desk/ && cp $G/cw-gui ~/bin/ && chmod +x ~/bin/cw-gui
+D=$(xdg-user-dir DESKTOP 2>/dev/null || echo ~/Desktop)
+mkdir -p ~/.local/share/applications "$D"
+for f in ~/.local/share/applications/cw-gui.desktop "$D/cw-gui.desktop"; do
+  sed "s|@HOME@|$HOME|" $G/cw-gui.desktop > "$f"; chmod +x "$f"; gio set "$f" metadata::trusted true 2>/dev/null || true
+done
 grep -q 'HOME/bin' ~/.bashrc || echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
 
 say "7/7 손짓 인식 (MediaPipe 가상환경 + 모델)"

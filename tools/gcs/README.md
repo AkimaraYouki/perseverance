@@ -10,7 +10,7 @@ bash ~/setup_gcs.sh          # sudo 비밀번호를 물음. 10–20 분
 ```
 하는 일: 기본 도구 → ROS 2 Jazzy 저장소 → ROS 패키지 (ros-base, rviz2, cyclonedds, joy, 이미지 압축, slam_toolbox, colcon)
 → perseverance 받기·빌드 (gen2_msgs, gen2_tools, gen2_bringup) → Cyclone DDS 설정 (도메인 42, 로봇 peer)
-→ 관제 도구 (cw, wifi, 상태판, HUD, RViz 설정) → 손짓용 MediaPipe 가상환경 + 모델.
+→ 관제 도구 (cw, wifi, 상태판, HUD, RViz 설정, 관제 GUI) → 손짓용 MediaPipe 가상환경 + 모델.
 다시 실행해도 안전 (끝난 단계는 넘어감).
 
 ## 2. ROBOT 망에서 한 번
@@ -28,6 +28,18 @@ cw down      # 노트북 쪽 끄기
 ```
 하나씩: `cw slam start|stop|reset|save`, `cw follow start|stop`, `cw gesture`, `cw pad`, `cw rviz`, `cw dash`, `cw hud`, `cw ssh`,
 `wifi` (신호 %), `wifi -r` (로봇 상태판). 패드 버튼은 바탕화면 브링업 안내 (`tools/desktop/bringup.txt`) 와 같음.
+
+## 관제 GUI — 바탕화면 아이콘 **C-WANG 관제** (또는 `cw-gui`)
+터미널 없이 창 하나에서 켜고 끄고 튜닝. `cw` 와 같은 프로세스를 다루므로 섞어 써도 된다.
+- **기능 켜기/끄기**: 로봇 — 사람 추종 스택, 추종 활성화 (= 패드 X), 일시 정지 (= 손바닥), 장애물 우회 (Nav2, `use_nav`),
+  장애물 앞 정지·감속 (`cmd_mux lidar_limit`). 노트북 — 패드, 손짓, SLAM (지우기·저장), RViz, HUD, 상태판. 위쪽 **추종 정지 / 로봇 앉기** 버튼.
+  노트북 쪽은 뒤에서 돌고 로그는 `~/gen2_desk/logs/*.log` ('로그' 탭).
+- **파라미터 튜닝**: 슬라이더를 움직이면 0.3 초 뒤 로봇에 바로 반영 (person_follow 전부, Nav2 RPP, 코스트맵 팽창).
+  처음엔 로봇의 지금 값을 읽어 온다. 주황 = 아직 반영 안 됨, 초록 = 반영됨. 로봇 노드를 다시 켜면 설정 파일 값으로 돌아가니,
+  계속 쓸 값은 **바뀐 값 복사** → `comms/to-robot/` 로 요청. 프리셋 저장/불러오기 = `~/gen2_desk/gui_presets/`.
+  패드·손짓 값은 **다시 시작** 때 적용 (패드 다시 시작은 heartbeat 가 1–2 초 끊겨 서 있는 로봇이 멈추고 앉는다 — 확인 창).
+  balance_node 게인은 시작할 때만 읽어서 GUI 에 없다.
+- 다른 컴퓨터 (데스크톱) 에서 패드·SLAM 이 돌고 있으면 켜지 않는다.
 
 ## 주의
 - 노트북은 RAM 3 GB·4 코어·내장 그래픽: **데스크톱과 노트북에서 같은 것을 동시에 켜지 말 것** (패드 2 개 = heartbeat 2 개 → 끊김 안전장치가 무력해짐,

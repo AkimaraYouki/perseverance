@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=C-WANG 관제
+Comment=로봇 기능 켜기/끄기 + 파라미터 튜닝
+Exec=@HOME@/bin/cw-gui
+Icon=applications-engineering
+Terminal=false
+Categories=Utility;

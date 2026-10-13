@@ -1,0 +1,4 @@
+#!/bin/bash
+# C-WANG 관제 GUI 실행 (바탕화면 아이콘 "C-WANG 관제" 도 이것을 부른다)
+source ~/gen2_desk/env.sh
+exec python3 ~/gen2_desk/cw_gui.py "$@"
