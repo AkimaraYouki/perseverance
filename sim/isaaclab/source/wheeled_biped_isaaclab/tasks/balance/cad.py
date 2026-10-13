@@ -236,6 +236,7 @@ class DCMotorFric(DCMotor):
     def __init__(self, cfg, *args, **kwargs):
         super().__init__(cfg, *args, **kwargs)
         self.deadband = torch.full_like(self.computed_effort, cfg.deadband)
+        self.tau_gain = torch.ones_like(self.computed_effort)   # 드라이브가 실제로 내는 토크 / 명령 (실기 0.82–0.84, 2026-10-13 관성 시험)
         self.backlash = 0.0                              # [rad, 출력축] 전체 유격 (0 = 끔)
         self.gear_k, self.gear_c, self.rotor_J, self.dt, self.n_sub = 300.0, 0.05, 2.0e-3, 1.0 / 400, 10
         self.omega_r = torch.zeros_like(self.computed_effort)    # 회전자 속도 (관절 좌표, 출력축 환산)
@@ -249,7 +250,7 @@ class DCMotorFric(DCMotor):
     def compute(self, control_action, joint_pos, joint_vel):
         e = control_action.joint_efforts
         if e is not None:
-            control_action.joint_efforts = torch.where(e.abs() <= self.deadband, torch.zeros_like(e), e)
+            control_action.joint_efforts = torch.where(e.abs() <= self.deadband, torch.zeros_like(e), e) * self.tau_gain
         if self.backlash <= 0:
             return super().compute(control_action, joint_pos, joint_vel)
         out = super().compute(control_action, joint_pos, joint_vel)
@@ -276,7 +277,7 @@ class DCMotorFricCfg(DCMotorCfg):
 
 
 def set_wheel_model(robot, wheel_ids, fric_static, fric_dyn, viscous=0.0, deadband=0.0, armature=0.0,
-                    backlash_deg=0.0, gear_k=300.0, gear_c=0.05, dt=1.0 / 400):
+                    backlash_deg=0.0, gear_k=300.0, gear_c=0.05, dt=1.0 / 400, tau_gain=1.0):
     """바퀴 실측 모델 적용 (창·시험 세트·가혹 평가 공통).
     fric_static / fric_dyn [N·m]: PhysX 관절 마찰 (Isaac Sim 5.x: 정지 = 멈춰 있을 때 버티는 최대 토크, 운동 = 도는 동안 일정).
       숫자 또는 (환경, 바퀴) 텐서. 2026-10-03 확인 (scripts/diag_wheel_friction.py): 정지 0.45 에 0.3 N·m -> 안 돎,
@@ -289,6 +290,7 @@ def set_wheel_model(robot, wheel_ids, fric_static, fric_dyn, viscous=0.0, deadba
     fd = torch.minimum(fd, fs)                                         # PhysX: 정지 >= 운동 이어야 한다 (어기면 설정 자체를 거부, 2026-10-07)
     robot.write_joint_friction_coefficient_to_sim(fs, fd, full(viscous), joint_ids=wheel_ids)
     robot.actuators["wheels"].deadband[:] = full(deadband)                 # 숫자 또는 (환경, 바퀴) — 로봇마다
+    robot.actuators["wheels"].tau_gain[:] = full(tau_gain)                 # 실제 토크 / 명령 (데드밴드는 명령 기준)
     wa = robot.actuators["wheels"]
     if backlash_deg > 0:                                                   # 반전 토크 공백 모델 (DCMotorFric)
         wa.backlash, wa.dt = math.radians(backlash_deg), dt

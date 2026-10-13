@@ -1,0 +1,28 @@
+# 실험용 (2026-10-14 데스크톱) — 적용 전. balance.yaml tune 위에 덮어쓰는 값만. 시뮬 플랜트 = 바퀴 토크 0.83 + armature 1.7e-4 + 실측 새 바퀴 92 g.
+# 게인 표 balance_gains_robot_kt083.yaml (x1.2) 와 **같이** 쓸 것.
+balance:
+  ros__parameters:
+    tune:
+      vmax_kmh: 3.0           # [3.5] 토크 0.83 이면 3.5 에서 경사로·고속 회전이 나빠짐: robust ramp+fast_turn+stones_turn 3.0 40/48, 3.5 34/48, 4.0 33/48
+      accel_max: 0.8          # 그대로. 빠른 출발 대안: accel_max 1.2 + jerk_max 6.0 -> 0.4 m/s 까지 0.60 -> 0.43 s, 출발 pitch 9.8 -> 13.7 deg, robust 49 -> 47/64
+      jerk_max: 3.0           # 그대로
+      jump_max_v: 0.4         # [0.0 = 점프 꺼짐] 다시 켬 (0.2-0.4 m/s)
+      # 점프 상태기계: 시뮬 CMA-ES 5 차 (토크 0.83 플랜트, 착지 벌점 = 넘어짐·다리 바닥 닿음·허브 하중·닿기 직전 미끄럼).
+      # 묶음으로 쓸 것. spin_match_k 는 wb_core 포팅 필요 (wbctrl desktop/jump-rl b072017) — 없으면 미끄럼 0.28 -> 1.15 m/s (바퀴 파손 때 1.4).
+      t_retract: 0.175
+      retract_lean: 5.8
+      extract_pitch: 1.2
+      t_tuck: 0.196
+      air_kp: 40.8
+      air_kd: 2.0
+      air_pitch: -11.3
+      land_pitch: -5.6
+      land_kp: 25.2
+      land_kd: 0.79
+      land_s: 0.46
+      h_land: 0.1866
+      contact_tau: 1.04
+      leg_kp: 71.8
+      leg_kd: 0.56
+      spin_match_k: 0.251
+      air_w_max: 0.0          # 끔 (CMA 가 상한 19 로 감 = 효과 없음)

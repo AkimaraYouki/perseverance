@@ -260,7 +260,7 @@ if hasattr(wheels_act, "_vel_at_effort_lim"):
 motor_est = kv * (1.0 + g.normal(0, 0.02, N))                          # 전압으로 추정한 모터 한계 (오차 2 %)
 kd_ = 1.0 + g.uniform(-1, 1, (N, 2)) * P.dr_fric_dyn                   # 운동 마찰
 cad.set_wheel_model(robot, wheel_ids, torch.tensor(P.wheel_fric_nm * kf), torch.tensor(P.wheel_fric_dyn_nm * kd_),
-                    P.wheel_visc, torch.tensor(P.wheel_deadband_nm * kf), P.wheel_armature, backlash_deg=getattr(P, 'wheel_backlash_deg', 0.0), gear_k=getattr(P, 'wheel_gear_k', 300.0), gear_c=getattr(P, 'wheel_gear_c', 0.05), dt=float(cfg.sim.dt))
+                    P.wheel_visc, torch.tensor(P.wheel_deadband_nm * kf), P.wheel_armature, backlash_deg=getattr(P, 'wheel_backlash_deg', 0.0), gear_k=getattr(P, 'wheel_gear_k', 300.0), gear_c=getattr(P, 'wheel_gear_c', 0.05), dt=float(cfg.sim.dt), tau_gain=getattr(P, 'wheel_tau_gain', 1.0))
 mass_true = masses.to(dev)
 CTRL = wbctrl.WBController(P, lqr, m_pend, n=N, seed=args.seed + 1000)
 
