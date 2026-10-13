@@ -15,6 +15,7 @@ import math
 import os
 import re
 import signal
+import struct
 import subprocess
 import sys
 import threading
@@ -24,7 +25,8 @@ from concurrent.futures import ThreadPoolExecutor
 import yaml
 from PyQt5 import QtCore, QtGui, QtWidgets
 
-from status_panel import StatusPanel      # cw_gui.py 옆 파일들 (setup_gcs.sh 가 같이 복사)
+from attitude_view import AttitudeView, AttitudeWindow   # cw_gui.py 옆 파일들 (setup_gcs.sh 가 같이 복사)
+from status_panel import StatusPanel
 
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
@@ -171,14 +173,12 @@ class Ros(QtCore.QObject):
         from sensor_msgs.msg import BatteryState
         for k in ('motor', 'compute'):
             self.node.create_subscription(BatteryState, f'power/{k}', lambda m, k=k: self._power(k, m), 10)
-        try:
-            from gen2_msgs.msg import MotorStateArray
-            self.node.create_subscription(MotorStateArray, 'motors/state', self._motors, qos_profile_sensor_data)
-        except ImportError:
-            pass
-        self.node.create_timer(0.2, self._emit_panel)
+        # 모터 온도·상태 = motor_monitor 의 /diagnostics (1 Hz). motors/state (100 Hz) 는 파이썬으로 받으면 한 코어의 14 % (2026-10-14 잼)
+        from diagnostic_msgs.msg import DiagnosticArray
+        self.node.create_subscription(DiagnosticArray, '/diagnostics', self._diag, 10)
+        self.node.create_timer(0.2, self._emit_panel)          # 진단은 1 Hz 라 3 초까지 유효 (_emit_panel)
         self.node.create_timer(2.0, self._graph)
-        self._imu, self._imu_sub = None, None
+        self._att, self._yaw, self._odom_sub, self._att_users, self.yaw0 = None, None, None, 0, None
         self.ex = SingleThreadedExecutor()
         self.ex.add_node(self.node)
         self.th = threading.Thread(target=self._spin, daemon=True)
@@ -195,22 +195,42 @@ class Ros(QtCore.QObject):
         if m.name == 'balance' and m.msg.startswith('jump: '):
             self.topic.emit('jump', m.msg)
 
-    def imu_on(self, on):
-        """/imu/data (500 Hz) 는 자세 창이 열려 있는 동안만 받는다."""
-        from sensor_msgs.msg import Imu
+    def att_on(self, on):
+        """자세 그림이 보이는 동안만 /odom (요) 을 받는다. 롤·피치는 늘 받는 controller/state 에서."""
+        from nav_msgs.msg import Odometry
         with self.lock:
-            if on and self._imu_sub is None:
-                self._imu_sub = self.node.create_subscription(Imu, 'imu/data', self._on_imu, qos_profile_sensor_data)
-            elif not on and self._imu_sub is not None:
-                self.node.destroy_subscription(self._imu_sub)
-                self._imu_sub, self._imu = None, None
+            self._att_users = max(0, self._att_users + (1 if on else -1))     # 아래 줄 + 큰 창
+            if self._att_users and self._odom_sub is None:
+                # raw = 역직렬화 없이 바이트만 (파이썬 메시지 변환이 비싸다): 필요한 값만 꺼낸다
+                self._odom_sub = self.node.create_subscription(Odometry, 'odom', self._on_odom, qos_profile_sensor_data, raw=True)
+            elif not self._att_users and self._odom_sub is not None:
+                self.node.destroy_subscription(self._odom_sub)
+                self._odom_sub, self._yaw = None, None
 
-    def _on_imu(self, m):
-        q, g = m.orientation, m.angular_velocity
-        self._imu = (time.monotonic(), q.w, q.x, q.y, q.z, g.x, g.y, g.z)
+    def _on_odom(self, b):
+        """nav_msgs/Odometry CDR: 캡슐 4 B, stamp 8 B, frame_id·child_frame_id 문자열, pose.position 3d, orientation 4d,
+        공분산 36d, twist.linear 3d, angular 3d. 평면 오도메트리라 요 = 2·atan2(qz, qw)."""
+        try:
+            le = '<' if b[1] == 1 else '>'
+            o = 12
+            for _ in range(2):
+                o = (o - 4 + 3 & ~3) + 4
+                n, = struct.unpack_from(le + 'I', b, o)
+                o += 4 + n
+            o = 4 + ((o - 4 + 7) & ~7)
+            _, _, qz, qw = struct.unpack_from(le + '4d', b, o + 24)
+            wz, = struct.unpack_from(le + 'd', b, o + 24 + 32 + 288 + 40)
+            self._yaw = (time.monotonic(), math.degrees(2 * math.atan2(qz, qw)), wz)
+        except struct.error:
+            pass
 
-    def imu(self):
-        return self._imu
+    def attitude(self):
+        """(t, 롤°, 피치°, 요° | None, wz rad/s | None) — 롤·피치 = controller/state (REP-103 부호), 요 = odom."""
+        a = self._att
+        if a is None:
+            return None
+        y = self._yaw if self._yaw and time.monotonic() - self._yaw[0] < 1.0 else None
+        return (a[0], a[1], a[2], y[1] if y else None, y[2] if y else None)
 
     def _state(self, m):
         now = time.monotonic()
@@ -220,22 +240,39 @@ class Ros(QtCore.QObject):
             a = (m.v - self._v_last[1]) / dt
             self._acc = a if dt > 0.5 else self._acc + (a - self._acc) * min(1.0, dt / 0.2)
         self._v_last = (now, m.v)
-        # roll: ControllerState 는 + = 왼쪽 내려감 → 자세 창 (/imu/data, REP-103) 과 같게 + = 오른쪽 내려감 으로
+        self._att = (now, -math.degrees(m.roll), math.degrees(m.pitch))     # roll: ControllerState + = 왼쪽 내려감 → REP-103
+        # roll: ControllerState 는 + = 왼쪽 내려감 → REP-103 (자세 그림과 같게) + = 오른쪽 내려감 으로
         self._panel['cs'] = (now, dict(mode=m.mode, fault=m.fault, v=m.v, acc=self._acc, vx_cmd=m.vx_cmd, wz_cmd=m.wz_cmd,
                                        pitch=math.degrees(m.pitch), roll=-math.degrees(m.roll), h=tuple(m.h)))
 
     def _power(self, k, m):
         self._panel[k] = (time.monotonic(), (m.voltage, m.percentage, m.present))
 
-    def _motors(self, m):
-        ok = [x for x in m.motors if not x.stale and not math.isnan(x.temperature_c)]
-        if ok:
-            hot = max(ok, key=lambda x: x.temperature_c)
-            self._panel['temp'] = (time.monotonic(), (hot.temperature_c, hot.name))
+    def _diag(self, m):
+        """motor_monitor 'motor: <이름>' 항목 (1 Hz): 최고 온도 + 문제 있는 모터 (WARN 이상)."""
+        mot = {}
+        for st in m.status:
+            if 'motor: ' not in st.name:
+                continue
+            kv = {v.key: v.value for v in st.values}
+            if kv.get('configured', '').lower() != 'true':
+                continue
+            lv = st.level if isinstance(st.level, int) else ord(st.level)     # byte → bytes 로 온다
+            try:
+                t = float(kv.get('temperature_c', 'nan'))
+            except ValueError:
+                t = math.nan
+            mot[st.name.split('motor: ')[-1]] = (t, lv, st.message)
+        if not mot:
+            return
+        temps = [(t, n) for n, (t, _, _) in mot.items() if not math.isnan(t)]
+        bad = [(lv, f'{n}: {msg}') for n, (_, lv, msg) in mot.items() if lv >= 1]
+        hot = max(temps) if temps else (math.nan, '')
+        self._panel['temp'] = (time.monotonic(), (hot[0], hot[1], max(bad)[0] if bad else 0, ' · '.join(b for _, b in sorted(bad, reverse=True))))
 
     def _emit_panel(self):
         now = time.monotonic()
-        self.panel.emit({k: v for k, (t, v) in list(self._panel.items()) if now - t < 1.5})
+        self.panel.emit({k: v for k, (t, v) in list(self._panel.items()) if now - t < (3.0 if k == 'temp' else 1.5)})
 
     def _emit_state(self):
         if self._cs:
@@ -355,7 +392,7 @@ LOCAL = {
     'slam':    ('SLAM 지도 (노트북)', '[a]sync_slam_toolbox_node', '/slam_toolbox'),
     'rviz':    ('RViz (지도·라이다·코스트맵·카메라)', '^rviz2 -d', None),
     'hud':     ('HUD (카메라 + 사람 상자)', f'^/usr/bin/python3 {DESK}/hud.py', None),
-    'dash':    ('상태판 (전원·배터리·모터)', f'^/usr/bin/python3 {DESK}/desk_dash.py', None),   # = wifi -r (exec 로 바뀜)
+    'dash':    ('상태판 창 (desk_dash · 모터)', f'^/usr/bin/python3 {DESK}/desk_dash.py', None),   # = wifi -r (exec 로 바뀜)
 }
 
 
@@ -522,8 +559,19 @@ class Gui(QtWidgets.QMainWindow):
         top.addWidget(self._status_bar())
         mid = QtWidgets.QHBoxLayout()
         top.addLayout(mid, 1)
+        left = QtWidgets.QSplitter(QtCore.Qt.Vertical)     # 위: 탭, 아래: 자세 (경계를 끌어 크기 조절)
+        left.setChildrenCollapsible(False)
+        mid.addWidget(left, 1)
         self.tabs = QtWidgets.QTabWidget()
-        mid.addWidget(self.tabs, 1)
+        left.addWidget(self.tabs)
+        self.att = AttitudeView(self.ros, compact=True)
+        big = QtWidgets.QPushButton('크게 보기')
+        big.setToolTip('자세를 따로 뜨는 큰 창으로')
+        big.clicked.connect(self.show_attitude)
+        self.att.buttons.addWidget(big)
+        left.addWidget(self.att)
+        left.setStretchFactor(0, 3)
+        left.setStretchFactor(1, 1)
         self.spanel = StatusPanel()
         mid.addWidget(self.spanel)
         self.tabs.addTab(self._features_tab(), '기능 켜기/끄기')
@@ -575,18 +623,12 @@ class Gui(QtWidgets.QMainWindow):
         stop = QtWidgets.QPushButton('추종 정지')
         stop.setStyleSheet('background:#e67e22; color:white; font-weight:bold; padding:8px 14px')
         stop.clicked.connect(self.follow_off)
-        att = QtWidgets.QPushButton('자세 보기')
-        att.setToolTip('롤 · 피치 · 요를 축마다 따로 (자세계 · 위/옆/뒤에서 본 로봇 · 10 초 기록) — /imu/data')
-        att.setStyleSheet('padding:8px 14px; font-weight:bold')
-        att.clicked.connect(self.show_attitude)
-        g.addWidget(att, 0, 4, 2, 1)
-        g.addWidget(stop, 0, 5, 2, 1)
-        g.addWidget(sit, 0, 6, 2, 1)
+        g.addWidget(stop, 0, 4, 2, 1)
+        g.addWidget(sit, 0, 5, 2, 1)
         return f
 
     def show_attitude(self):
         if self.att_win is None:
-            from attitude_view import AttitudeWindow
             self.att_win = AttitudeWindow(self.ros)
         self.att_win.show()
         self.att_win.raise_()

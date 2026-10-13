@@ -1,9 +1,11 @@
-"""로봇 자세 창 (아두파일럿 HUD 처럼) — /imu/data 의 roll · pitch · yaw 를 실시간으로.
+"""로봇 자세 (아두파일럿 HUD 처럼) — roll · pitch · yaw 를 실시간으로. 관제 GUI 아래 줄 + '크게 보기' 창.
 
 위에서 내려다보면 기울기 성분이 안 보이니 축마다 따로 그린다:
   자세계 (인공 수평선, 피치 사다리 + 롤 눈금) · 위에서 (요, 나침반) · 옆에서 (피치) · 뒤에서 (롤) · 10 초 기록.
 부호 (REP-103 base_link, imu_cal.py 와 같음): 피치 + = 앞 숙임, 롤 + = 오른쪽 내려감, 요 + = 왼쪽으로 돎 (위에서 반시계).
-요는 IMU 자체 값이라 기준이 임의이고 천천히 흐른다 → '요 0 맞추기' 로 지금 방향을 0 으로.
+데이터 (Ros.attitude): 롤·피치 = /controller/state (100 Hz, 중력 방향 — GUI 가 이미 받는 것), 요 = /odom (자이로 적분).
+/imu/data 500 Hz 를 rclpy 로 받으면 노트북 한 코어의 45–75 % 를 써서 (2026-10-14 잼) 쓰지 않는다.
+요는 balance_node 가 서 있을 때만 적분하고 (해제 중엔 멈춤) 기준이 임의 → '요 0 맞추기' 로 지금 방향을 0 으로.
 """
 import math
 import time
@@ -15,13 +17,6 @@ SKY, GROUND, LINE = QtGui.QColor('#3d8fd6'), QtGui.QColor('#8a5a2b'), QtGui.QCol
 BODY, WHEEL, ACC = QtGui.QColor('#5d6d7e'), QtGui.QColor('#222222'), QtGui.QColor('#f39c12')
 C_ROLL, C_PITCH, C_YAW = QtGui.QColor('#e74c3c'), QtGui.QColor('#27ae60'), QtGui.QColor('#2980b9')
 HIST_S = 10.0
-
-
-def quat_to_rpy(w, x, y, z):
-    roll = math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
-    pitch = math.asin(max(-1.0, min(1.0, 2 * (w * y - z * x))))
-    yaw = math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
-    return math.degrees(roll), math.degrees(pitch), math.degrees(yaw)
 
 
 def wrap180(a):
@@ -52,15 +47,24 @@ class _Pane(QtWidgets.QWidget):
 
     def _no_data(self, p):
         p.setPen(QtGui.QColor('#e74c3c'))
-        p.drawText(self.rect(), QtCore.Qt.AlignCenter, 'IMU 안 들어옴\n(/imu/data)')
+        p.drawText(self.rect(), QtCore.Qt.AlignCenter, '자세 안 들어옴\n(/controller/state)')
 
     def _value(self, p, text, color):
+        """아래 큰 숫자. 칸이 좁으면 (GUI 아래 줄) 글씨를 줄이고, 그래도 안 들어가면 괄호 설명을 뺀다."""
         f = p.font()
-        f.setPointSizeF(f.pointSizeF() * 1.4)
         f.setBold(True)
+        base = f.pointSizeF() * 1.4
+        room = self.width() - 12
+        for t in (text, text.split('  (')[0]):
+            for k in (1.0, 0.85, 0.72):
+                f.setPointSizeF(base * k)
+                if QtGui.QFontMetrics(f).horizontalAdvance(t) <= room:
+                    break
+            if QtGui.QFontMetrics(f).horizontalAdvance(t) <= room:
+                break
         p.setFont(f)
         p.setPen(color)
-        p.drawText(self.rect().adjusted(8, 4, -8, -6), QtCore.Qt.AlignBottom | QtCore.Qt.AlignHCenter, text)
+        p.drawText(self.rect().adjusted(6, 4, -6, -6), QtCore.Qt.AlignBottom | QtCore.Qt.AlignHCenter, t)
 
 
 class Horizon(_Pane):
@@ -136,6 +140,10 @@ class Compass(_Pane):
             self._no_data(p)
             return
         yaw = self.att[2]
+        if yaw is None:
+            p.setPen(QtGui.QColor('#e67e22'))
+            p.drawText(self.rect(), QtCore.Qt.AlignCenter, '요 안 들어옴\n(/odom)')
+            return
         w, h = self.width(), self.height()
         r = min(w, h) / 2 - 26
         c = QtCore.QPointF(w / 2, h / 2 - 6)
@@ -256,7 +264,7 @@ class History(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
         self.buf = deque()                       # (t, roll, pitch, yaw)
-        self.setMinimumHeight(150)
+        self.setMinimumSize(200, 150)
 
     def add(self, t, att):
         self.buf.append((t, *att))
@@ -285,7 +293,7 @@ class History(QtWidgets.QWidget):
         fm = p.fontMetrics()
         p.drawText(QtCore.QPointF(L, 14), '지난 10 초:')
         x0 = L + fm.horizontalAdvance('지난 10 초:') + 10
-        for name, col in (('롤', C_ROLL), ('피치', C_PITCH), ('요 변화 (10 초 전 기준)', C_YAW)):
+        for name, col in (('롤', C_ROLL), ('피치', C_PITCH), ('요 변화', C_YAW)):
             p.setPen(col)
             p.drawText(QtCore.QPointF(x0, 14), name)
             x0 += fm.horizontalAdvance(name) + 14
@@ -293,10 +301,12 @@ class History(QtWidgets.QWidget):
             return
         t1 = self.buf[-1][0]
         xmap = lambda t: L + pw * (1 - (t1 - t) / HIST_S)   # noqa: E731
-        y0 = self.buf[0][3]
+        y0 = next((e[3] for e in self.buf if e[3] is not None), None)
         for idx, col, f in ((1, C_ROLL, None), (2, C_PITCH, None), (3, C_YAW, lambda v: wrap180(v - y0))):
             path = QtGui.QPainterPath()
             for i, e in enumerate(self.buf):
+                if e[idx] is None:
+                    continue
                 v = e[idx] if f is None else f(e[idx])
                 pt = QtCore.QPointF(xmap(e[0]), ymap(max(-rng, min(rng, v))))
                 path.moveTo(pt) if i == 0 else path.lineTo(pt)
@@ -305,71 +315,103 @@ class History(QtWidgets.QWidget):
             p.drawPath(path)
 
 
-class AttitudeWindow(QtWidgets.QWidget):
-    """ros.imu() 로 최신 (t, w, x, y, z, gx, gy, gz) 를 30 Hz 로 읽어 그린다. 창이 열려 있는 동안만 /imu/data 구독."""
+class AttitudeView(QtWidgets.QWidget):
+    """ros.attitude() 의 최신 (t, roll°, pitch°, yaw° | None, wz | None) 를 30 Hz 로 읽어 그린다.
+    보이는 동안만 /odom 구독 (ros.att_on 은 개수를 센다).
+    compact = 관제 GUI 아래 한 줄 (자세계 · 위 · 옆 · 뒤 · 기록), 아니면 큰 창 배치. 요 0 기준은 ros.yaw0 하나를 같이 쓴다."""
 
-    def __init__(self, ros):
-        super().__init__(None, QtCore.Qt.Window)
+    def __init__(self, ros, compact=False, parent=None, flags=QtCore.Qt.Widget):
+        super().__init__(parent, flags)
         self.ros = ros
-        self.setWindowTitle('C-WANG 로봇 자세 (롤 · 피치 · 요)')
-        self.resize(900, 720)
-        self.yaw0 = None
+        self.on = False
         self.raw_yaw = None
         g = QtWidgets.QGridLayout(self)
-        self.hz = Horizon('자세계 (앞에서 본 시야)')
+        g.setContentsMargins(0, 0, 0, 0) if compact else None
+        self.hz = Horizon('자세계')
         self.top = Compass('위에서 — 요')
         self.side = SideView('옆에서 — 피치')
         self.rear = RearView('뒤에서 — 롤')
         self.hist = History()
-        g.addWidget(self.hz, 0, 0)
-        g.addWidget(self.top, 0, 1)
-        g.addWidget(self.side, 1, 0)
-        g.addWidget(self.rear, 1, 1)
-        g.addWidget(self.hist, 2, 0, 1, 2)
-        g.setRowStretch(0, 3)
-        g.setRowStretch(1, 2)
-        g.setRowStretch(2, 1)
+        if compact:
+            for c, v in enumerate((self.hz, self.top, self.side, self.rear)):
+                v.setMinimumSize(170, 170)
+                g.addWidget(v, 0, c)
+                g.setColumnStretch(c, 2)
+            g.addWidget(self.hist, 0, 4)
+            g.setColumnStretch(4, 3)
+            g.setRowStretch(0, 1)
+            row = 1
+        else:
+            self.hz.title = '자세계 (앞에서 본 시야)'
+            g.addWidget(self.hz, 0, 0)
+            g.addWidget(self.top, 0, 1)
+            g.addWidget(self.side, 1, 0)
+            g.addWidget(self.rear, 1, 1)
+            g.addWidget(self.hist, 2, 0, 1, 2)
+            g.setRowStretch(0, 3)
+            g.setRowStretch(1, 2)
+            g.setRowStretch(2, 1)
+            row = 3
         h = QtWidgets.QHBoxLayout()
         self.info = QtWidgets.QLabel('—')
         self.info.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont))
         h.addWidget(self.info, 1)
+        self.buttons = h
         b = QtWidgets.QPushButton('요 0 맞추기')
-        b.setToolTip('지금 로봇이 보는 방향을 0° 로 (IMU 요는 기준이 임의이고 천천히 흐른다)')
+        b.setToolTip('지금 로봇이 보는 방향을 0° 로 (odom 요는 기준이 임의이고 천천히 흐른다)')
         b.clicked.connect(self.zero_yaw)
         h.addWidget(b)
-        g.addLayout(h, 3, 0, 1, 2)
-        self.timer = QtCore.QTimer(self, interval=33)
+        g.addLayout(h, row, 0, 1, 5 if compact else 2)
+        self.timer = QtCore.QTimer(self, interval=66)        # 15 Hz — 30 Hz 는 노트북 CPU 를 두 배로 씀
         self.timer.timeout.connect(self._tick)
 
     def zero_yaw(self):
         if self.raw_yaw is not None:
-            self.yaw0 = self.raw_yaw
+            self.ros.yaw0 = self.raw_yaw
+
+    def _set_on(self, on):
+        if on != self.on:
+            self.on = on
+            self.ros.att_on(on)
+            self.timer.start() if on else self.timer.stop()
 
     def showEvent(self, e):
-        self.ros.imu_on(True)
-        self.timer.start()
+        self._set_on(True)
         super().showEvent(e)
 
+    def hideEvent(self, e):
+        self._set_on(False)
+        super().hideEvent(e)
+
     def closeEvent(self, e):
-        self.timer.stop()
-        self.ros.imu_on(False)
+        self._set_on(False)
         super().closeEvent(e)
 
     def _tick(self):
-        m = self.ros.imu()
+        m = self.ros.attitude()
         if m is None or time.monotonic() - m[0] > 0.5:
             for v in (self.hz, self.top, self.side, self.rear):
                 v.set_att(None)
-            self.info.setText('IMU 안 들어옴 — 로봇 망 (ROBOT) 에 붙었는지, gen2-bench (iahrs) 가 도는지 확인')
+            self.info.setText('자세 안 들어옴 (/controller/state) — 로봇 망 (ROBOT) 에 붙었는지, gen2-balance 가 도는지 확인')
             return
-        t, w, x, y, z, gx, gy, gz = m
-        roll, pitch, yaw = quat_to_rpy(w, x, y, z)
+        t, roll, pitch, yaw, wz = m
         self.raw_yaw = yaw
-        if self.yaw0 is None:
-            self.yaw0 = yaw
-        att = (roll, pitch, wrap180(yaw - self.yaw0))
+        if yaw is not None and getattr(self.ros, 'yaw0', None) is None:
+            self.ros.yaw0 = yaw
+        rel = None if yaw is None else wrap180(yaw - self.ros.yaw0)
+        att = (roll, pitch, rel)
         for v in (self.hz, self.top, self.side, self.rear):
             v.set_att(att)
         self.hist.add(t, att)
-        self.info.setText(f'롤 {roll:+6.1f}°  피치 {pitch:+6.1f}°  요 {att[2]:+6.1f}° (IMU {yaw:+.1f}°)   '
-                          f'각속도 x {math.degrees(gx):+6.1f}  y {math.degrees(gy):+6.1f}  z {math.degrees(gz):+6.1f} °/s')
+        ys = '—' if rel is None else f'{rel:+6.1f}°'
+        ws = '' if wz is None else f'   회전 {math.degrees(wz):+6.1f} °/s'
+        self.info.setText(f'롤 {roll:+6.1f}°  피치 {pitch:+6.1f}°  요 {ys}{ws}   (요는 서 있을 때만 갱신)')
+
+
+class AttitudeWindow(AttitudeView):
+    """따로 뜨는 큰 자세 창 (관제 GUI 아래 줄의 '크게 보기')."""
+
+    def __init__(self, ros):
+        super().__init__(ros, compact=False, flags=QtCore.Qt.Window)
+        self.setWindowTitle('C-WANG 로봇 자세 (롤 · 피치 · 요)')
+        self.resize(900, 720)
