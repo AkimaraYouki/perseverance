@@ -187,7 +187,7 @@ if hasattr(wheels_act, "_vel_at_effort_lim"):
 motor_est = kv * (1.0 + g.normal(0, 0.02, N))
 cad.set_wheel_model(robot, wheel_ids, torch.tensor(P.wheel_fric_nm * kf), torch.tensor(P.wheel_fric_dyn_nm * kd_), P.wheel_visc,
                     torch.tensor(P.wheel_deadband_nm * kf), P.wheel_armature, backlash_deg=P.wheel_backlash_deg,
-                    gear_k=P.wheel_gear_k, gear_c=P.wheel_gear_c, dt=float(cfg.sim.dt))
+                    gear_k=P.wheel_gear_k, gear_c=P.wheel_gear_c, dt=float(cfg.sim.dt), tau_gain=getattr(P, 'wheel_tau_gain', 1.0))
 mass_true = masses.to(dev)
 CTRL = wbctrl.WBController(P, lqr, m_pend, n=N, seed=args.seed + 1000)
 origins = env.scene.env_origins.clone()

@@ -253,7 +253,8 @@ TUNE = dict(
                          #   바퀴 감속기 백래시 [deg, 출력축 전체 유격] (0 = 끔, 사양 18' = 0.3). 켜면 회전자를 바퀴에서 떼어 적분, 엔코더 = 회전자 (2026-10-08)
     wheel_gear_k=300.0,       # 감속기 강성 [N·m/rad, 출력축] (실측 없음)
     wheel_gear_c=0.05,        # 감속기 감쇠 [N·m·s/rad] (실측 없음)
-    wheel_armature=4.5e-4,  # 바퀴 관성 추가 [kg·m²]: 링크 1.84e-3 + 이것 = 2.29e-3 (실측 2.0~2.6e-3). 제어기 LQR 모델에도 같이
+    wheel_tau_gain=0.83,  # 바퀴 드라이브 실제 토크 / 명령 (1.0 = 이상). 실기 관성 시험 (2026-10-13): 보고 전류 / 명령 0.82–0.84 일정, 모터만 J 보고 기준 1.71e-3 ≈ 데이터시트 1.57e-3
+    wheel_armature=1.7e-4,  # 바퀴 관성 추가 [kg·m²]: 2026-10-14 실측 (보고 토크 기준 새 바퀴 + 모터 2.08e-3) - 링크 1.910e-3. 예전 4.5e-4 는 토크 0.83 을 관성으로 메운 값 (명령 기준 2.0~2.6e-3). 제어기 LQR 모델에도 같이
     dr_fric=0.01,        # 정지 마찰·데드밴드 로봇·바퀴마다 ± 비율 (데드밴드 0.625 x 0.99~1.01 = 0.619~0.631: 0.48 A (0.610) 무시, 0.50 A (0.635) 돎)
     dr_fric_dyn=0.3,     # 운동 마찰 로봇·바퀴마다 ± 비율
     # --- 화면 ---
@@ -655,7 +656,7 @@ def apply_dr():
     kd_ = 1.0 + _rng.uniform(-1, 1, 2) * args.dr_fric_dyn              # 운동 마찰
     cad.set_wheel_model(robot, wheel_ids, torch.tensor([args.wheel_fric_nm * kf]), torch.tensor([args.wheel_fric_dyn_nm * kd_]),
                         args.wheel_visc, torch.tensor([args.wheel_deadband_nm * kf]), args.wheel_armature,
-                        backlash_deg=args.wheel_backlash_deg, gear_k=args.wheel_gear_k, gear_c=args.wheel_gear_c, dt=float(cfg.sim.dt))
+                        backlash_deg=args.wheel_backlash_deg, gear_k=args.wheel_gear_k, gear_c=args.wheel_gear_c, dt=float(cfg.sim.dt), tau_gain=getattr(args, 'wheel_tau_gain', 1.0))
     if args.wheel_fric_nm > 0 or args.wheel_deadband_nm > 0:
         msg.append(f"바퀴 정지 마찰 L {args.wheel_fric_nm * kf[0]:.2f} R {args.wheel_fric_nm * kf[1]:.2f} N·m"
                    + (f" 데드밴드 L {args.wheel_deadband_nm * kf[0]:.2f} R {args.wheel_deadband_nm * kf[1]:.2f}" if args.wheel_deadband_nm > 0 else ""))
