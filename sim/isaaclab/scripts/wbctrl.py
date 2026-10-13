@@ -374,7 +374,15 @@ class WBController:
             if P.air_ctrl:
                 ref = np.where(ph == EXTRACT, P.extract_pitch, np.where(ph == DESCEND, getattr(P, "land_pitch", P.air_pitch), P.air_pitch))
                 u = P.air_kp * (S["pitch"] - np.radians(ref)) + P.air_kd * S["gy"]
-                act[:, 2:] = np.where(pd[:, None], np.clip(u / P.air_tau, -1.0, 1.0)[:, None], act[:, 2:])
+                uw = np.repeat(np.broadcast_to(u, (n,))[:, None], 2, 1)            # 바퀴마다 [N·m]
+                # 2026-10-13 실기 바퀴 파손: 공중 내내 -19 rad/s (뒤로 포화) 로 돌다 몸 +0.5 m/s 로 접지 -> 25 ms 에 30 rad/s 뒤집힘.
+                # spin_match_k > 0: DESCEND 에서 바퀴 절대 각속도를 몸 속도 / R 로 맞춘다 (vf 는 뜬 동안 이륙 직전 값 유지). 0 = 끔
+                ks = np.broadcast_to(np.asarray(getattr(P, "spin_match_k", 0.0), float), (n,))[:, None]
+                uw = np.where((ph == DESCEND)[:, None] & (ks > 0), ks * (self.vf[:, None] / R_WHEEL - f.w_wheel_abs), uw)
+                # air_w_max > 0: 공중 바퀴 관절 속도가 이 값을 넘는 방향으로는 토크를 안 준다 (포화 방지). 0 = 끔
+                wm = np.broadcast_to(np.asarray(getattr(P, "air_w_max", 0.0), float), (n,))[:, None]
+                uw = np.where((wm > 0) & (np.sign(uw) * f.w_wheel_joint > wm), 0.0, uw)
+                act[:, 2:] = np.where(pd[:, None], np.clip(uw / P.air_tau, -1.0, 1.0), act[:, 2:])
             else:
                 act[:, 2:] = np.where(pd[:, None], 0.0, act[:, 2:])
             leg_kp = np.where(legT & self.soft, P.land_kp, np.where(legT & (ph != LAND), P.leg_kp, leg_kp))

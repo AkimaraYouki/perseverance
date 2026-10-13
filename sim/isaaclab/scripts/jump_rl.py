@@ -52,8 +52,13 @@ ap.add_argument("--edge_max", type=float, default=1.15)
 ap.add_argument("--res_leg", type=float, default=0.04)
 ap.add_argument("--res_wheel", type=float, default=2.5)
 ap.add_argument("--seed", type=int, default=1)
+ap.add_argument("--hip_robot_cap", type=int, default=0, help="1 = 실기처럼 명령 PD 를 9 N·m 로 자른 뒤 실효 배율 (실제 최대 9 x hip_eff). 0 = 옛 시뮬 (실효 배율 뒤 9 N·m)")
 ap.add_argument("--cma", type=int, default=0, help="점프 상태기계 파라미터 CMA-ES 세대 수 (정책 없음, 로봇을 후보 수로 나눠 동시 평가)")
 ap.add_argument("--cma_pop", type=int, default=16)
+ap.add_argument("--cma_w_bottom", type=float, default=0.5, help="착지 때 다리가 끝까지 눌린 (스프링 바닥) 비율 벌점")
+ap.add_argument("--cma_w_hub", type=float, default=0.3, help="허브 하중 평균이 cma_hub_ref 를 넘는 비율 벌점")
+ap.add_argument("--cma_w_slip", type=float, default=0.3, help="접지 미끄럼 평균 [m/s] 벌점 (실기 파손 땐 1.4 m/s)")
+ap.add_argument("--cma_hub_ref", type=float, default=350.0, help="[N] 옛 기본 파라미터의 착지 허브 하중 중간값 (평지 0.2-0.4 m/s)")
 ap.add_argument("--cma_eps", type=int, default=1, help="세대마다 로봇 한 대당 에피소드 (처음 k 판만 센다)")
 ap.add_argument("--debug", type=int, default=0, help="로봇 몇 대의 시간 흐름을 0.25 s 마다 출력")
 for k, v in TUNE.items():
@@ -166,10 +171,13 @@ kv = 1.0 - g.uniform(0, 1, N) * P.dr_motor
 kf = 1.0 + g.uniform(-1, 1, (N, 2)) * P.dr_fric
 kd_ = 1.0 + g.uniform(-1, 1, (N, 2)) * P.dr_fric_dyn
 hip_eff = torch.tensor(g.uniform(0.5, 1.0, N), device=dev, dtype=torch.float32)
+if args.hip_robot_cap:   # 실기 balance_node hip_pd_tau_max: 명령 kp·err + |ff| <= 9 -> 드라이브 실효 배율 뒤 실제 <= 9 x hip_eff (2026-10-13 실기 안 뜸)
+    legs_act.effort_limit[:] = 9.0 * hip_eff[:, None]
 view = robot.root_physx_view
 com_b_nom = view.get_coms().clone()[..., :3].to(dev)
 masses, coms = view.get_masses().clone(), view.get_coms().clone()
 masses[:, 0] *= torch.tensor(km, dtype=masses.dtype)
+masses[:, wheel_bodies] += float(os.environ.get("WB_WHEEL_DM_G", "0")) / 1000.0   # 바퀴 실제 질량 오차 [g] (제어기 명목은 그대로, 2026-10-13 새 바퀴 ±10 g 분석)
 coms[:, 0, 0] += torch.tensor(dxz[:, 0], dtype=coms.dtype); coms[:, 0, 2] += torch.tensor(dxz[:, 1], dtype=coms.dtype)  # noqa: E702
 view.set_masses(masses, torch.arange(N)); view.set_coms(coms, torch.arange(N))  # noqa: E702
 vlim = wheels_act.velocity_limit.clone() if torch.is_tensor(wheels_act.velocity_limit) else torch.full((N, 2), float(wheels_act.velocity_limit))
@@ -202,6 +210,11 @@ class JumpEnv:
         self.base = np.zeros((N, 4)); self.x_prev = np.zeros(N)  # noqa: E702
         self.stats = collections.defaultdict(list)
         self.cnt = np.zeros((N, 4))                                       # 로봇별 success / short / fell / timeout (CMA)
+        self.land = np.zeros((N, 4))                                      # CMA: 로봇별 (착지 수, 다리 바닥 닿음 수, 허브 하중 합, 접지 미끄럼 합) — 세는 판만
+        self.slip_td = np.full(N, np.nan); self.wair = np.zeros(N)        # 접지 순간 |바퀴 둘레 속도 - 몸 속도| [m/s], 공중 바퀴 |ω| 최대  # noqa: E702
+        self.td = []; self.hmin = np.full(N, 9.0); self.h_td = np.full(N, np.nan); self.tqmax = np.zeros(N)  # 착지 순간 다리 길이·눌림·고관절 토크  # noqa: E702
+        self.fmax = np.zeros(N); self.hub = []                           # 착지 바퀴 축 하중 최대 [N] (바퀴 관절 반력, 2026-10-13 바퀴 파손)  # noqa: E702
+        self.zmax = np.zeros(N); self.clear = []                         # 점프 뒤 바퀴 바닥 최고 높이 (지면 기준) -> 떴나  # noqa: E702
         self.ep_n = np.zeros(N, int); self.ep_k = 1 << 30                 # CMA: 로봇마다 처음 ep_k 판만 센다 (빨리 끝나는 넘어짐 쏠림 방지)  # noqa: E702
         self.f = None
         self._reset(np.ones(N, bool))
@@ -348,6 +361,36 @@ class JumpEnv:
         rew += 30.0 * success - 15.0 * short - 20.0 * fell + 0.5 * (self.jumped & on_top & (self.h > 0.01) & (f.wx > self.edge))   # 턱 위에 올라가 있으면 매 스텝 (2026-10-13 jr2: jr1 은 덜 뛰어 턱 앞 착지로 수렴)
         done = success | short | fell | timeout
         cm = done & (self.ep_n < self.ep_k)
+        self.zmax = np.where(np.isin(CTRL.phase, (wbctrl.EXTRACT, wbctrl.FLY, wbctrl.DESCEND)), np.maximum(self.zmax, f.wheel_z_min), self.zmax)
+        if done.any():
+            self.clear.extend(self.zmax[done & self.jumped].tolist())
+        self.zmax[done] = 0.0
+        hm = f.h.mean(1)
+        td_now = (ph_before == wbctrl.DESCEND) & (CTRL.phase == wbctrl.LAND)          # 접지 판정 순간
+        self.h_td = np.where(td_now, hm, self.h_td)
+        self.slip_td = np.where(td_now, np.abs(f.w_wheel_abs.mean(1) * R - f.truth_v), self.slip_td)
+        self.wair = np.where(np.isin(CTRL.phase, (wbctrl.FLY, wbctrl.DESCEND)), np.maximum(self.wair, np.abs(f.w_wheel_joint).max(1)), self.wair)
+        inl = CTRL.phase == wbctrl.LAND
+        self.hmin = np.where(inl, np.minimum(self.hmin, hm), self.hmin)
+        self.tqmax = np.where(inl | td_now, np.maximum(self.tqmax, np.abs(f.tau_hip).max(1)), self.tqmax)
+        for i in np.flatnonzero(done & ~np.isnan(self.h_td)):
+            self.td.append((self.h_td[i], self.hmin[i], self.tqmax[i], self.slip_td[i], self.wair[i]))
+        lm = cm & ~np.isnan(self.h_td)
+        self.land[lm, 0] += 1
+        self.land[lm, 1] += self.hmin[lm] < wbctrl.H_MIN + 0.005                      # 다리를 끝까지 눌러 스프링이 바닥에 닿음
+        self.land[lm, 3] += self.slip_td[lm]
+        self.h_td[done] = np.nan; self.hmin[done] = 9.0; self.tqmax[done] = 0.0; self.slip_td[done] = np.nan; self.wair[done] = 0.0  # noqa: E702
+        try:   # 정강이 -> 바퀴 관절 반력 = 허브가 받는 힘. 공중·착지·착지 뒤 0.5 s 의 최대 (물리 스텝 중 마지막 값만 보므로 실제 최대보다 낮을 수 있음)
+            fw = robot.data.body_incoming_joint_wrench_b[:, wheel_bodies, :3].norm(dim=-1).max(1).values.cpu().numpy()
+            win = np.isin(CTRL.phase, (wbctrl.FLY, wbctrl.DESCEND, wbctrl.LAND)) | (~np.isnan(self.landed_t) & (self.t - np.nan_to_num(self.landed_t) < 0.5))
+            self.fmax = np.where(win, np.maximum(self.fmax, fw), self.fmax)
+            if done.any():
+                self.hub.extend(self.fmax[done & self.jumped].tolist())
+            self.land[lm, 2] += self.fmax[lm]
+            self.fmax[done] = 0.0
+        except Exception as e:   # noqa: BLE001
+            if not getattr(self, "_hub_warn", False):
+                print("[허브 하중] 못 잼:", e, flush=True); self._hub_warn = True  # noqa: E702
         self.cnt[cm] += np.stack([success, short, fell, timeout & ~(success | short | fell)], 1)[cm]
         self.ep_n += done
         for k_, v_ in (("success", success), ("short", short), ("fell", fell), ("timeout", timeout & ~(success | short | fell))):
@@ -377,7 +420,8 @@ CMA_SPACE = [   # 이름, 하한, 상한 (climb_test TUNE 기본값에서 시작
     ("t_retract", 0.15, 0.40), ("retract_lean", -3.0, 6.0), ("extract_pitch", -8.0, 6.0), ("t_tuck", 0.04, 0.25),
     ("air_kp", 8.0, 60.0), ("air_kd", 0.5, 10.0), ("air_pitch", -12.0, 4.0), ("land_pitch", -6.0, 6.0),
     ("land_kp", 8.0, 60.0), ("land_kd", 0.3, 4.0), ("land_s", 0.10, 0.60), ("h_land", 0.13, 0.23),
-    ("contact_tau", 0.5, 5.0), ("leg_kp", 30.0, 90.0), ("leg_kd", 0.5, 4.0)]
+    ("contact_tau", 0.5, 5.0), ("leg_kp", 30.0, 90.0), ("leg_kd", 0.5, 4.0),
+    ("spin_match_k", 0.0, 0.4), ("air_w_max", 6.0, 19.0)]                      # 2026-10-13 실기 바퀴 파손 뒤 추가
 
 
 def cma_eval(cands, k_eps):
@@ -385,18 +429,23 @@ def cma_eval(cands, k_eps):
     K = len(cands); grp = np.arange(N) % K
     for j, (k, _, _) in enumerate(CMA_SPACE):
         setattr(P, k, np.array([c[j] for c in cands])[grp])
-    venv._reset(np.ones(N, bool)); venv.obs = venv._observe(); venv.cnt[:] = 0; venv.ep_n[:] = 0; venv.ep_k = k_eps  # noqa: E702
+    venv._reset(np.ones(N, bool)); venv.obs = venv._observe(); venv.cnt[:] = 0; venv.land[:] = 0; venv.ep_n[:] = 0; venv.ep_k = k_eps  # noqa: E702
     zero = torch.zeros(N, 4, device=dev)
     for s in range(k_eps * venv.max_episode_length + 10):
         venv.step(zero)
         if s % 50 == 49 and (venv.ep_n >= k_eps).all():
             break
     c = np.stack([venv.cnt[grp == j].sum(0) for j in range(K)])
-    return c / np.maximum(1, c.sum(1, keepdims=True)), c.sum(1)
+    la = np.stack([venv.land[grp == j].sum(0) for j in range(K)])
+    land = np.stack([la[:, 1] / np.maximum(1, la[:, 0]), la[:, 2] / np.maximum(1, la[:, 0]), la[:, 3] / np.maximum(1, la[:, 0])], 1)   # 바닥 닿음 비율, 허브 하중 평균 [N], 접지 미끄럼 평균 [m/s]
+    return c / np.maximum(1, c.sum(1, keepdims=True)), c.sum(1), land
 
 
-def cma_score(r):
-    return r[:, 0] - 0.7 * r[:, 2]                                       # 성공 − 0.7 × 넘어짐 (턱 앞 착지 short 는 0)
+def cma_score(r, land):
+    # 성공 − 0.7 × 넘어짐 (턱 앞 착지 short 는 0) − 착지 벌점 (2026-10-13: 1 차 CMA 는 다리를 접은 채 착지 -> 매번 바닥 닿음, 허브 하중 1.4 배 -> 바퀴 파손 위험)
+    # 2026-10-13 실기 파손 로그: 접지 미끄럼 1.4 m/s (바퀴 -0.9 vs 몸 +0.5) -> 미끄럼 벌점
+    return (r[:, 0] - 0.7 * r[:, 2] - args.cma_w_bottom * land[:, 0] - args.cma_w_hub * np.maximum(0.0, land[:, 1] / args.cma_hub_ref - 1.0)
+            - args.cma_w_slip * land[:, 2])
 
 
 if args.cma:
@@ -417,10 +466,10 @@ if args.cma:
         t0 = time.time()
         ev, B = np.linalg.eigh(C); Dd = np.sqrt(np.maximum(ev, 1e-12))  # noqa: E702
         zs = rng.standard_normal((lam, D)); ys = zs @ (B * Dd).T; xs = m + sig * ys  # noqa: E702
-        r, ne = cma_eval([dec(x) for x in xs] + [dec(m)], args.cma_eps)
-        sc = cma_score(r)
+        r, ne, la = cma_eval([dec(x) for x in xs] + [dec(m)], args.cma_eps)
+        sc = cma_score(r, la)
         if sc[-1] > best[0]:
-            best = (sc[-1], dec(m), r[-1])
+            best = (sc[-1], dec(m), r[-1], la[-1])
         o = np.argsort(-sc[:lam]); yw = (w[:, None] * ys[o[:mu]]).sum(0)  # noqa: E702
         m = np.clip(m + sig * yw, 0, 1)
         Ci = B @ np.diag(1 / Dd) @ B.T
@@ -430,19 +479,20 @@ if args.cma:
         C = (1 - c1 - cmu) * C + c1 * (np.outer(pc, pc) + (1 - hs) * cc * (2 - cc) * C) + cmu * (w[:, None] * ys[o[:mu]]).T @ ys[o[:mu]]
         sig = min(0.5, sig * np.exp((cs / ds) * (np.linalg.norm(ps) / chiN - 1)))
         rec = dict(gen=gen, sigma=round(float(sig), 4), mean_score=round(float(sc[-1]), 3), mean_rates=r[-1].round(3).tolist(),
-                   top_score=round(float(sc[o[0]]), 3), eps=int(ne.min()), s=round(time.time() - t0, 1),
+                   top_score=round(float(sc[o[0]]), 3), mean_bottom=round(float(la[-1, 0]), 3), mean_hub=round(float(la[-1, 1]), 1), mean_slip=round(float(la[-1, 2]), 3), eps=int(ne.min()), s=round(time.time() - t0, 1),
                    mean=dict(zip([k for k, _, _ in CMA_SPACE], dec(m).round(4).tolist())))
         with open(os.path.join(out, "gens.jsonl"), "a") as fh:
             fh.write(json.dumps(rec) + "\n")
-        print(f"[CMA {gen:3d}] 평균후보 성공 {r[-1, 0]:.0%} 넘어짐 {r[-1, 2]:.0%} 점수 {sc[-1]:+.3f} | 1등 {sc[o[0]]:+.3f} | "
+        print(f"[CMA {gen:3d}] 평균후보 성공 {r[-1, 0]:.0%} 넘어짐 {r[-1, 2]:.0%} 바닥 {la[-1, 0]:.0%} 허브 {la[-1, 1]:.0f} N 미끄럼 {la[-1, 2]:.2f} 점수 {sc[-1]:+.3f} | 1등 {sc[o[0]]:+.3f} | "
               f"sigma {sig:.3f} | {ne.min()} 판 {time.time() - t0:.0f} s", flush=True)
     # 검증: 기본 vs 최고 (평지 / 6 cm / 8 cm), 각 조건 로봇 절반씩
     bx = dict(zip([k for k, _, _ in CMA_SPACE], best[1].round(4).tolist()))
-    json.dump(dict(best=bx, score=best[0], rates=best[2].tolist()), open(os.path.join(out, "best.json"), "w"), indent=1)
+    json.dump(dict(best=bx, score=best[0], rates=best[2].tolist(), land=best[3].tolist()), open(os.path.join(out, "best.json"), "w"), indent=1)
     for nm, h_, pf in (("평지", None, 1.0), ("턱 6 cm", 0.06, 0.0), ("턱 8 cm", 0.08, 0.0)):
         args.h, args.p_flat = h_, pf
-        r, ne = cma_eval([x0, best[1]], 3)
-        line = f"[검증 {nm}] 기본 성공 {r[0, 0]:.1%} 넘어짐 {r[0, 2]:.1%} | 최고 성공 {r[1, 0]:.1%} 넘어짐 {r[1, 2]:.1%} ({ne.min()} 판)"
+        r, ne, la = cma_eval([x0, best[1]], 3)
+        line = (f"[검증 {nm}] 기본 성공 {r[0, 0]:.1%} 넘어짐 {r[0, 2]:.1%} 바닥 {la[0, 0]:.0%} 허브 {la[0, 1]:.0f} N 미끄럼 {la[0, 2]:.2f} | "
+                f"최고 성공 {r[1, 0]:.1%} 넘어짐 {r[1, 2]:.1%} 바닥 {la[1, 0]:.0%} 허브 {la[1, 1]:.0f} N 미끄럼 {la[1, 2]:.2f} ({ne.min()} 판)")
         print(line, flush=True)
         with open(os.path.join(out, "verify.txt"), "a") as fh:
             fh.write(line + "\n")
@@ -480,7 +530,14 @@ if args.eval:
     tot = {k: sum(v) for k, v in venv.stats.items()}
     s = sum(tot.values())
     print(f"[점프 평가] {args.eval} | 턱 {args.h if args.h is not None else f'{args.h_min}-{args.h_max}'} | 에피소드 {s:.0f} | "
-          + "  ".join(f"{k} {v / max(1, s):.1%}" for k, v in sorted(tot.items())) + f" | {time.time() - t0:.0f} s", flush=True)
+          + "  ".join(f"{k} {v / max(1, s):.1%}" for k, v in sorted(tot.items())) + f" | {time.time() - t0:.0f} s"
+          + (f" | 바퀴 최고 {np.median(venv.clear) * 100:.1f} cm (중간값), 1 cm 넘게 뜸 {np.mean(np.array(venv.clear) > 0.01):.0%}" if venv.clear else "")
+          + (f" | 착지 허브 하중 중간 {np.median(venv.hub):.0f} N, 95 % {np.percentile(venv.hub, 95):.0f} N, 최대 {np.max(venv.hub):.0f} N"
+             f" (정지 때 바퀴 하나 {(float(m_nom.sum()) - float(m_nom[wheel_bodies].sum())) * 9.81 / 2:.0f} N)" if venv.hub else "")
+          + ((lambda a: f" | 접지 순간 다리 {np.median(a[:, 0]) * 1000:.0f} mm (h_land {np.mean(P.h_land) * 1000:.0f}, 최소 {wbctrl.H_MIN * 1000:.0f}), "
+             f"착지 중 최저 {np.median(a[:, 1]) * 1000:.0f} mm, 눌림 {np.median(a[:, 0] - a[:, 1]) * 1000:.0f} mm, 바닥 닿음 {np.mean(a[:, 1] < wbctrl.H_MIN + 0.005):.0%}, "
+             f"고관절 최대 {np.median(a[:, 2]):.1f} N·m, 접지 미끄럼 중간 {np.median(a[:, 3]):.2f} m/s (95 % {np.percentile(a[:, 3], 95):.2f}), "
+             f"공중 바퀴 |ω| 최대 중간 {np.median(a[:, 4]):.1f} rad/s, 17 넘음 {np.mean(a[:, 4] > 17):.0%}")(np.array(venv.td)) if venv.td else ""), flush=True)
     os._exit(0)                                                          # app.close() 가 가끔 멈춤
 
 from isaaclab_rl.rsl_rl import handle_deprecated_rsl_rl_cfg  # noqa: E402
