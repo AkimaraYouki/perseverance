@@ -68,7 +68,7 @@ controller_server:
     # MPPI (below) only steps up from the measured speed and got stuck in front of an obstacle in the sim.
     FollowPath:
       plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
-      desired_linear_vel: 0.7
+      desired_linear_vel: 0.83     # 3.0 km/h walking speed (= balance vmax)
       lookahead_dist: 0.6
       min_lookahead_dist: 0.3
       max_lookahead_dist: 1.2

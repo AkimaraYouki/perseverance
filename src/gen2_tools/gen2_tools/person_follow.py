@@ -52,7 +52,7 @@ class PersonFollow(Node):
         p = lambda n, v: self.declare_parameter(n, v).value  # noqa: E731
         self.d_ref = p('follow_dist_m', 0.8)
         self.k_d, self.k_yaw = p('k_dist', 0.8), p('k_yaw', 1.5)
-        self.vx_max, self.wz_max = p('vx_max', 0.7), p('wz_max', 1.0)
+        self.vx_max, self.wz_max = p('vx_max', 0.83), p('wz_max', 1.0)   # 0.83 m/s = 3.0 km/h walking speed
         self.tol = math.radians(p('bearing_tol_deg', 10.0))
         self.cam_to = p('camera_timeout_s', 0.5)
         self.occl_s = p('occluded_s', 5.0)

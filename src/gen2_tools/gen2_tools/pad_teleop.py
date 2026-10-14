@@ -40,7 +40,7 @@ class PadTeleop(Node):
     def __init__(self):
         super().__init__('pad_teleop')
         p = lambda n, v: self.declare_parameter(n, v).value  # noqa: E731
-        self.vx_max = p('vx_max', 0.7)      # 0.97 (3.5 km/h) overshot to 1.28 m/s on 2026-10-09 -> 0.7 until tuned
+        self.vx_max = p('vx_max', 0.83)     # 3.0 km/h walking speed (2026-10-14) = balance tune.vmax_kmh 3.0
         self.wz_max = p('wz_max', 2.0)
         self.h_rate = p('height_rate', 0.05)
         self.dead = p('deadzone', 0.08)
