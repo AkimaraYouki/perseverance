@@ -56,8 +56,8 @@ balance:
       roll_kd: 0.1            # 2026-10-12 desktop step 3 (sim 80/80); user: "너무 잘됨". push recovery 0.13-0.26 s; hip current 10-100 Hz 0.24 A (0.05 with kd 0)
       roll_rate_lpf_hz: 4.0   # roll-rate LPF for the kd term (wb_core default 8)
       turn_lean: 0.0          # needs the roll loop
-      jump_max_v: 0.0         # JUMP OFF (any request refused: v > 0): 2026-10-13 the CMA-1 set below landed with legs tucked and
-                              # wheels spinning backwards -> broke a wheel; desktop 1800: no jumps until CMA-3. Was 0.4 (0.2-0.4 m/s).
+      jump_max_v: 0.4         # 2026-10-14 jump ON again (0.2-0.4 m/s) with CMA-5 + spin_match_k (user ok). Was 0 after the CMA-1 set
+                              # (landed with legs tucked, wheels spinning backwards -> broke a wheel, 2026-10-13).
       # jump state machine: desktop CMA-ES round 5 (2026-10-14 kt083, 0.83 wheel torque plant, landing penalties) — values below;
       # [ ] = previous. spin_match_k ported to wb_core 2026-10-14 (golden 4/4); jump still OFF until the user says (jump_max_v 0).
       # older note: desktop sim CMA-ES 2026-10-13 (comms 1500; real plant: delays, backlash,
