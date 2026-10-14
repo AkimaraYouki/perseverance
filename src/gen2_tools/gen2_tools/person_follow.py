@@ -74,6 +74,13 @@ class PersonFollow(Node):
         self.cam_h_off = p('cam_h_off_m', 0.081)  # camera above the leg height h (base 0.0655 + camera 0.0153)
         self.cam_dmax = p('cam_max_dist_m', 5.0)
         self.leg_h, self.body_pitch = 0.182, 0.0
+        # against following objects (2026-10-15, user: "sometimes it follows a thing"): inside the camera view the target must be
+        # confirmed by the camera (a person box with matching clothes) at least every cam_confirm_s (0.5), else LiDAR legs alone
+        # (chair / table legs next to the person) are not accepted; camera-only candidates need score >= cam_only_score
+        # and visible ankles or knees
+        self.cam_confirm = p('cam_confirm_s', 0.5)      # 15 camera frames without the person there
+        self.cam_fov = math.radians(p('cam_fov_deg', 25.0))
+        self.cam_only_score = p('cam_only_score', 0.6)
         self.enabled, self.hold = False, False
         self.state = 'IDLE'
         self.cam, self.cam_t, self.cam_new, self.cam_new_match, self.cam_h = [], 0.0, False, False, 480
@@ -111,6 +118,7 @@ class PersonFollow(Node):
         live = dict(self._LIVE)
         live['bearing_tol_deg'] = lambda v: setattr(self, 'tol', math.radians(v))
         live['cam_tilt_deg'] = lambda v: setattr(self, 'cam_tilt', math.radians(v))
+        live['cam_fov_deg'] = lambda v: setattr(self, 'cam_fov', math.radians(v))
         Live(self, live, always=('use_nav', 'camera_only'))
         self.create_timer(0.05, self._step)
 
@@ -121,7 +129,7 @@ class PersonFollow(Node):
              'legs_only_s': 'legs_only', 'max_gate_m': 'max_gate', 'predict_s': 'pred_s',
              'corridor_margin_m': 'margin', 'nav_hold_s': 'nav_hold',
              'camera_only': 'cam_only', 'cam_fx': 'cam_fx', 'cam_x_m': 'cam_x', 'cam_h_off_m': 'cam_h_off',
-             'cam_max_dist_m': 'cam_dmax'}
+             'cam_max_dist_m': 'cam_dmax', 'cam_confirm_s': 'cam_confirm', 'cam_only_score': 'cam_only_score'}
 
     # ------------------------------------------------------------------ inputs
     def _cam(self, m):
@@ -219,6 +227,10 @@ class PersonFollow(Node):
             for i, c in enumerate(self.cam):
                 if i in used:
                     continue
+                k = c.get('kps')
+                legs_seen = bool(k) and any(k[j][2] > 0.5 for j in (13, 14, 15, 16))   # knees / ankles
+                if c.get('score', 1.0) < self.cam_only_score or not legs_seen:
+                    continue                                   # weak box or no legs in it: often an object
                 d = self._cam_dist(c)
                 if d is None:
                     continue
@@ -290,7 +302,7 @@ class PersonFollow(Node):
                 conf = [c for c in cands if c['cam'] is not None and c['dist'] < 2.5]
                 if conf:
                     pk = min(conf, key=lambda c: abs(c['bearing']))
-                    self.target = tgt = {'w': pk['w'], 'v': np.zeros(2), 't': now, 'side': 1.0, 'src': pk.get('src', 'legs'),
+                    self.target = tgt = {'w': pk['w'], 'v': np.zeros(2), 't': now, 'side': 1.0, 'src': pk.get('src', 'legs'), 'cam_t': now,
                                          'hist': np.array(pk['cam']['hsv_hist'])}
                     self.get_logger().info(f'registered person at {pk["dist"]:.2f} m, {math.degrees(pk["bearing"]):+.0f} deg')
             else:
@@ -309,6 +321,7 @@ class PersonFollow(Node):
                         best = bc
             if best is not None:
                 tgt['w'] = self._to_w(pose, (dt_ * math.cos(best), dt_ * math.sin(best)))
+                tgt['cam_t'] = now                         # a person with the target's clothes is there
         t = Twist()
         lost = now - tgt['t'] if tgt is not None else 1e9
         if self.hold:
@@ -359,6 +372,8 @@ class PersonFollow(Node):
             sim = self._sim(c['cam']['hsv_hist'], tgt['hist']) if c['cam'] else None
             if sim is None and lost > self.legs_only:
                 continue                                     # long gap: legs alone could be anything (chair, someone)
+            if sim is None and abs(c['bearing']) < self.cam_fov and now - tgt.get('cam_t', now) > self.cam_confirm:
+                continue                                     # in the camera's view but no person there for a while: object
             if sim is not None and sim < self.app_min:
                 continue                                     # someone else (different clothes)
             s = -jump + (0.5 * sim if sim is not None else 0.0)
@@ -386,6 +401,7 @@ class PersonFollow(Node):
         tgt['w'], tgt['t'], tgt['src'] = best['w'], now, best.get('src', 'legs')
         if best['cam'] is not None:
             tgt['hist'] = 0.9 * tgt['hist'] + 0.1 * np.array(best['cam']['hsv_hist'])
+            tgt['cam_t'] = now
 
     # ------------------------------------------------------------------ Nav2
     def _nav(self, pose, pw, pb, now):
