@@ -8,7 +8,7 @@ Output: cmd_vel (only while a source is fresh, so test scripts may still publish
 
 Safety: forward / backward speed is scaled down by the nearest LiDAR return inside the robot's
 corridor (|y| < corridor_half_width) in the travel direction: full speed beyond slow_dist, 0 at
-stop_dist. Turning is never limited. A stale scan caps |vx| at stale_vx_max.
+stop_dist. Turning is never limited. A stale scan caps |vx| at stale_vx_max (only with lidar_limit on).
 Status (source, limit) on cmd_mux/status (std_msgs/String, 5 Hz).
 """
 
@@ -101,7 +101,8 @@ class CmdMux(Node):
         vx_in, k = vx, 1.0
         note = ''
         if now - self.scan_t > self.scan_to:
-            vx = max(-self.stale_vx, min(self.stale_vx, vx))
+            if self.limit_on:               # lidar_limit off (user): a dead LiDAR must not cap the pad either
+                vx = max(-self.stale_vx, min(self.stale_vx, vx))
             note = 'scan stale'
         else:
             d = self.front if vx > 0 else self.back if vx < 0 else math.inf
