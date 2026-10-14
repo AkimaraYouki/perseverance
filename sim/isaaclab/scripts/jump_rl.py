@@ -52,7 +52,9 @@ ap.add_argument("--edge_max", type=float, default=1.15)
 ap.add_argument("--res_leg", type=float, default=0.04)
 ap.add_argument("--res_wheel", type=float, default=2.5)
 ap.add_argument("--seed", type=int, default=1)
-ap.add_argument("--hip_robot_cap", type=int, default=0, help="1 = 실기처럼 명령 PD 를 9 N·m 로 자른 뒤 실효 배율 (실제 최대 9 x hip_eff). 0 = 옛 시뮬 (실효 배율 뒤 9 N·m)")
+ap.add_argument("--hip_eff_min", type=float, default=0.5, help="고관절 실효 배율 범위 (로봇 추정 ~0.6)")
+ap.add_argument("--hip_eff_max", type=float, default=1.0)
+ap.add_argument("--hip_robot_cap", type=int, default=1, help="1 = 실기처럼 명령 PD 를 9 N·m 로 자른 뒤 실효 배율 (실제 최대 9 x hip_eff). 0 = 옛 시뮬 (실효 배율 뒤 9 N·m)")
 ap.add_argument("--cma", type=int, default=0, help="점프 상태기계 파라미터 CMA-ES 세대 수 (정책 없음, 로봇을 후보 수로 나눠 동시 평가)")
 ap.add_argument("--cma_pop", type=int, default=16)
 ap.add_argument("--cma_w_bottom", type=float, default=0.5, help="착지 때 다리가 끝까지 눌린 (스프링 바닥) 비율 벌점")
@@ -170,7 +172,7 @@ dxz = g.uniform(-1, 1, (N, 2)) * P.dr_com_cm / 100.0
 kv = 1.0 - g.uniform(0, 1, N) * P.dr_motor
 kf = 1.0 + g.uniform(-1, 1, (N, 2)) * P.dr_fric
 kd_ = 1.0 + g.uniform(-1, 1, (N, 2)) * P.dr_fric_dyn
-hip_eff = torch.tensor(g.uniform(0.5, 1.0, N), device=dev, dtype=torch.float32)
+hip_eff = torch.tensor(g.uniform(args.hip_eff_min, args.hip_eff_max, N), device=dev, dtype=torch.float32)
 if args.hip_robot_cap:   # 실기 balance_node hip_pd_tau_max: 명령 kp·err + |ff| <= 9 -> 드라이브 실효 배율 뒤 실제 <= 9 x hip_eff (2026-10-13 실기 안 뜸)
     legs_act.effort_limit[:] = 9.0 * hip_eff[:, None]
 view = robot.root_physx_view
@@ -211,6 +213,7 @@ class JumpEnv:
         self.stats = collections.defaultdict(list)
         self.cnt = np.zeros((N, 4))                                       # 로봇별 success / short / fell / timeout (CMA)
         self.land = np.zeros((N, 4))                                      # CMA: 로봇별 (착지 수, 다리 바닥 닿음 수, 허브 하중 합, 접지 미끄럼 합) — 세는 판만
+        self.gy_to = np.full(N, np.nan); self.vex = np.zeros(N); self.wex = np.zeros(N); self.sat_t = np.zeros(N)   # 이륙 gy, EXTRACT 최대 v·|ω|, 공중 바퀴 포화 시간 (2026-10-14 실기 뒤로 넘어짐)  # noqa: E702
         self.slip_td = np.full(N, np.nan); self.wair = np.zeros(N)        # 접지 순간 |바퀴 둘레 속도 - 몸 속도| [m/s], 공중 바퀴 |ω| 최대  # noqa: E702
         self.td = []; self.hmin = np.full(N, 9.0); self.h_td = np.full(N, np.nan); self.tqmax = np.zeros(N)  # 착지 순간 다리 길이·눌림·고관절 토크  # noqa: E702
         self.fmax = np.zeros(N); self.hub = []                           # 착지 바퀴 축 하중 최대 [N] (바퀴 관절 반력, 2026-10-13 바퀴 파손)  # noqa: E702
@@ -374,15 +377,22 @@ class JumpEnv:
         up = np.isin(CTRL.phase, (wbctrl.FLY, wbctrl.DESCEND)) & (f.wheel_z_min - surf > 0.003)
         self.slip_td = np.where(up, np.abs(f.w_wheel_abs.mean(1) * R - f.truth_v), self.slip_td)
         self.wair = np.where(np.isin(CTRL.phase, (wbctrl.FLY, wbctrl.DESCEND)), np.maximum(self.wair, np.abs(f.w_wheel_joint).max(1)), self.wair)
+        to_now = (ph_before == wbctrl.EXTRACT) & (CTRL.phase == wbctrl.FLY)
+        self.gy_to = np.where(to_now, f.w_b[:, 1], self.gy_to)
+        ex = CTRL.phase == wbctrl.EXTRACT
+        self.vex = np.where(ex, np.maximum(self.vex, f.truth_v), self.vex)
+        self.wex = np.where(ex, np.maximum(self.wex, np.abs(f.w_wheel_joint).max(1)), self.wex)
+        self.sat_t += (np.isin(CTRL.phase, (wbctrl.FLY, wbctrl.DESCEND)) & (np.abs(f.w_wheel_joint).max(1) > 17.0)) * DT
         inl = CTRL.phase == wbctrl.LAND
         self.hmin = np.where(inl, np.minimum(self.hmin, hm), self.hmin)
         self.tqmax = np.where(inl | td_now, np.maximum(self.tqmax, np.abs(f.tau_hip).max(1)), self.tqmax)
         for i in np.flatnonzero(done & ~np.isnan(self.h_td)):
-            self.td.append((self.h_td[i], self.hmin[i], self.tqmax[i], self.slip_td[i], self.wair[i]))
+            self.td.append((self.h_td[i], self.hmin[i], self.tqmax[i], self.slip_td[i], self.wair[i], self.gy_to[i], self.vex[i], self.wex[i], self.sat_t[i]))
         lm = cm & ~np.isnan(self.h_td)
         self.land[lm, 0] += 1
         self.land[lm, 1] += self.hmin[lm] < wbctrl.H_MIN + 0.005                      # 다리를 끝까지 눌러 스프링이 바닥에 닿음
         self.land[lm, 3] += self.slip_td[lm]
+        self.gy_to[done] = np.nan; self.vex[done] = 0.0; self.wex[done] = 0.0; self.sat_t[done] = 0.0  # noqa: E702
         self.h_td[done] = np.nan; self.hmin[done] = 9.0; self.tqmax[done] = 0.0; self.slip_td[done] = np.nan; self.wair[done] = 0.0  # noqa: E702
         try:   # 정강이 -> 바퀴 관절 반력 = 허브가 받는 힘. 공중·착지·착지 뒤 0.5 s 의 최대 (물리 스텝 중 마지막 값만 보므로 실제 최대보다 낮을 수 있음)
             fw = robot.data.body_incoming_joint_wrench_b[:, wheel_bodies, :3].norm(dim=-1).max(1).values.cpu().numpy()
@@ -420,12 +430,12 @@ print(f"[점프 RL] 로봇 {N} 대, 관측 policy {venv.obs['policy'].shape[1]} 
       f"턱 {args.h_min:.2f}–{args.h_max:.2f} m (평지 {args.p_flat:.0%}), 고관절 실효 0.5–1.0, 지연 {P.delay_ms:.0f} ms", flush=True)
 
 # --- 점프 상태기계 CMA-ES: 결과 = 로봇 tune.* 값 그대로 (2026-10-13, RL 잔차는 0 % 로 실패) ------------------------
-CMA_SPACE = [   # 이름, 하한, 상한 (climb_test TUNE 기본값에서 시작)
-    ("t_retract", 0.15, 0.40), ("retract_lean", -3.0, 6.0), ("extract_pitch", -8.0, 6.0), ("t_tuck", 0.04, 0.25),
-    ("air_kp", 8.0, 60.0), ("air_kd", 0.5, 10.0), ("air_pitch", -12.0, 4.0), ("land_pitch", -6.0, 6.0),
-    ("land_kp", 8.0, 60.0), ("land_kd", 0.3, 4.0), ("land_s", 0.10, 0.60), ("h_land", 0.13, 0.23),
-    ("contact_tau", 0.5, 5.0), ("leg_kp", 30.0, 90.0), ("leg_kd", 0.5, 4.0),
-    ("spin_match_k", 0.0, 0.4), ("air_w_max", 6.0, 19.0)]                      # 2026-10-13 실기 바퀴 파손 뒤 추가
+CMA_SPACE = [   # 이름, 하한, 상한 (climb_test TUNE 기본값에서 시작). 2026-10-14 CMA 7 에서 상·하한에 붙은 것 넓힘
+    ("t_retract", 0.12, 0.40), ("retract_lean", -3.0, 12.0), ("extract_pitch", -8.0, 12.0), ("t_tuck", 0.04, 0.25),
+    ("air_kp", 0.0, 60.0), ("air_kd", 0.0, 10.0), ("air_pitch", -15.0, 4.0), ("land_pitch", -6.0, 10.0),
+    ("land_kp", 8.0, 60.0), ("land_kd", 0.2, 4.0), ("land_s", 0.10, 0.70), ("h_land", 0.13, 0.2425),
+    ("contact_tau", 0.3, 5.0), ("leg_kp", 30.0, 120.0), ("leg_kd", 0.2, 4.0),
+    ("spin_match_k", 0.0, 0.8), ("air_w_max", 6.0, 19.0)]                      # 2026-10-13 실기 바퀴 파손 뒤 추가
 
 
 def cma_eval(cands, k_eps):
@@ -541,7 +551,9 @@ if args.eval:
           + ((lambda a: f" | 접지 순간 다리 {np.median(a[:, 0]) * 1000:.0f} mm (h_land {np.mean(P.h_land) * 1000:.0f}, 최소 {wbctrl.H_MIN * 1000:.0f}), "
              f"착지 중 최저 {np.median(a[:, 1]) * 1000:.0f} mm, 눌림 {np.median(a[:, 0] - a[:, 1]) * 1000:.0f} mm, 바닥 닿음 {np.mean(a[:, 1] < wbctrl.H_MIN + 0.005):.0%}, "
              f"고관절 최대 {np.median(a[:, 2]):.1f} N·m, 닿기 직전 미끄럼 중간 {np.median(a[:, 3]):.2f} m/s (95 % {np.percentile(a[:, 3], 95):.2f}), "
-             f"공중 바퀴 |ω| 최대 중간 {np.median(a[:, 4]):.1f} rad/s, 17 넘음 {np.mean(a[:, 4] > 17):.0%}")(np.array(venv.td)) if venv.td else ""), flush=True)
+             f"공중 바퀴 |ω| 최대 중간 {np.median(a[:, 4]):.1f} rad/s, 17 넘음 {np.mean(a[:, 4] > 17):.0%}, "
+             f"이륙 gy 중간 {np.nanmedian(a[:, 5]):+.2f} rad/s (5 % {np.nanpercentile(a[:, 5], 5):+.2f}), EXTRACT 최대 v {np.median(a[:, 6]):.2f} m/s · |ω| {np.median(a[:, 7]):.1f}, "
+             f"공중 포화 {np.median(a[:, 8]) * 1000:.0f} ms")(np.array(venv.td)) if venv.td else ""), flush=True)
     os._exit(0)                                                          # app.close() 가 가끔 멈춤
 
 from isaaclab_rl.rsl_rl import handle_deprecated_rsl_rl_cfg  # noqa: E402
