@@ -1,0 +1,25 @@
+# 실험용 점프 묶음 CMA 11 (2026-10-15 데스크톱) — **고관절 명령 상한 12 N·m 전제** (hip_pd_tau_max 12 + 호스트 고관절 명령 상한 8.1 -> 12).
+# 시뮬 플랜트를 실기 20 회 로그에 맞춤: 다리 펴는 동안 명령 8.1 N·m 에 붙어 있는데 전류 평균 4.7 A (≈ 2.8 N·m, 명령의 ~35 %)
+#   -> 고관절 실효 0.3–0.4 (평가), 토크-속도 직선 w0 29.3 rad/s. 같은 조건 8.1 N·m: 평지 83 %, 바퀴 7.6 cm (실기 75 %, 5.6 cm), 6 cm 3.5 %, 10 cm 0 %.
+# 12 N·m 이 묶음 (2048 판, 접근 0.22–0.40 m/s, 게인 ×1.2, accel 1.2 / jerk 6): 평지 95 % / 넘어짐 4.5 %, 6 cm 60 / 20 %, 8 cm 53 / 28 %, 10 cm 45 / 37 %. 바퀴 13.2 cm.
+# 넘어짐은 거의 전부 앞으로. 실기는 평지부터.
+balance:
+  ros__parameters:
+    tune:
+      t_retract: 0.145
+      retract_lean: 7.0
+      extract_pitch: 10.0
+      t_tuck: 0.118
+      air_kp: 8.0
+      air_kd: 0.71
+      air_pitch: -14.4
+      land_pitch: 7.4
+      land_kp: 37.1
+      land_kd: 1.83
+      land_s: 0.621
+      h_land: 0.2007
+      contact_tau: 0.3
+      leg_kp: 72.5
+      leg_kd: 0.2
+      spin_match_k: 0.325
+      air_w_max: 15.0
