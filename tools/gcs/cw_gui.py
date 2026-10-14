@@ -50,20 +50,20 @@ SSH = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=4', '-o', 'ControlMas
        '-o', f'ControlPath={HOME}/.ssh/cm-%r@%h:%p', '-o', 'ControlPersist=120']
 
 # ------------------------------------------------------------------ 파라미터 표 (게인 제외)
-# (노드, 이름, 설명, 최소, 최대, 간격, 기본값, 단위)  기본값 = 소스/설정 파일 값 (2026-10-13). bool 이면 최소~단위 무시
+# (노드, 이름, 설명, 최소, 최대, 간격, 기본값, 단위)  기본값 = 소스/설정 파일 값 (2026-10-15). bool 이면 최소~단위 무시
 PF, RPP, LCM, GCM = '/person_follow', '/controller_server', '/local_costmap/local_costmap', '/global_costmap/global_costmap'
 GROUPS = [
     ('주행 속도 한계', '조종·추종·우회 각각의 최대 속도. 균형 노드 한계 (맨 아래) 가 전체 상한', [
-        ('/pad_teleop', 'vx_max', '패드 최대 전진 속도', 0.1, 1.0, 0.05, 0.7, 'm/s'),
+        ('/pad_teleop', 'vx_max', '패드 최대 전진 속도', 0.1, 1.2, 0.05, 0.83, 'm/s'),   # 0.83 = 3 km/h (로봇 10-14)
         ('/pad_teleop', 'wz_max', '패드 최대 회전 속도', 0.2, 3.0, 0.1, 2.0, 'rad/s'),
-        (PF, 'vx_max', '추종 최대 전진 속도', 0.0, 1.0, 0.05, 0.7, 'm/s'),
+        (PF, 'vx_max', '추종 최대 전진 속도', 0.0, 1.2, 0.05, 0.83, 'm/s'),
         (PF, 'wz_max', '추종 최대 회전 속도', 0.0, 2.5, 0.1, 1.0, 'rad/s'),
         (PF, 'search_wz', '사람 찾을 때 회전 속도', 0.0, 1.5, 0.05, 0.5, 'rad/s'),
-        (RPP, 'FollowPath.desired_linear_vel', '우회 주행 속도 (Nav2)', 0.1, 1.0, 0.05, 0.7, 'm/s'),
+        (RPP, 'FollowPath.desired_linear_vel', '우회 주행 속도 (Nav2)', 0.1, 1.2, 0.05, 0.83, 'm/s'),
         (RPP, 'FollowPath.rotate_to_heading_angular_vel', '우회 제자리 회전 속도', 0.1, 2.5, 0.1, 1.0, 'rad/s'),
         (RPP, 'FollowPath.regulated_linear_scaling_min_speed', '우회 곡선 최소 속도', 0.05, 0.7, 0.05, 0.25, 'm/s'),
         (RPP, 'FollowPath.min_approach_linear_velocity', '우회 목표 근처 최소 속도', 0.0, 0.5, 0.05, 0.1, 'm/s'),
-        ('/balance', 'tune.vmax_kmh', '균형 노드 최고 속도 (전체 상한)', 0.5, 3.5, 0.1, 3.5, 'km/h'),   # 로봇이 0.5–3.5 밖은 거절
+        ('/balance', 'tune.vmax_kmh', '균형 노드 최고 속도 (전체 상한)', 0.5, 3.5, 0.1, 3.0, 'km/h'),   # 로봇이 0.5–3.5 밖은 거절
     ]),
     ('사람 추종', '누구를 얼마나 떨어져서 따라가는지, 놓쳤을 때 어떻게 하는지', [
         (PF, 'follow_dist_m', '따라갈 거리', 0.3, 2.0, 0.05, 0.8, 'm'),
@@ -75,6 +75,13 @@ GROUPS = [
         (PF, 'max_gate_m', '대상이 한 번에 움직일 수 있는 거리', 0.5, 5.0, 0.1, 2.5, 'm'),
         (PF, 'appearance_min', '옷 색 일치 기준 (근처)', 0.0, 1.0, 0.05, 0.5, ''),
         (PF, 'reacquire_min', '옷 색 일치 기준 (오래 놓친 뒤)', 0.0, 1.0, 0.05, 0.65, ''),
+    ]),
+    ('카메라만으로 추적할 때 거리 추정', '라이다 다리가 없을 때 발목의 화면 높이 → 바닥까지 거리 (켜기/끄기는 첫 탭)', [
+        (PF, 'cam_fx', '카메라 초점거리', 300.0, 900.0, 5.0, 530.0, 'px'),
+        (PF, 'cam_tilt_deg', '카메라 아래로 숙인 각도', -15.0, 15.0, 0.5, 0.0, '°'),
+        (PF, 'cam_x_m', '카메라 앞쪽 위치 (몸 중심에서)', 0.0, 0.3, 0.005, 0.108, 'm'),
+        (PF, 'cam_h_off_m', '카메라 높이 − 다리 높이', 0.0, 0.2, 0.005, 0.081, 'm'),
+        (PF, 'cam_max_dist_m', '카메라 거리 최대 (넘으면 버림)', 1.0, 10.0, 0.5, 5.0, 'm'),
     ]),
     ('사람 인식', '카메라 (YOLO) · 라이다 다리 검출 — 로봇이 live_params 로 열면 실시간', [
         ('/person_detector', 'score_min', '사람 검출 최소 확신도', 0.1, 0.9, 0.05, 0.40, ''),
@@ -111,12 +118,18 @@ GROUPS = [
 KNOWN_LIVE = {
     PF: {'follow_dist_m', 'vx_max', 'wz_max', 'occluded_s', 'search_wz', 'appearance_min', 'use_nav', 'nav_replan_s',
          'reacquire_min', 'grace_s', 'legs_only_s', 'max_gate_m', 'predict_s', 'corridor_margin_m', 'nav_hold_s',
-         'bearing_tol_deg'},
+         'bearing_tol_deg', 'camera_only', 'cam_fx', 'cam_tilt_deg', 'cam_x_m', 'cam_h_off_m', 'cam_max_dist_m'},
     RPP: {'FollowPath.desired_linear_vel', 'FollowPath.rotate_to_heading_angular_vel',
           'FollowPath.regulated_linear_scaling_min_speed', 'FollowPath.min_approach_linear_velocity'},
     LCM: {'inflation_layer.inflation_radius'},
     '/cmd_mux': {'lidar_limit'},
 }
+# 읽기 전용 표시 (게인이라 GUI 가 바꾸지 않음) — 로봇 2026-10-15 요청 3
+BAL_INFO = [('tune.jump_min_v', '점프 최소 속도', 'm/s'), ('tune.jump_max_v', '점프 최대 속도 (0 = 꺼짐)', 'm/s'),
+            ('tune.accel_max', '가속 한계', 'm/s²'), ('tune.jerk_max', '저크 한계', 'm/s³'), ('th_trim_deg', '균형점 보정', '°'),
+            ('tune.v_ki', '경사 보정 (속도 적분)', ''), ('tune.bal_adapt_x_max', '균형점 학습: 위치 오차 이내', 'm'),
+            ('tune.bal_adapt_max_deg', '균형점 학습 한계', '°'), ('tune.x_turn_wz', '회전 중 위치 리셋 (0 = 유지)', 'rad/s')]
+MARKERS = ['점프 평지', '점프 턱 5.6 cm']    # 시험 표시 버튼 (gcs/marker → 로봇 health_logger 'MARKER: …')
 MIRROR = {LCM: [GCM]}                       # 로컬 코스트맵 값을 글로벌에도
 RESTART = {'/pad_teleop': 'pad', '/gesture': 'gesture', '/slam_toolbox': 'slam'}   # 노트북에서 띄우는 노드
 ASK_LIVE = ['/balance', '/pad_teleop', '/gesture', '/person_detector', '/leg_detector', PF]   # live_params 물어볼 노드
@@ -176,6 +189,11 @@ class Ros(QtCore.QObject):
         # 모터 온도·상태 = motor_monitor 의 /diagnostics (1 Hz). motors/state (100 Hz) 는 파이썬으로 받으면 한 코어의 14 % (2026-10-14 잼)
         from diagnostic_msgs.msg import DiagnosticArray
         self.node.create_subscription(DiagnosticArray, '/diagnostics', self._diag, 10)
+        # 라이다 끊김 감시: /scan 은 도착 시각만 필요 → raw (역직렬화 안 함)
+        from sensor_msgs.msg import LaserScan
+        self._scan_t = None
+        self.node.create_subscription(LaserScan, 'scan', self._on_scan, qos_profile_sensor_data, raw=True)
+        self.marker_pub = self.node.create_publisher(String, 'gcs/marker', 10)
         self.node.create_timer(0.2, self._emit_panel)          # 진단은 1 Hz 라 3 초까지 유효 (_emit_panel)
         self.node.create_timer(2.0, self._graph)
         self._att, self._yaw, self._odom_sub, self._att_users, self.yaw0 = None, None, None, 0, None
@@ -243,7 +261,8 @@ class Ros(QtCore.QObject):
         self._att = (now, -math.degrees(m.roll), math.degrees(m.pitch))     # roll: ControllerState + = 왼쪽 내려감 → REP-103
         # roll: ControllerState 는 + = 왼쪽 내려감 → REP-103 (자세 그림과 같게) + = 오른쪽 내려감 으로
         self._panel['cs'] = (now, dict(mode=m.mode, fault=m.fault, v=m.v, acc=self._acc, vx_cmd=m.vx_cmd, wz_cmd=m.wz_cmd,
-                                       pitch=math.degrees(m.pitch), roll=-math.degrees(m.roll), h=tuple(m.h)))
+                                       pitch=math.degrees(m.pitch), roll=-math.degrees(m.roll), h=tuple(m.h),
+                                       imu_age_ms=m.imu_age_ms))
 
     def _power(self, k, m):
         self._panel[k] = (time.monotonic(), (m.voltage, m.percentage, m.present))
@@ -260,18 +279,35 @@ class Ros(QtCore.QObject):
             lv = st.level if isinstance(st.level, int) else ord(st.level)     # byte → bytes 로 온다
             try:
                 t = float(kv.get('temperature_c', 'nan'))
+                if not float(kv.get('age_s', 'inf')) < 1.0:     # 응답 없는 드라이브의 온도는 0 으로 온다
+                    t = math.nan
             except ValueError:
                 t = math.nan
             mot[st.name.split('motor: ')[-1]] = (t, lv, st.message)
         if not mot:
             return
         temps = [(t, n) for n, (t, _, _) in mot.items() if not math.isnan(t)]
-        bad = [(lv, f'{n}: {msg}') for n, (_, lv, msg) in mot.items() if lv >= 1]
+        bad = {}                                  # 같은 문제끼리 묶는다: "no feedback: wheel_l, wheel_r …"
+        for n, (_, lv, msg) in mot.items():
+            if lv >= 1:
+                bad.setdefault((lv, msg.split(' (')[0]), []).append(n)
         hot = max(temps) if temps else (math.nan, '')
-        self._panel['temp'] = (time.monotonic(), (hot[0], hot[1], max(bad)[0] if bad else 0, ' · '.join(b for _, b in sorted(bad, reverse=True))))
+        level = max(lv for lv, _ in bad) if bad else 0
+        text = ' · '.join(f'{msg}: {", ".join(sorted(ns))}' for (lv, msg), ns in sorted(bad.items(), reverse=True))
+        self._panel['temp'] = (time.monotonic(), (hot[0], hot[1], level, text))
+
+    def _on_scan(self, _):
+        self._scan_t = time.monotonic()
+
+    def marker(self, text):
+        self.marker_pub.publish(String(data=text))
 
     def _emit_panel(self):
         now = time.monotonic()
+        cs = self._panel.get('cs')
+        if cs and now - cs[0] < 1.5:      # 로봇이 보일 때만 센서 끊김 판단
+            scan_age = None if self._scan_t is None else now - self._scan_t
+            self._panel['sensors'] = (now, (scan_age, cs[1]['imu_age_ms']))
         self.panel.emit({k: v for k, (t, v) in list(self._panel.items()) if now - t < (3.0 if k == 'temp' else 1.5)})
 
     def _emit_state(self):
@@ -542,7 +578,7 @@ class Gui(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle('C-WANG 관제')
-        self.resize(1340, 800)
+        self.resize(1340, 960)
         self.ros = Ros()
         QtWidgets.QApplication.instance().aboutToQuit.connect(self.ros.shutdown)
         self.pool = ThreadPoolExecutor(4)
@@ -681,6 +717,10 @@ class Gui(QtWidgets.QMainWindow):
                                         self._btn('재개', lambda: self.ros.set_bool('/follow/hold', False, '재개'))]),
             ('nav', '장애물 우회 (Nav2)', [self._btn('켜기', lambda: self.ros.set_params(PF, {'use_nav': True})),
                                         self._btn('끄기', lambda: self.ros.set_params(PF, {'use_nav': False}))]),
+            ('camonly', '카메라만으로 추적 (라이다 다리 없을 때)', [
+                self._btn('켜기', lambda: self.ros.set_params(PF, {'camera_only': True}), '켜기/끄기는 균형 중에도 됨'),
+                self._btn('끄기', lambda: self.ros.set_params(PF, {'camera_only': False}))]),
+            ('jump', '점프 (패드 Y) — 읽기 전용', []),
             ('lidar', '장애물 앞 정지·감속 (라이다)', [
                 self._btn('켜기', lambda: self.ros.set_params('/cmd_mux', {'lidar_limit': True})),
                 self._btn('끄기', self.lidar_off, '로봇 기본 = 꺼짐. 켜면 자기 다리·바퀴를 장애물로 잡아 못 갈 수 있다 (2026-10-09)')]),
@@ -688,6 +728,14 @@ class Gui(QtWidgets.QMainWindow):
         for i, (k, t, b) in enumerate(rows):
             self.lamp[k] = Lamp()
             self.note[k] = self._row(g, i, t, self.lamp[k], b)
+        v.addWidget(box)
+
+        box = QtWidgets.QGroupBox('시험 표시 — 누르면 로봇 로그 (health_logger events) 에 MARKER 로 시각과 함께 남는다. 시험 직전에')
+        h = QtWidgets.QHBoxLayout(box)
+        for m in MARKERS:
+            h.addWidget(self._btn(m, lambda _=0, m=m: self.send_marker(m)))
+        h.addWidget(self._btn('자유 메모…', self.marker_note))
+        h.addStretch()
         v.addWidget(box)
 
         box = QtWidgets.QGroupBox('이 노트북')
@@ -704,13 +752,26 @@ class Gui(QtWidgets.QMainWindow):
             self.lamp[k] = Lamp()
             self.note[k] = self._row(g, i, LOCAL[k][0], self.lamp[k], btns)
         v.addWidget(box)
-        hint = QtWidgets.QLabel('패드: START 일어서기 · BACK 앉기 · LB+RB 비상 해제 · X 추종 · Y 점프 · A 누르는 동안 정지.  '
+        hint = QtWidgets.QLabel('패드: START 일어서기 · BACK 앉기 · LB+RB 비상 해제 · X 추종 · Y 점프 (위 점프 줄이 켜짐일 때) · A 누르는 동안 정지.  '
                                 '데스크톱과 노트북에서 패드·SLAM 을 동시에 켜지 말 것 (이 창이 막아 줌).')
         hint.setWordWrap(True)
         hint.setStyleSheet('color:#888')
         v.addWidget(hint)
         v.addStretch()
-        return w
+        sa = QtWidgets.QScrollArea()          # 노트북 화면 (1080) 에 들어가게 — 아래 자세 줄을 키우면 스크롤
+        sa.setWidgetResizable(True)
+        sa.setFrameShape(QtWidgets.QFrame.NoFrame)
+        sa.setWidget(w)
+        return sa
+
+    def send_marker(self, text):
+        self.ros.marker(text)
+        self.log(f'시험 표시 보냄: {text}')
+
+    def marker_note(self):
+        text, ok = QtWidgets.QInputDialog.getText(self, '시험 표시', '로봇 로그에 남길 메모:')
+        if ok and text.strip():
+            self.send_marker(text.strip())
 
     # ---------------- 튜닝 탭
     def _tune_tab(self):
@@ -739,6 +800,13 @@ class Gui(QtWidgets.QMainWindow):
         sa.setWidgetResizable(True)
         inner = QtWidgets.QWidget()
         iv = QtWidgets.QVBoxLayout(inner)
+        bi = QtWidgets.QGroupBox('균형 기준값 (읽기 전용 — 게인이라 여기서 안 바꿈, 바꾸려면 comms)')
+        bl = QtWidgets.QVBoxLayout(bi)
+        self.bal_info = QtWidgets.QLabel('균형 노드 안 보임')
+        self.bal_info.setWordWrap(True)
+        self.bal_info.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        bl.addWidget(self.bal_info)
+        iv.addWidget(bi)
         self.groups = [Group(t, n, s, self) for t, n, s in GROUPS]
         self.rows = [r for g in self.groups for r in g.rows]
         gmap = {g.title(): g for g in self.groups}
@@ -996,11 +1064,16 @@ class Gui(QtWidgets.QMainWindow):
         if not any('balance' in n for n in names):
             self.l_ros.set('off')
         if stack:
-            self.ros.get_params(PF, ['use_nav'])
+            self.ros.get_params(PF, ['use_nav', 'camera_only'])
         else:
-            for k in ('follow', 'hold', 'nav'):
+            for k in ('follow', 'hold', 'nav', 'camonly'):
                 self.lamp[k].set('off')
                 self.note[k].setText('추종 스택 꺼짐')
+        if '/balance' in names:
+            self.ros.get_params('/balance', [n for n, _, _ in BAL_INFO])
+        else:
+            self.lamp['jump'].set('off')
+            self.note['jump'].setText('균형 노드 안 보임')
         if '/cmd_mux' in names:
             self.ros.get_params('/cmd_mux', ['lidar_limit'])
         else:
@@ -1027,6 +1100,15 @@ class Gui(QtWidgets.QMainWindow):
         if node == PF and vals.get('use_nav') is not None:
             self.lamp['nav'].set('on' if vals['use_nav'] else 'warn')
             self.note['nav'].setText('켜짐 — 막히면 돌아감' if vals['use_nav'] else '꺼짐 — 직진만')
+        if node == PF and vals.get('camera_only') is not None:
+            self.lamp['camonly'].set('on' if vals['camera_only'] else 'off')
+            self.note['camonly'].setText('켜짐 — 라이다가 없어도 카메라로 거리 추정' if vals['camera_only'] else '꺼짐 — 다리 (라이다) 있어야 추종')
+        if node == '/balance' and vals.get('tune.jump_max_v') is not None:
+            jmax, jmin = vals['tune.jump_max_v'], vals.get('tune.jump_min_v') or 0.0
+            self.lamp['jump'].set('on' if jmax > 0 else 'off')
+            self.note['jump'].setText(f'켜짐 — {jmin:.2f}–{jmax:.2f} m/s 로 직진 중에 Y' if jmax > 0 else '꺼짐 (tune.jump_max_v 0)')
+            self.bal_info.setText('  ·  '.join(f'{lab} {_fmt(vals[n])}{(" " + u) if u else ""}'
+                                              for n, lab, u in BAL_INFO if vals.get(n) is not None))
         if node == '/cmd_mux' and vals.get('lidar_limit') is not None:
             # 꺼짐이 로봇 기본 (2026-10-09 사용자: 자기 다리·바퀴가 잡혀 주행이 막힘). 회피는 person_follow 가 한다
             self.lamp['lidar'].set('on' if vals['lidar_limit'] else 'warn')
@@ -1061,6 +1143,11 @@ class Gui(QtWidgets.QMainWindow):
     def _on_topic(self, t, s):
         if t == 'follow/status':
             st = s.split()[0] if s else ''
+            # 끝의 [camera] / [legs] = 추적 출처 (로봇 2026-10-15). camera = 발목 화면 높이로 거리 추정 → 회색 표시
+            m = re.match(r'(.*?)\s*\[(camera|legs)\]\s*$', s)
+            if m:
+                s = m.group(1) + (' — 카메라 (거리 추정)' if m.group(2) == 'camera' else ' — 라이다 다리')
+                self.t_follow.setStyleSheet('color:#888' if m.group(2) == 'camera' else 'color:#555')
             self.t_follow.setText(f'추종: {s}')
             self.lamp['follow'].set('on' if st not in ('', 'IDLE') else 'off')
             self.note['follow'].setText(s or '—')

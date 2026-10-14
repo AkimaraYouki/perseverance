@@ -2,7 +2,8 @@
 
 Ros.panel 신호 (5 Hz) 의 dict 를 받아 그린다. 값이 1.5 초 넘게 안 들어오면 회색 '—'.
   모드 · 모터 배터리 (6S) · 속도 · 가속도 (바퀴 축 속도의 변화, 0.2 s 평활) · 기울기 · 다리 높이 · 컴퓨터 배터리 (3S) ·
-  모터 최고 온도와 이상 (motor_monitor /diagnostics, 1 Hz)
+  모터 최고 온도와 이상 (motor_monitor /diagnostics, 1 Hz).
+맨 위 빨간 경고: 로봇이 보이는데 /scan 이 0.5 초 넘게 없음 → "LiDAR 끊김", controller/state.imu_age_ms > 20 → "IMU 지연" (로봇 2026-10-15 요청).
 배터리 색: 셀당 3.50 V 아래 주황, 3.30 V 아래 빨강 (sensor_hub.yaml warn_cell_v / error_cell_v 와 같음).
 2026-10-14 센서 허브 (PM02 전압·전류) 를 로봇에서 뺐다 → /power/* 없음 = '센서 없음', 컴퓨터 배터리 칸은 숨김.
 허브를 다시 달면 (bench.launch hub:=true) 값이 들어오는 대로 다시 보인다.
@@ -51,6 +52,16 @@ class StatusPanel(QtWidgets.QWidget):
         v = QtWidgets.QVBoxLayout(self)
         v.setContentsMargins(4, 0, 0, 0)
         v.setSpacing(6)
+        self.alarm = QtWidgets.QLabel('')      # 센서 끊김 경고 (크게, 빨강) — 착지 충격에 라이다·IMU USB 가 빠진 적 있음 (로봇 10-14)
+        f = self.alarm.font()
+        f.setPointSize(18)
+        f.setBold(True)
+        self.alarm.setFont(f)
+        self.alarm.setWordWrap(True)
+        self.alarm.setAlignment(QtCore.Qt.AlignCenter)
+        self.alarm.setStyleSheet(f'background:{ERR}; color:white; border-radius:6px; padding:8px')
+        self.alarm.hide()
+        v.addWidget(self.alarm)
         self.mode = Card('모드', 24)
         self.batt = Card('모터 배터리 (6S)', 30)
         self.speed = Card('속도', 30)
@@ -95,6 +106,16 @@ class StatusPanel(QtWidgets.QWidget):
                           ERR if max(abs(p), abs(r)) > 20 and cs['mode'] in ('stand', 'balance') else TXT)   # 앉아 있으면 -63° 가 정상
             hl, hr = cs['h']
             self.leg.set(f'{hl * 1000:.0f} / {hr * 1000:.0f} mm', '')
+        sen = d.get('sensors')
+        al = []
+        if sen is not None:
+            scan_age, imu_ms = sen
+            if scan_age is None or scan_age > 0.5:
+                al.append('LiDAR 끊김\n(USB 확인)')
+            if imu_ms > 20:
+                al.append(f'IMU 지연 {imu_ms:.0f} ms\n(USB 확인)')
+        self.alarm.setText('\n'.join(al))
+        self.alarm.setVisible(bool(al))
         self._batt(self.batt, d.get('motor'), 6)
         self.cbatt.setVisible(d.get('compute') is not None)
         self._batt(self.cbatt, d.get('compute'), 3)
