@@ -41,6 +41,8 @@ balance:
       v_boost_max: 0.4        # m/s, most it may add (or take, downhill)
       x_hold_moving: false    # position hold only when the stick is released (it added catch-up overshoot while driving)
       fric_comp_nm: 0.0       # 2026-10-08 MIT wheels: 0.11 (velocity-sign Coulomb comp) drove a 12-15 Hz wheel chatter; 0 = quiet
+      fric_comp_cmd_nm: 0.06  # 2026-10-14 trial: +0.06 N.m per wheel in the direction of the torque COMMAND (tanh over +-0.05 N.m) —
+      fric_comp_cmd_w: 0.05   # no wheel-speed noise in it. Idle creep +-10-17 cm = stick-slip: idle command ~0.1 N.m vs friction 0.085 N.m
       yaw_kd: 0.15            # 2026-10-08 MIT wheels: 0.5 (sim) gave a 13 Hz L/R torque chatter; 0.15 quiet
       yaw_ki: 1.0             # desktop 2026-10-08 (sim): kd 0.15 alone stalls on stiction (0.02 rad/s of 0.5); + ki 1.0 -> 0.44-0.48, pivot 4-6 cm
       yaw_i_max: 0.5
@@ -57,7 +59,7 @@ balance:
       jump_max_v: 0.0         # JUMP OFF (any request refused: v > 0): 2026-10-13 the CMA-1 set below landed with legs tucked and
                               # wheels spinning backwards -> broke a wheel; desktop 1800: no jumps until CMA-3. Was 0.4 (0.2-0.4 m/s).
       # jump state machine: desktop CMA-ES round 5 (2026-10-14 kt083, 0.83 wheel torque plant, landing penalties) — values below;
-      # [ ] = previous. Needs spin_match_k (not in wb_core yet) -> jump stays OFF (jump_max_v 0) until it is ported.
+      # [ ] = previous. spin_match_k ported to wb_core 2026-10-14 (golden 4/4); jump still OFF until the user says (jump_max_v 0).
       # older note: desktop sim CMA-ES 2026-10-13 (comms 1500; real plant: delays, backlash,
       # hip 9 N.m, DR). Approach 0.2-0.4 m/s, 2048 runs each: flat 66 -> 86 % success, 6 cm 26 -> 63 %, 8 cm 24 -> 56 %.
       # Use as one set. Previous value in [] (wb_core defaults; retract_lean was 0 from 10-13 morning).
@@ -76,3 +78,5 @@ balance:
       contact_tau: 1.04         # [1.79 CMA-1; 2.0]
       leg_kp: 71.8              # [90.0 CMA-1; 60.0] (search bound; hip_pd_tau_max 9 N.m still caps it)
       leg_kd: 0.56              # [1.125 CMA-1; 1.5]
+      spin_match_k: 0.251     # CMA-5: in DESCEND wheels spun to body speed / R (landing slip 1.15 -> 0.28 m/s in sim); ported 2026-10-14
+      air_w_max: 0.0          # CMA-5: off

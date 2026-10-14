@@ -98,3 +98,12 @@ TEST(WBCore, MatchesPythonSpecJump)   // GOLDEN_JUMP=1 python3 test/gen_golden.p
   P.yaw_kd = 0.15; P.yaw_ki = 1.0; P.yaw_i_max = 0.5;
   run_case("golden_jump.csv", P);
 }
+
+TEST(WBCore, MatchesPythonSpecJumpSpinMatch)   // GOLDEN_SPIN=1 WBCTRL_DIR=<jump-rl wbctrl> python3 test/gen_golden.py
+{
+  Params P;
+  P.jerk_max = 3.0; P.accel_max = 0.8; P.x_hold_moving = false; P.x_leak_moving = 0.5; P.lean_ff = 1.0;
+  P.yaw_kd = 0.15; P.yaw_ki = 1.0; P.yaw_i_max = 0.5;
+  P.spin_match_k = 0.25; P.air_w_max = 5.0;
+  run_case("golden_jump_spin.csv", P);
+}

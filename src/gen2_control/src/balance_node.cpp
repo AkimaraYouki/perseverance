@@ -188,12 +188,16 @@ public:
     P.vmax_kmh = declare_parameter("tune.vmax_kmh", P.vmax_kmh);
     P.accel_max = declare_parameter("tune.accel_max", P.accel_max);
     P.v_ki = declare_parameter("tune.v_ki", P.v_ki);
+    P.spin_match_k = declare_parameter("tune.spin_match_k", P.spin_match_k);
+    P.air_w_max = declare_parameter("tune.air_w_max", P.air_w_max);
     P.v_boost_max = declare_parameter("tune.v_boost_max", P.v_boost_max);
     P.x_hold_moving = declare_parameter("tune.x_hold_moving", P.x_hold_moving);
     P.jerk_max = declare_parameter("tune.jerk_max", P.jerk_max);
     P.x_leak_moving = declare_parameter("tune.x_leak_moving", P.x_leak_moving);
     P.lean_ff = declare_parameter("tune.lean_ff", P.lean_ff);
     P.fric_comp_nm = declare_parameter("tune.fric_comp_nm", P.fric_comp_nm);
+    P.fric_comp_cmd_nm = declare_parameter("tune.fric_comp_cmd_nm", P.fric_comp_cmd_nm);   // command-sign Coulomb comp
+    P.fric_comp_cmd_w = declare_parameter("tune.fric_comp_cmd_w", P.fric_comp_cmd_w);
     P.db_comp = static_cast<int>(declare_parameter("tune.db_comp", static_cast<int64_t>(P.db_comp)));
     P.db_comp_nm = declare_parameter("tune.db_comp_nm", P.db_comp_nm);
     P.wheel_lpf_hz = declare_parameter("tune.wheel_lpf_hz", P.wheel_lpf_hz);

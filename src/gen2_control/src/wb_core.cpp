@@ -203,12 +203,18 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
     act[0] = act[1] = (tgt_h - h_ref) / 0.12;
     const bool pd = ph == kFly || ph == kDescend || (P.air_pd_extract && ph == kExtract);
     if (pd) {
-      double u = 0.0;
       if (P.air_ctrl) {
         const double ref = ph == kExtract ? P.extract_pitch : ph == kDescend ? P.land_pitch : P.air_pitch;
-        u = clip((P.air_kp * (pitch - ref * M_PI / 180.0) + P.air_kd * gy) / P.air_tau, -1.0, 1.0);
+        const double u = P.air_kp * (pitch - ref * M_PI / 180.0) + P.air_kd * gy;   // [N.m], same for both wheels
+        for (int k = 0; k < 2; ++k) {
+          double uw = u;
+          if (P.spin_match_k > 0 && ph == kDescend) {uw = P.spin_match_k * (vf_ / P.r_wheel - f.w_wheel_abs[k]);}
+          if (P.air_w_max > 0 && sgn(uw) * f.w_wheel_joint[k] > P.air_w_max) {uw = 0.0;}
+          act[2 + k] = clip(uw / P.air_tau, -1.0, 1.0);
+        }
+      } else {
+        act[2] = act[3] = 0.0;
       }
-      act[2] = act[3] = u;
     }
     if (soft_) {leg_kp = P.land_kp; leg_kd = P.land_kd;} else if (ph != kLand) {leg_kp = P.leg_kp; leg_kd = P.leg_kd;}
   }

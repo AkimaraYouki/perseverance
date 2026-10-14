@@ -34,6 +34,10 @@ struct Params      // climb_test.py TUNE defaults (2026-10-07)
   // slope compensation (robot 2026-10-14; 0 = off = wbctrl): steady command + slower than commanded (uphill) ->
   // the speed reference the LQR tracks is raised by v_ki * integral(v_ref - v), at most +-v_boost_max
   double v_ki = 0.0, v_boost_max = 0.4;
+  // landing wheels (wbctrl desktop/jump-rl b072017; 0 = off): spin_match_k: in DESCEND each wheel's absolute speed is driven to
+  // vf/R (body speed held from take-off), tau = k (vf/R - w_abs) instead of the air pitch PD; air_w_max: in the air no torque in
+  // the direction that would push |wheel joint speed| beyond this
+  double spin_match_k = 0.0, air_w_max = 0.0;
   bool turn_slow = true, turn_limit = true;
   double wheel_margin = 0.85, yaw_kd = 0.5, wheel_tau_max = 7.0;
   double yaw_ki = 0.0, yaw_i_max = 0.5;   // yaw-rate integral (desktop 2026-10-08: beats wheel stiction in place)

@@ -13,6 +13,11 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 WS = os.path.abspath(os.path.join(HERE, '../../..'))
 sys.path.insert(0, os.path.join(WS, 'sim/isaaclab/scripts'))
+# GOLDEN_SPIN=1 -> golden_jump_spin.csv: the jump case with spin_match_k 0.25 + air_w_max 5 (wbctrl from WBCTRL_DIR, e.g. a
+# `git show origin/desktop/jump-rl:sim/isaaclab/scripts/wbctrl.py` copy, until that wbctrl is merged)
+SPIN = os.environ.get('GOLDEN_SPIN') == '1'
+if os.environ.get('WBCTRL_DIR'):
+    sys.path.insert(0, os.environ['WBCTRL_DIR'])
 import lqr_vmc  # noqa: E402
 import wbctrl  # noqa: E402
 
@@ -33,11 +38,13 @@ P = SimpleNamespace(
     air_kp=30.0, air_kd=5.0, air_tau=7.0, bump_rate=1.5, bump_acc=4.0, bump_hold_s=2.0, bump_vmax=0.45)
 M_PEND = 4.02
 lqr = lqr_vmc.WheelLQR(M_PEND, 0.0293, 0.145, 2 * (1.8414e-3 + 4.5e-4), wbctrl.R_WHEEL)
-JUMP = os.environ.get('GOLDEN_JUMP') == '1'
+JUMP = os.environ.get('GOLDEN_JUMP') == '1' or SPIN
 ROBOT = os.environ.get('GOLDEN_ROBOT') == '1' or JUMP
 if ROBOT:   # robot additions (2026-10-09): S-curve, x_leak, lean_ff, x_hold_moving off, yaw integral
     P.jerk_max, P.accel_max, P.x_hold_moving, P.x_leak_moving, P.lean_ff = 3.0, 0.8, False, 0.5, 1.0
     P.yaw_kd, P.yaw_ki, P.yaw_i_max = 0.15, 1.0, 0.5
+if SPIN:
+    P.spin_match_k, P.air_w_max = 0.25, 5.0
 ctl = wbctrl.WBController(P, lqr, M_PEND, n=1, seed=0)
 
 with open(os.path.join(HERE, 'lqr.csv'), 'w') as f:
@@ -98,7 +105,7 @@ for k in range(N):
     rows.append([t, *g, *wb, *h, *tau, *f.w_wheel_joint[0], *f.w_wheel_abs[0], th_kin, l_pend, sf, ms, vx, wzc,
                  0.1825, h_mid, *act[0], kp[0], kd[0], ff[0], info['th'][0], info['v'][0], float(ctl.lift_on[0])]
                 + ([float(jump), float(ctl.phase[0])] if JUMP else []))
-name = 'golden_jump.csv' if JUMP else 'golden_robot.csv' if ROBOT else 'golden.csv'
+name = 'golden_jump_spin.csv' if SPIN else 'golden_jump.csv' if JUMP else 'golden_robot.csv' if ROBOT else 'golden.csv'
 with open(os.path.join(HERE, name), 'w') as fo:
     fo.write(','.join(cols) + '\n')
     for r in rows:
