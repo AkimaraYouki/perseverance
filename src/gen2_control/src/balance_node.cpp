@@ -190,6 +190,8 @@ public:
     P.v_ki = declare_parameter("tune.v_ki", P.v_ki);
     P.spin_match_k = declare_parameter("tune.spin_match_k", P.spin_match_k);
     P.air_w_max = declare_parameter("tune.air_w_max", P.air_w_max);
+    P.bal_adapt_wz_max = declare_parameter("tune.bal_adapt_wz_max", P.bal_adapt_wz_max);
+    P.x_turn_wz = declare_parameter("tune.x_turn_wz", P.x_turn_wz);
     P.v_boost_max = declare_parameter("tune.v_boost_max", P.v_boost_max);
     P.x_hold_moving = declare_parameter("tune.x_hold_moving", P.x_hold_moving);
     P.jerk_max = declare_parameter("tune.jerk_max", P.jerk_max);

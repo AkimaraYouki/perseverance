@@ -67,7 +67,8 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
   const double acc = (v_now - v_prev_) / kDt;
   v_prev_ = v_now;
   const bool ad = P.bal_adapt > 0 && phase_ == kDrive && !lift_on_ && std::fabs(acc) < 0.3 && std::fabs(thd) < 0.3 &&
-    std::fabs(v_now) < 0.05 && std::fabs(vx) < 0.02;
+    std::fabs(v_now) < 0.05 && std::fabs(vx) < 0.02 &&
+    (P.bal_adapt_wz_max <= 0 || (std::fabs(wz) < P.bal_adapt_wz_max && std::fabs(gz) < P.bal_adapt_wz_max));
   const double lim = P.bal_adapt_max_deg * M_PI / 180.0;
   if (ad) {th_bias_ = clip(th_bias_ + P.bal_adapt * kDt * (th - th_bias_), -lim, lim);}
   th -= th_bias_;
@@ -114,7 +115,8 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
     g_ref = g_ref_ + clip(tgt - g_ref_, -P.accel_max * kDt, P.accel_max * kDt);
   }
   double v_ref = g_ref;
-  double x_err = std::fabs(vx) > v_lim + 1e-3 || (!P.x_hold_moving && std::fabs(vx) > 0.02) ? 0.0 : x_err_;
+  const bool turning = P.x_turn_wz > 0 && std::fabs(wz) > P.x_turn_wz;
+  double x_err = std::fabs(vx) > v_lim + 1e-3 || (!P.x_hold_moving && std::fabs(vx) > 0.02) || turning ? 0.0 : x_err_;
   bool guarded = std::fabs(vx) > v_lim + 1e-3;          // brake / speed limit active
   if (P.speed_guard < 1.0) {
     const double ww = std::max(std::fabs(f.w_wheel_joint[0]), std::fabs(f.w_wheel_joint[1])) / w_max;

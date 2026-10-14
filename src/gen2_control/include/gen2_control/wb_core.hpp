@@ -38,6 +38,10 @@ struct Params      // climb_test.py TUNE defaults (2026-10-07)
   // vf/R (body speed held from take-off), tau = k (vf/R - w_abs) instead of the air pitch PD; air_w_max: in the air no torque in
   // the direction that would push |wheel joint speed| beyond this
   double spin_match_k = 0.0, air_w_max = 0.0;
+  // after in-place turns (robot 2026-10-14; 0 = off = wbctrl): no balance-point learning while |wz cmd| or |yaw rate| >=
+  // bal_adapt_wz_max (turning leans the body -> wrong th_bias -> creep after the turn); |wz cmd| > x_turn_wz counts as
+  // moving for the position hold (x_err 0 -> it holds where the turn ended instead of creeping back to where it began)
+  double bal_adapt_wz_max = 0.0, x_turn_wz = 0.0;
   bool turn_slow = true, turn_limit = true;
   double wheel_margin = 0.85, yaw_kd = 0.5, wheel_tau_max = 7.0;
   double yaw_ki = 0.0, yaw_i_max = 0.5;   // yaw-rate integral (desktop 2026-10-08: beats wheel stiction in place)

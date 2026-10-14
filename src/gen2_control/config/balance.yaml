@@ -36,6 +36,8 @@ balance:
       lean_ff: 1.0            # desktop 2026-10-09: lean ahead by atan(a_ref/g) -> sim flat_stop 5 -> 15/16 (0.70 -> 0.40 m past the release)
       x_leak_moving: 0.5      # 1/s, driving: x_err leaks (steady speed error fixed, big catch-up forgotten in 2 s)
       jerk_max: 3.0           # m/s^3 S-curve speed reference: the lean builds up smoothly (0 = old ramp)
+      bal_adapt_wz_max: 0.1   # 2026-10-14: no balance-point learning while turning (th_bias went +2.8 deg in a turn -> crept 1 m after)
+      x_turn_wz: 0.3          # turning counts as moving: position hold restarts where the turn ends (crept back 0.5 m before)
       v_ki: 0.8               # 2026-10-14 slope compensation: uphill the robot stalled (02:41: cmd 0.70, v 0.0, lean 17 deg, x_err at
                               # its 0.3 limit). Raises the tracked speed by 0.8 x integral(cmd - v) while the command is steady
       v_boost_max: 0.4        # m/s, most it may add (or take, downhill)
@@ -56,27 +58,29 @@ balance:
       roll_kd: 0.1            # 2026-10-12 desktop step 3 (sim 80/80); user: "너무 잘됨". push recovery 0.13-0.26 s; hip current 10-100 Hz 0.24 A (0.05 with kd 0)
       roll_rate_lpf_hz: 4.0   # roll-rate LPF for the kd term (wb_core default 8)
       turn_lean: 0.0          # needs the roll loop
-      jump_max_v: 0.0         # JUMP OFF again 2026-10-14 (user): CMA-5 fell backwards twice (take-off pitch rate -4.5 rad/s); 0.4 = on
+      jump_max_v: 0.4         # jump ON 2026-10-14 with CMA-7 (user ok; flat 0.3 m/s first, IMU USB secured). 0 = off
                               # (landed with legs tucked, wheels spinning backwards -> broke a wheel, 2026-10-13).
-      # jump state machine: desktop CMA-ES round 5 (2026-10-14 kt083, 0.83 wheel torque plant, landing penalties) — values below;
-      # [ ] = previous. spin_match_k ported to wb_core 2026-10-14 (golden 4/4); jump still OFF until the user says (jump_max_v 0).
+      # jump state machine: desktop CMA-ES round 7 (2026-10-14 13:00, robot-style hip cap, eff 0.5-0.7; sim flat 91 % / falls 1 %,
+      # 6 cm 62/9, 8 cm 59/17, 10 cm 54/26 -> flat 0.3 m/s first). [ ] = CMA-5 (fell backwards twice). Older notes:
+      # desktop CMA-ES round 5 (2026-10-14 kt083, 0.83 wheel torque plant, landing penalties);
+      # spin_match_k / air_w_max ported to wb_core 2026-10-14 (golden 4/4).
       # older note: desktop sim CMA-ES 2026-10-13 (comms 1500; real plant: delays, backlash,
       # hip 9 N.m, DR). Approach 0.2-0.4 m/s, 2048 runs each: flat 66 -> 86 % success, 6 cm 26 -> 63 %, 8 cm 24 -> 56 %.
       # Use as one set. Previous value in [] (wb_core defaults; retract_lean was 0 from 10-13 morning).
-      t_retract: 0.175          # [0.256 CMA-1; 0.25]
-      retract_lean: 5.8         # [5.0 CMA-1; 0.0] the set's stronger air PD takes the lean
-      extract_pitch: 1.2        # [-1.6 CMA-1; 0.0]
-      t_tuck: 0.196             # [0.235 CMA-1; 0.12]
-      air_kp: 40.8              # [46.2 CMA-1; 30.0]
-      air_kd: 2.0               # [3.64 CMA-1; 5.0]
-      air_pitch: -11.3          # [-6.7 CMA-1; -5.0]
-      land_pitch: -5.6          # [-1.0 CMA-1; 0.0]
-      land_kp: 25.2             # [11.4 CMA-1; 20.0]
-      land_kd: 0.79             # [2.10 CMA-1; 1.0]
-      land_s: 0.46              # [0.166 CMA-1; 0.30]
-      h_land: 0.1866            # [0.183 CMA-1; 0.1825]
-      contact_tau: 1.04         # [1.79 CMA-1; 2.0]
-      leg_kp: 71.8              # [90.0 CMA-1; 60.0] (search bound; hip_pd_tau_max 9 N.m still caps it)
-      leg_kd: 0.56              # [1.125 CMA-1; 1.5]
-      spin_match_k: 0.251     # CMA-5: in DESCEND wheels spun to body speed / R (landing slip 1.15 -> 0.28 m/s in sim); ported 2026-10-14
-      air_w_max: 0.0          # CMA-5: off
+      t_retract: 0.172          # CMA-7 [0.175 CMA-5]
+      retract_lean: 6.0         # CMA-7 [5.8 CMA-5]
+      extract_pitch: 6.0        # CMA-7 [1.2 CMA-5]
+      t_tuck: 0.166             # CMA-7 [0.196 CMA-5]
+      air_kp: 8.0               # CMA-7 [40.8 CMA-5]
+      air_kd: 0.5               # CMA-7 [2.0 CMA-5]
+      air_pitch: -11.5          # CMA-7 [-11.3 CMA-5]
+      land_pitch: 5.9           # CMA-7 [-5.6 CMA-5]
+      land_kp: 36.9             # CMA-7 [25.2 CMA-5]
+      land_kd: 2.29             # CMA-7 [0.79 CMA-5]
+      land_s: 0.556             # CMA-7 [0.46 CMA-5]
+      h_land: 0.23              # CMA-7 [0.1866 CMA-5]
+      contact_tau: 0.5          # CMA-7 [1.04 CMA-5]
+      leg_kp: 90.0              # CMA-7 [71.8 CMA-5]
+      leg_kd: 0.5               # CMA-7 [0.56 CMA-5]
+      spin_match_k: 0.4         # CMA-7 [0.251 CMA-5]
+      air_w_max: 15.3           # CMA-7 [0.0 CMA-5]
