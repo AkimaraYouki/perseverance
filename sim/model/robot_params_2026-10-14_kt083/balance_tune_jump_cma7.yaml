@@ -1,0 +1,25 @@
+# 실험용 점프 묶음 CMA 7 (2026-10-14 데스크톱) — balance.yaml tune 의 점프 값만 덮어씀. 게인 ×1.2 (kt083) 와 같이.
+# 시뮬: 바퀴 토크 0.83, **실기식 고관절 상한** (명령 PD ≤ 9 → 실제 ≤ 9 × 실효), 실효 0.5–0.7 평가, 접근 0.2–0.4 m/s, 2048 판:
+#   평지 성공 91 % 넘어짐 1 % | 6 cm 62 / 9 % | 8 cm 59 / 17 % | 10 cm 54 / 26 %. 바퀴 최고 17 cm. 미끄럼 0.20 m/s. EXTRACT 최대 v 0.50 m/s (CMA 5: 1.0)
+#   CMA 5 같은 조건: 넘어짐 34 % (실기 2/2 뒤로 넘어짐과 같은 모양).
+# air_kp 8 / air_kd 0.5 = 공중 pitch PD 거의 끔 (포화만 하던 것), 대신 spin_match 0.4 + air_w_max 15.3, 숙여서 펴기 (retract_lean·extract_pitch 6).
+balance:
+  ros__parameters:
+    tune:
+      t_retract: 0.172
+      retract_lean: 6.0
+      extract_pitch: 6.0
+      t_tuck: 0.166
+      air_kp: 8.0
+      air_kd: 0.5
+      air_pitch: -11.5
+      land_pitch: 5.9
+      land_kp: 36.9
+      land_kd: 2.29
+      land_s: 0.556
+      h_land: 0.23
+      contact_tau: 0.5
+      leg_kp: 90.0
+      leg_kd: 0.5
+      spin_match_k: 0.4
+      air_w_max: 15.3
