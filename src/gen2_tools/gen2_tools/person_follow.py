@@ -110,7 +110,8 @@ class PersonFollow(Node):
         self.create_subscription(LaserScan, 'scan_level', self._scan, qos_profile_sensor_data)          # controller gave up (boxed in / no progress): steer directly for a while
         live = dict(self._LIVE)
         live['bearing_tol_deg'] = lambda v: setattr(self, 'tol', math.radians(v))
-        Live(self, live, always=('use_nav',))
+        live['cam_tilt_deg'] = lambda v: setattr(self, 'cam_tilt', math.radians(v))
+        Live(self, live, always=('use_nav', 'camera_only'))
         self.create_timer(0.05, self._step)
 
     # runtime-changeable (robot disarmed only, gen2_tools.live): limits / tracking / avoidance — no gains (k_dist, k_yaw)
@@ -118,7 +119,9 @@ class PersonFollow(Node):
              'occluded_s': 'occl_s', 'search_wz': 'search_wz', 'appearance_min': 'app_min', 'use_nav': 'use_nav',
              'nav_replan_s': 'nav_period', 'reacquire_min': 'app_reacq', 'grace_s': 'grace',
              'legs_only_s': 'legs_only', 'max_gate_m': 'max_gate', 'predict_s': 'pred_s',
-             'corridor_margin_m': 'margin', 'nav_hold_s': 'nav_hold'}
+             'corridor_margin_m': 'margin', 'nav_hold_s': 'nav_hold',
+             'camera_only': 'cam_only', 'cam_fx': 'cam_fx', 'cam_x_m': 'cam_x', 'cam_h_off_m': 'cam_h_off',
+             'cam_max_dist_m': 'cam_dmax'}
 
     # ------------------------------------------------------------------ inputs
     def _cam(self, m):
@@ -287,7 +290,7 @@ class PersonFollow(Node):
                 conf = [c for c in cands if c['cam'] is not None and c['dist'] < 2.5]
                 if conf:
                     pk = min(conf, key=lambda c: abs(c['bearing']))
-                    self.target = tgt = {'w': pk['w'], 'v': np.zeros(2), 't': now, 'side': 1.0,
+                    self.target = tgt = {'w': pk['w'], 'v': np.zeros(2), 't': now, 'side': 1.0, 'src': pk.get('src', 'legs'),
                                          'hist': np.array(pk['cam']['hsv_hist'])}
                     self.get_logger().info(f'registered person at {pk["dist"]:.2f} m, {math.degrees(pk["bearing"]):+.0f} deg')
             else:
@@ -380,7 +383,7 @@ class PersonFollow(Node):
             n = float(np.linalg.norm(tgt['v']))
             if n > 1.8:
                 tgt['v'] *= 1.8 / n
-        tgt['w'], tgt['t'] = best['w'], now
+        tgt['w'], tgt['t'], tgt['src'] = best['w'], now, best.get('src', 'legs')
         if best['cam'] is not None:
             tgt['hist'] = 0.9 * tgt['hist'] + 0.1 * np.array(best['cam']['hsv_hist'])
 
@@ -446,6 +449,8 @@ class PersonFollow(Node):
         s = state
         if pb is not None:
             s += f' target {math.hypot(*pb):.2f} m @ {math.degrees(math.atan2(pb[1], pb[0])):+.0f} deg'
+            if self.target is not None:
+                s += f" [{self.target.get('src', 'legs')}]"           # GUI: which sensor the target comes from
         self.st.publish(String(data=s))
 
 

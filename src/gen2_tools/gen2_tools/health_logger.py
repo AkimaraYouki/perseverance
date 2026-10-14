@@ -4,7 +4,7 @@
 ~/gen2_ws/logs/health/<start>_health.csv  — mode/fault, pitch, IMU age, loop overruns; per motor: stale, age,
     temperature, error, current, replies/s; batteries; CAN state + error counters (bus-off, passive, warning);
     topic rates (/scan, /imu/data, camera); Jetson VDD_IN, temperatures, load, memory, Wi-Fi signal, DDS mode.
-~/gen2_ws/logs/health/<start>_events.log — only changes: mode / fault, motor error / stale / over-temperature,
+~/gen2_ws/logs/health/<start>_events.log — operator markers (gcs/marker, std_msgs/String) and only changes: mode / fault, motor error / stale / over-temperature,
     CAN state change or new bus-off / error-passive, battery low, a sensor stops, Wi-Fi lost, clock jump (no RTC:
     boots start in 1970 until NTP).
 
@@ -81,6 +81,9 @@ class Health(Node):
         self.w = None
         self.event(f'health_logger start (boot {_read("/proc/sys/kernel/random/boot_id")[:8]}, '
                    f'uptime {float(_read("/proc/uptime", "0 0").split()[0]):.0f} s, DDS mode {self._dds_mode()})')
+        # operator notes from the GCS GUI (e.g. "jump test: step 5.6 cm" / "flat"): written to the events log
+        from std_msgs.msg import String
+        self.create_subscription(String, 'gcs/marker', lambda m: self.event(f'MARKER: {m.data}'), 10)
         self.create_timer(1.0, self._tick)
 
     # ------------------------------------------------------------------ helpers
