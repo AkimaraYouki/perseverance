@@ -63,7 +63,7 @@ balance:
       roll_kd: 0.1            # 2026-10-12 desktop step 3 (sim 80/80); user: "너무 잘됨". push recovery 0.13-0.26 s; hip current 10-100 Hz 0.24 A (0.05 with kd 0)
       roll_rate_lpf_hz: 4.0   # roll-rate LPF for the kd term (wb_core default 8)
       turn_lean: 0.0          # needs the roll loop
-      jump_max_v: 0.4         # jump ON 2026-10-14 with CMA-7 (user ok; flat 0.3 m/s first, IMU USB secured). 0 = off
+      jump_max_v: 0.6         # 2026-10-15 user: up to 0.6 m/s [0.4; sim CMA-11 was tuned/evaluated at 0.2-0.4]. 0 = off
                               # (landed with legs tucked, wheels spinning backwards -> broke a wheel, 2026-10-13).
       # jump state machine: desktop CMA-ES round 11 (2026-10-15, hip command cap 12 N·m; sim flat 95 %, 6 cm 60, 8 cm 53, 10 cm 45 %,
       # wheels 13.2 cm; flat first). Older: desktop CMA-ES round 7 (2026-10-14 13:00, robot-style hip cap, eff 0.5-0.7; sim flat 91 % / falls 1 %,
