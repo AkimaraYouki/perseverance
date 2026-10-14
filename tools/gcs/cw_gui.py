@@ -422,6 +422,18 @@ def launch(name, cmd):
                      stdin=subprocess.DEVNULL, start_new_session=True)
 
 
+def _scroll(w, horizontal=True):
+    """창을 반쪽 화면 (960 px) 으로 스냅할 수 있게: 좁아지면 내용은 스크롤. horizontal=False 면 폭은 내용 그대로 (세로만)."""
+    sa = QtWidgets.QScrollArea()
+    sa.setWidgetResizable(True)
+    sa.setFrameShape(QtWidgets.QFrame.NoFrame)
+    sa.setWidget(w)
+    if not horizontal:
+        sa.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        sa.setFixedWidth((w.minimumWidth() or w.sizeHint().width()) + sa.verticalScrollBar().sizeHint().width())
+    return sa
+
+
 def ros_args(vals):
     return ' '.join(f'-p {k}:={str(v).lower() if isinstance(v, bool) else v}' for k, v in vals.items())
 
@@ -583,7 +595,7 @@ class Gui(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle('C-WANG 관제')
-        self.resize(1340, 960)
+        self.resize(1340, 960)        # 최소 ≈ 870×430 → 화면 반쪽 (960) 스냅 가능
         self.ros = Ros()
         QtWidgets.QApplication.instance().aboutToQuit.connect(self.ros.shutdown)
         self.pool = ThreadPoolExecutor(4)
@@ -614,9 +626,9 @@ class Gui(QtWidgets.QMainWindow):
         left.setStretchFactor(0, 3)
         left.setStretchFactor(1, 1)
         self.spanel = StatusPanel()
-        mid.addWidget(self.spanel)
+        mid.addWidget(_scroll(self.spanel, horizontal=False))
         self.tabs.addTab(self._features_tab(), '기능 켜기/끄기')
-        self.tabs.addTab(self._tune_tab(), '파라미터 튜닝')
+        self.tabs.addTab(_scroll(self._tune_tab()), '파라미터 튜닝')
         self.tabs.addTab(self._log_tab(), '로그')
 
         self.ros.graph.connect(self._on_graph)
@@ -649,6 +661,9 @@ class Gui(QtWidgets.QMainWindow):
         self.t_mux = QtWidgets.QLabel('명령: —')
         for t in (self.t_follow, self.t_mux):
             t.setStyleSheet('color:#555')
+        for t in (self.t_robot, self.t_ros, self.t_follow, self.t_mux):   # 글이 길어져도 창 폭을 안 늘린다 (반쪽 화면 스냅)
+            t.setWordWrap(True)
+            t.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred)
         g.addWidget(self.l_robot, 0, 0)
         g.addWidget(self.t_robot, 0, 1)
         g.addWidget(self.l_ros, 0, 2)
@@ -683,6 +698,8 @@ class Gui(QtWidgets.QMainWindow):
         grid.addWidget(t, r, 1)
         st = QtWidgets.QLabel(note)
         st.setStyleSheet('color:#888')
+        st.setWordWrap(True)                       # 좁은 창 (반쪽 화면) 에서 버튼이 안 밀려나게
+        st.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred)
         grid.addWidget(st, r, 2)
         h = QtWidgets.QHBoxLayout()
         for b in buttons:
@@ -735,7 +752,7 @@ class Gui(QtWidgets.QMainWindow):
             self.note[k] = self._row(g, i, t, self.lamp[k], b)
         v.addWidget(box)
 
-        box = QtWidgets.QGroupBox('시험 표시 — 누르면 로봇 로그 (health_logger events) 에 MARKER 로 시각과 함께 남는다. 시험 직전에')
+        box = QtWidgets.QGroupBox('시험 표시 (시험 직전에 — 로봇 로그에 MARKER 로 남음)')
         h = QtWidgets.QHBoxLayout(box)
         for m in MARKERS:
             h.addWidget(self._btn(m, lambda _=0, m=m: self.send_marker(m)))
@@ -763,11 +780,7 @@ class Gui(QtWidgets.QMainWindow):
         hint.setStyleSheet('color:#888')
         v.addWidget(hint)
         v.addStretch()
-        sa = QtWidgets.QScrollArea()          # 노트북 화면 (1080) 에 들어가게 — 아래 자세 줄을 키우면 스크롤
-        sa.setWidgetResizable(True)
-        sa.setFrameShape(QtWidgets.QFrame.NoFrame)
-        sa.setWidget(w)
-        return sa
+        return _scroll(w)
 
     def send_marker(self, text):
         self.ros.marker(text)

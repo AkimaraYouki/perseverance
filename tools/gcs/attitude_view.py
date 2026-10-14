@@ -264,7 +264,7 @@ class History(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
         self.buf = deque()                       # (t, roll, pitch, yaw)
-        self.setMinimumSize(200, 150)
+        self.setMinimumSize(120, 120)
 
     def add(self, t, att):
         self.buf.append((t, *att))
@@ -304,12 +304,16 @@ class History(QtWidgets.QWidget):
         y0 = next((e[3] for e in self.buf if e[3] is not None), None)
         for idx, col, f in ((1, C_ROLL, None), (2, C_PITCH, None), (3, C_YAW, lambda v: wrap180(v - y0))):
             path = QtGui.QPainterPath()
-            for i, e in enumerate(self.buf):
+            prev = None
+            for e in self.buf:
                 if e[idx] is None:
+                    prev = None
                     continue
                 v = e[idx] if f is None else f(e[idx])
                 pt = QtCore.QPointF(xmap(e[0]), ymap(max(-rng, min(rng, v))))
-                path.moveTo(pt) if i == 0 else path.lineTo(pt)
+                # 처음·빈칸 뒤·요가 ±180° 를 넘어갈 때는 선을 끊는다 (세로선 방지)
+                path.moveTo(pt) if prev is None or abs(v - prev) > 90 else path.lineTo(pt)
+                prev = v
             p.setPen(QtGui.QPen(col, 1.6))
             p.setBrush(QtCore.Qt.NoBrush)
             p.drawPath(path)
@@ -334,7 +338,7 @@ class AttitudeView(QtWidgets.QWidget):
         self.hist = History()
         if compact:
             for c, v in enumerate((self.hz, self.top, self.side, self.rear)):
-                v.setMinimumSize(170, 170)
+                v.setMinimumSize(100, 120)       # 반쪽 화면 스냅에서도 들어가게
                 g.addWidget(v, 0, c)
                 g.setColumnStretch(c, 2)
             g.addWidget(self.hist, 0, 4)
@@ -354,6 +358,7 @@ class AttitudeView(QtWidgets.QWidget):
             row = 3
         h = QtWidgets.QHBoxLayout()
         self.info = QtWidgets.QLabel('—')
+        self.info.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred)   # 좁으면 잘림 (창 폭을 안 막음)
         self.info.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont))
         h.addWidget(self.info, 1)
         self.buttons = h
