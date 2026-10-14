@@ -12,7 +12,7 @@ balance:
     heartbeat_timeout_s: 1.0  # operator tool must publish balance/heartbeat (0.5 -> 1.0 2026-10-09: 32 Wi-Fi gaps/h of 0.55-1.4 s jerked the robot to a stop)
     cmd_timeout_s: 0.5        # cmd_vel watchdog -> 0
     stand_ramp_s: 2.0         # stand: current leg height -> idle_h
-    th_trim_deg: 1.7          # 2026-10-14: sensor hub (ESP32, 2x PM02, GPS, wiring) removed -> COM moved; standing th sat at -2.9 deg with
+    th_trim_deg: 0.2          # 2026-10-14: hub removed -> COM moved. +1.7 (first guess) -> th_bias converged to +1.4..1.5 (21:03 log) -> +0.2. Was -1.2 with the hub;
                               # th_bias stuck (20:58 log) -> -1.2 + 2.9 = +1.7. Before: # balance-point trim, + = lean back. 0 = CAD COM (th_kin). 2026-10-08 after the IMU was re-seated (user):
                               # 0 -> bias adapt +1.1, max 0.61 m; -1.0 -> bias -0.45, max 0.09 m; user picked -1.2
     stand_feedforward: true   # stand: + weight feed-forward (0.5 m g per leg, via dh/dtheta) — current_pd only
