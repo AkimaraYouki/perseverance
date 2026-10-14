@@ -18,7 +18,7 @@ balance:
     stand_feedforward: true   # stand: + weight feed-forward (0.5 m g per leg, via dh/dtheta) — current_pd only
     hip_mode: mit_pos         # 2026-10-09: mit_pos = p, kp, kd in the drive (kHz), ff from here. mit = host kp at 200 Hz (legs lagged 150 deg at 2.8 Hz -> roll rocking). servo_pos | current_pd old
     mit_kt_drive: 0.5994      # Kt the AK60-6 drive uses inside MIT (0.5 N·m -> 0.83 A measured 2026-10-07)
-    hip_pd_tau_max: 9.0       # mit_pos: clip the position error so the drive PD (+ |ff|) stays <= 9 N·m (sim hip limit).
+    hip_pd_tau_max: 12.0      # 2026-10-15 [9.0] desktop CMA-11 / user ok: jumps reached only 5.6 cm (drive gave ~35 % of 8.1 N·m). mit_pos: clip the position error so the drive PD (+ |ff|) stays <= 9 N·m (sim hip limit).
                               # 2026-10-12 first real jumps: the extension step gave 28-32 A (desktop comms 2235 / 0335)
     osc_flips: 6              # fault: hip velocity (|w| > osc_vel) changes sign this often within osc_window_s
     osc_window_s: 0.3
@@ -65,27 +65,28 @@ balance:
       turn_lean: 0.0          # needs the roll loop
       jump_max_v: 0.4         # jump ON 2026-10-14 with CMA-7 (user ok; flat 0.3 m/s first, IMU USB secured). 0 = off
                               # (landed with legs tucked, wheels spinning backwards -> broke a wheel, 2026-10-13).
-      # jump state machine: desktop CMA-ES round 7 (2026-10-14 13:00, robot-style hip cap, eff 0.5-0.7; sim flat 91 % / falls 1 %,
+      # jump state machine: desktop CMA-ES round 11 (2026-10-15, hip command cap 12 N·m; sim flat 95 %, 6 cm 60, 8 cm 53, 10 cm 45 %,
+      # wheels 13.2 cm; flat first). Older: desktop CMA-ES round 7 (2026-10-14 13:00, robot-style hip cap, eff 0.5-0.7; sim flat 91 % / falls 1 %,
       # 6 cm 62/9, 8 cm 59/17, 10 cm 54/26 -> flat 0.3 m/s first). [ ] = CMA-5 (fell backwards twice). Older notes:
       # desktop CMA-ES round 5 (2026-10-14 kt083, 0.83 wheel torque plant, landing penalties);
       # spin_match_k / air_w_max ported to wb_core 2026-10-14 (golden 4/4).
       # older note: desktop sim CMA-ES 2026-10-13 (comms 1500; real plant: delays, backlash,
       # hip 9 N.m, DR). Approach 0.2-0.4 m/s, 2048 runs each: flat 66 -> 86 % success, 6 cm 26 -> 63 %, 8 cm 24 -> 56 %.
       # Use as one set. Previous value in [] (wb_core defaults; retract_lean was 0 from 10-13 morning).
-      t_retract: 0.172          # CMA-7 [0.175 CMA-5]
-      retract_lean: 6.0         # CMA-7 [5.8 CMA-5]
-      extract_pitch: 6.0        # CMA-7 [1.2 CMA-5]
-      t_tuck: 0.166             # CMA-7 [0.196 CMA-5]
-      air_kp: 8.0               # CMA-7 [40.8 CMA-5]
-      air_kd: 0.5               # CMA-7 [2.0 CMA-5]
-      air_pitch: -11.5          # CMA-7 [-11.3 CMA-5]
-      land_pitch: 5.9           # CMA-7 [-5.6 CMA-5]
-      land_kp: 36.9             # CMA-7 [25.2 CMA-5]
-      land_kd: 2.29             # CMA-7 [0.79 CMA-5]
-      land_s: 0.556             # CMA-7 [0.46 CMA-5]
-      h_land: 0.23              # CMA-7 [0.1866 CMA-5]
-      contact_tau: 0.5          # CMA-7 [1.04 CMA-5]
-      leg_kp: 90.0              # CMA-7 [71.8 CMA-5]
-      leg_kd: 0.5               # CMA-7 [0.56 CMA-5]
-      spin_match_k: 0.4         # CMA-7 [0.251 CMA-5]
-      air_w_max: 15.3           # CMA-7 [0.0 CMA-5]
+      t_retract: 0.145          # CMA-11 (hip 12) [0.172 CMA-7]
+      retract_lean: 7.0         # CMA-11 (hip 12) [6.0 CMA-7]
+      extract_pitch: 10.0       # CMA-11 (hip 12) [6.0 CMA-7]
+      t_tuck: 0.118             # CMA-11 (hip 12) [0.166 CMA-7]
+      air_kp: 8.0               # CMA-11 (hip 12) [8.0 CMA-7]
+      air_kd: 0.71              # CMA-11 (hip 12) [0.5 CMA-7]
+      air_pitch: -14.4          # CMA-11 (hip 12) [-11.5 CMA-7]
+      land_pitch: 7.4           # CMA-11 (hip 12) [5.9 CMA-7]
+      land_kp: 37.1             # CMA-11 (hip 12) [36.9 CMA-7]
+      land_kd: 1.83             # CMA-11 (hip 12) [2.29 CMA-7]
+      land_s: 0.621             # CMA-11 (hip 12) [0.556 CMA-7]
+      h_land: 0.2007            # CMA-11 (hip 12) [0.23 CMA-7]
+      contact_tau: 0.3          # CMA-11 (hip 12) [0.5 CMA-7]
+      leg_kp: 72.5              # CMA-11 (hip 12) [90.0 CMA-7]
+      leg_kd: 0.2               # CMA-11 (hip 12) [0.5 CMA-7]
+      spin_match_k: 0.325       # CMA-11 (hip 12) [0.4 CMA-7]
+      air_w_max: 15.0           # CMA-11 (hip 12) [15.3 CMA-7]
