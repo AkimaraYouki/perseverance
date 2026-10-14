@@ -134,6 +134,8 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
     const bool steady = ph == kDrive && !lift_on_ && !guarded && std::fabs(vx) > 0.02 && std::fabs(g_ref - tgt) < 0.02;
     if (steady) {
       v_i = clip(v_i + P.v_ki * (v_ref - v_now) * kDt, -P.v_boost_max, P.v_boost_max);
+    } else if (std::fabs(vx) <= 0.02) {
+      v_i = 0.0;                                   // stick released: no lingering boost (it slowed the stop)
     } else {
       v_i *= 1.0 - std::min(1.0, 4.0 * kDt);
     }

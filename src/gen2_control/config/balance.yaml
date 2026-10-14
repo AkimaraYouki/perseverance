@@ -32,10 +32,10 @@ balance:
       vmc_kp: 60.0
       vmc_kd: 1.0
       vmax_kmh: 3.0           # 2026-10-14 desktop kt083: with 0.83 wheel torque 3.5 was worse on ramps / fast turns (robust 34 -> 40/48 at 3.0)
-      accel_max: 0.8          # m/s^2 (1.5 -> 0.8 2026-10-09: full stick overshot to 1.28 m/s, pitch +-27 deg)
+      accel_max: 1.2          # 2026-10-14 user: start/stop felt slow. 0.8 -> 1.2 with jerk 6 = desktop sim 'fast start' (0.4 m/s 0.60 -> 0.43 s, lean 9.8 -> 13.7 deg, robust 49 -> 47/64). 1.5 overshot 10-09
       lean_ff: 1.0            # desktop 2026-10-09: lean ahead by atan(a_ref/g) -> sim flat_stop 5 -> 15/16 (0.70 -> 0.40 m past the release)
       x_leak_moving: 0.5      # 1/s, driving: x_err leaks (steady speed error fixed, big catch-up forgotten in 2 s)
-      jerk_max: 3.0           # m/s^3 S-curve speed reference: the lean builds up smoothly (0 = old ramp)
+      jerk_max: 6.0           # m/s^3 S-curve [3]: releasing while accelerating unwinds the accel in 0.4 s (was 0.53 s, the target kept rising)
       bal_adapt_wz_max: 0.1   # 2026-10-14: no balance-point learning while turning (th_bias went +2.8 deg in a turn -> crept 1 m after)
       x_turn_wz: 0.3          # turning counts as moving: position hold restarts where the turn ends (crept back 0.5 m before)
       v_ki: 0.8               # 2026-10-14 slope compensation: uphill the robot stalled (02:41: cmd 0.70, v 0.0, lean 17 deg, x_err at
