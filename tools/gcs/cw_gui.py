@@ -76,7 +76,11 @@ GROUPS = [
         (PF, 'appearance_min', '옷 색 일치 기준 (근처)', 0.0, 1.0, 0.05, 0.5, ''),
         (PF, 'reacquire_min', '옷 색 일치 기준 (오래 놓친 뒤)', 0.0, 1.0, 0.05, 0.65, ''),
     ]),
-    ('카메라만으로 추적할 때 거리 추정', '라이다 다리가 없을 때 발목의 화면 높이 → 바닥까지 거리 (켜기/끄기는 첫 탭)', [
+    ('카메라로 사람 확인 · 거리 추정', '물건 (의자 다리 등) 을 사람으로 따라가지 않게 카메라로 다시 확인. '
+                               '라이다 다리가 없으면 발목의 화면 높이로 거리 추정 (카메라만 추적 켜기/끄기는 첫 탭)', [
+        (PF, 'cam_confirm_s', '카메라 시야 안에서 카메라 확인 없이 버틸 시간', 0.1, 3.0, 0.1, 0.5, 's'),
+        (PF, 'cam_fov_deg', '카메라 시야 (이 각도 안이면 카메라 확인 필요)', 5.0, 45.0, 1.0, 25.0, '°'),
+        (PF, 'cam_only_score', '카메라만 추적할 때 최소 확신도', 0.3, 0.95, 0.05, 0.6, ''),
         (PF, 'cam_fx', '카메라 초점거리', 300.0, 900.0, 5.0, 530.0, 'px'),
         (PF, 'cam_tilt_deg', '카메라 아래로 숙인 각도', -15.0, 15.0, 0.5, 0.0, '°'),
         (PF, 'cam_x_m', '카메라 앞쪽 위치 (몸 중심에서)', 0.0, 0.3, 0.005, 0.108, 'm'),
@@ -118,7 +122,8 @@ GROUPS = [
 KNOWN_LIVE = {
     PF: {'follow_dist_m', 'vx_max', 'wz_max', 'occluded_s', 'search_wz', 'appearance_min', 'use_nav', 'nav_replan_s',
          'reacquire_min', 'grace_s', 'legs_only_s', 'max_gate_m', 'predict_s', 'corridor_margin_m', 'nav_hold_s',
-         'bearing_tol_deg', 'camera_only', 'cam_fx', 'cam_tilt_deg', 'cam_x_m', 'cam_h_off_m', 'cam_max_dist_m'},
+         'bearing_tol_deg', 'camera_only', 'cam_fx', 'cam_tilt_deg', 'cam_x_m', 'cam_h_off_m', 'cam_max_dist_m',
+         'cam_confirm_s', 'cam_fov_deg', 'cam_only_score'},
     RPP: {'FollowPath.desired_linear_vel', 'FollowPath.rotate_to_heading_angular_vel',
           'FollowPath.regulated_linear_scaling_min_speed', 'FollowPath.min_approach_linear_velocity'},
     LCM: {'inflation_layer.inflation_radius'},
