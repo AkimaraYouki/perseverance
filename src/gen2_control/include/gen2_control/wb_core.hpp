@@ -42,6 +42,9 @@ struct Params      // climb_test.py TUNE defaults (2026-10-07)
   // bal_adapt_wz_max (turning leans the body -> wrong th_bias -> creep after the turn); |wz cmd| > x_turn_wz counts as
   // moving for the position hold (x_err 0 -> it holds where the turn ended instead of creeping back to where it began)
   double bal_adapt_wz_max = 0.0, x_turn_wz = 0.0;
+  // bias walk (robot 2026-10-14; 0 = off): learn the balance point only while |x_err| < bal_adapt_x_max — otherwise the lean the
+  // position hold makes is learned as "upright", th_bias walks to its limit and the robot lurches back every 30-60 s
+  double bal_adapt_x_max = 0.0;
   bool turn_slow = true, turn_limit = true;
   double wheel_margin = 0.85, yaw_kd = 0.5, wheel_tau_max = 7.0;
   double yaw_ki = 0.0, yaw_i_max = 0.5;   // yaw-rate integral (desktop 2026-10-08: beats wheel stiction in place)

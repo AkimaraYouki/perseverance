@@ -52,6 +52,9 @@ balance:
       db_comp_nm: 0.65
       wheel_lpf_hz: 20.0
       bal_adapt: 0.3          # user 2026-10-08 (0.1 / 0 tried: 0 stops the bias walk but parks ~0.17 m off)
+      bal_adapt_x_max: 0.05   # 2026-10-14: learn only within 5 cm of the hold point. With gains x1.2 th_bias walked to -8 deg (limit) while
+                              # standing, pitch -5..-8 deg, a lurch back of 0.3-0.7 m every 30-60 s (it learned the position hold's lean)
+      bal_adapt_max_deg: 3.0  # [8] real balance point ~ -1..-2 deg (th_trim -1.2 already); a walk cannot go far
       contact_tau_min: 0.8
       roll_kp: 1.0            # 2026-10-12 retest with hip_mode mit_pos (legs -29 deg at 2.8 Hz instead of -150): step 2 of the desktop plan
       roll_ki: 8.0            # 10-09 with mit (host kp) this rocked at 2.8 Hz; 10-12 with mit_pos: quiet (roll sd 0.35 deg, no 2.8 Hz), pushes/ramp OK. fallback 0.5 / 3

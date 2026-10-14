@@ -68,7 +68,8 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
   v_prev_ = v_now;
   const bool ad = P.bal_adapt > 0 && phase_ == kDrive && !lift_on_ && std::fabs(acc) < 0.3 && std::fabs(thd) < 0.3 &&
     std::fabs(v_now) < 0.05 && std::fabs(vx) < 0.02 &&
-    (P.bal_adapt_wz_max <= 0 || (std::fabs(wz) < P.bal_adapt_wz_max && std::fabs(gz) < P.bal_adapt_wz_max));
+    (P.bal_adapt_wz_max <= 0 || (std::fabs(wz) < P.bal_adapt_wz_max && std::fabs(gz) < P.bal_adapt_wz_max)) &&
+    (P.bal_adapt_x_max <= 0 || std::fabs(x_err_) < P.bal_adapt_x_max);
   const double lim = P.bal_adapt_max_deg * M_PI / 180.0;
   if (ad) {th_bias_ = clip(th_bias_ + P.bal_adapt * kDt * (th - th_bias_), -lim, lim);}
   th -= th_bias_;
