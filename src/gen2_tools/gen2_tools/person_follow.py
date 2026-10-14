@@ -2,7 +2,9 @@
 """Follow ONE designated person (competition: no markers, 2 people, hand signals stop / restart only).
 
 Fusion: LiDAR leg tracks (people/legs, laser frame: distance + bearing, works without light) are confirmed as people
-when a camera person box (people/camera, YOLO on the GPU) lies at the same bearing (+-bearing_tol). The designated
+when a camera person box (people/camera, YOLO on the GPU) lies at the same bearing (+-bearing_tol). A camera person with
+no leg track at its bearing (legs not seen, LiDAR down) is a camera-only candidate: bearing from the camera, distance
+from the ankles' image row on the ground plane (camera height from the leg height, body pitch from controller/state). The designated
 person is registered on enable: the confirmed person closest to straight ahead; its clothes (HSV histogram of the
 box) are kept and slowly updated, and every later choice prefers the track that continues + the best appearance.
 The target is kept in the odom frame (world-fixed) with a velocity estimate, so it stays valid while the robot
@@ -63,10 +65,19 @@ class PersonFollow(Node):
         self.legs_only = p('legs_only_s', 1.0)           # gaps up to this may be bridged by legs without the camera
         self.max_gate = p('max_gate_m', 2.5)
         self.pred_s = p('predict_s', 1.5)
+        # camera-only people (no LiDAR legs at that bearing, or LiDAR down): distance from the ankles' (else the box
+        # bottom's) image row on the ground plane: camera height = leg h + cam_h_off, depression = ray + body pitch + tilt
+        self.cam_only = p('camera_only', True)
+        self.cam_fx = p('cam_fx', 530.0)
+        self.cam_tilt = math.radians(p('cam_tilt_deg', 0.0))
+        self.cam_x = p('cam_x_m', 0.108)          # camera_link in base_link
+        self.cam_h_off = p('cam_h_off_m', 0.081)  # camera above the leg height h (base 0.0655 + camera 0.0153)
+        self.cam_dmax = p('cam_max_dist_m', 5.0)
+        self.leg_h, self.body_pitch = 0.182, 0.0
         self.enabled, self.hold = False, False
         self.state = 'IDLE'
-        self.cam, self.cam_t, self.cam_new = [], 0.0, False
-        self.legs, self.legs_new = [], False
+        self.cam, self.cam_t, self.cam_new, self.cam_new_match, self.cam_h = [], 0.0, False, False, 480
+        self.legs, self.legs_new, self.legs_t = [], False, -1e9
         self.target = None                               # dict: w (odom xy), v (odom m/s), t, hist, side
         self.pub = self.create_publisher(Twist, 'cmd_vel/auto', 10)
         self.st = self.create_publisher(String, 'follow/status', 10)
@@ -111,12 +122,14 @@ class PersonFollow(Node):
 
     # ------------------------------------------------------------------ inputs
     def _cam(self, m):
-        self.cam, self.cam_t, self.cam_new = json.loads(m.data)['people'], time.monotonic(), True
+        j = json.loads(m.data)
+        self.cam, self.cam_t, self.cam_new, self.cam_new_match = j['people'], time.monotonic(), True, True
+        self.cam_h = j.get('h', self.cam_h) or self.cam_h
 
     def _legs(self, m):
         # PoseArray in the laser frame, ids are not carried: use positions (base frame)
         self.legs = [np.array([q.position.x + LASER_X, q.position.y]) for q in m.poses]
-        self.legs_new = True
+        self.legs_new, self.legs_t = True, time.monotonic()
 
     def _scan(self, m):
         r = np.asarray(m.ranges, dtype=np.float64)
@@ -167,19 +180,48 @@ class PersonFollow(Node):
     def _sim(a, b):
         return float(np.sum(np.sqrt(np.asarray(a) * np.asarray(b))))      # Bhattacharyya coefficient
 
+    def _cam_dist(self, c):
+        """Ground distance [m] from the camera to the person's feet, or None (no usable row / too far)."""
+        rows = []
+        k = c.get('kps')
+        if k:
+            rows = [q[1] for q in (k[15], k[16]) if q[2] > 0.5]       # ankles
+        if not rows and c.get('box') and c['box'][3] < self.cam_h - 4:
+            rows = [c['box'][3]]                                       # box bottom (feet inside the image)
+        if not rows:
+            return None
+        dep = math.atan2(max(rows) - 0.5 * self.cam_h, self.cam_fx) + self.body_pitch + self.cam_tilt
+        if dep < math.radians(1.5):
+            return None
+        d = (self.leg_h + self.cam_h_off) / math.tan(dep)
+        return d if 0.2 < d < self.cam_dmax else None
+
     def _candidates(self):
-        """Confirmed people: leg position + matching camera box (bearing within tol)."""
+        """People: LiDAR leg position + matching camera box (bearing within tol); camera boxes with no leg at their
+        bearing become camera-only candidates (distance from the feet on the ground plane)."""
         fresh = time.monotonic() - self.cam_t < self.cam_to
-        out = []
+        out, used = [], set()
         for pl in self.legs:
             b = math.atan2(pl[1], pl[0])
             best = None
             if fresh:
-                for c in self.cam:
+                for i, c in enumerate(self.cam):
                     d = abs(math.radians(c['bearing_deg']) - b)
                     if d < self.tol and (best is None or d < best[0]):
-                        best = (d, c)
-            out.append({'p': pl, 'bearing': b, 'dist': float(np.hypot(*pl)), 'cam': best[1] if best else None})
+                        best = (d, c, i)
+            if best:
+                used.add(best[2])
+            out.append({'p': pl, 'bearing': b, 'dist': float(np.hypot(*pl)), 'cam': best[1] if best else None, 'src': 'legs'})
+        if self.cam_only and fresh:
+            for i, c in enumerate(self.cam):
+                if i in used:
+                    continue
+                d = self._cam_dist(c)
+                if d is None:
+                    continue
+                b = math.radians(c['bearing_deg'])
+                pc = np.array([self.cam_x + d * math.cos(b), d * math.sin(b)])
+                out.append({'p': pc, 'bearing': math.atan2(pc[1], pc[0]), 'dist': float(np.hypot(*pc)), 'cam': c, 'src': 'camera'})
         return out
 
     # ------------------------------------------------------------------ frames
@@ -222,6 +264,8 @@ class PersonFollow(Node):
         st = self._poll(self._mode_sub, ControllerState)
         if st is not None:
             self.robot_mode = st.mode
+            if st.h[0] > 0.05:
+                self.leg_h, self.body_pitch = 0.5 * (st.h[0] + st.h[1]), st.pitch
         if self.enabled and self.robot_mode is not None and self.robot_mode != 'balance':
             self.get_logger().warn(f'robot {self.robot_mode}: follow off (press X again after START)')
             self.enabled, self.hold, self.target = False, False, None
@@ -232,8 +276,9 @@ class PersonFollow(Node):
             return
         pose = self._pose()
         tgt = self.target
-        if self.legs_new:                                   # match once per LiDAR scan (10 Hz)
-            self.legs_new = False
+        lidar_alive = now - self.legs_t < 0.3
+        if self.legs_new or (not lidar_alive and self.cam_new_match):   # once per LiDAR scan; per camera frame without LiDAR
+            self.legs_new = self.cam_new_match = False
             cands = self._candidates()
             for c in cands:
                 c['w'] = self._to_w(pose, c['p'])
