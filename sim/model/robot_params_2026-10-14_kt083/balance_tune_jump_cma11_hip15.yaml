@@ -1,0 +1,23 @@
+# 실험용 대안 (2026-10-15 데스크톱) — 고관절 명령 상한 **15 N·m** 전제. 같은 보정 플랜트 (실효 0.3–0.4, w0 29.3), 2048 판:
+#   평지 93 % / 넘어짐 7.1 %, 6 cm 70 / 14 %, 8 cm 65 / 20 %, 10 cm 58 / 27 %, 바퀴 14 cm, 허브 하중 중간 426 N (12 N·m: 377)
+#   12 N·m 묶음 대비 턱에서 +10 %p, 평지 넘어짐 +2.6 %p. 실제 고관절 전류 ~8–9 A 예상 -> 전류 한계 10 A·발열 확인 뒤에만.
+balance:
+  ros__parameters:
+    tune:
+      t_retract: 0.16
+      retract_lean: 8.6
+      extract_pitch: 9.7
+      t_tuck: 0.151
+      air_kp: 10.1
+      air_kd: 0.55
+      air_pitch: -7.5
+      land_pitch: 2.1
+      land_kp: 35.1
+      land_kd: 1.47
+      land_s: 0.557
+      h_land: 0.1978
+      contact_tau: 0.3
+      leg_kp: 83.0
+      leg_kd: 0.56
+      spin_match_k: 0.382
+      air_w_max: 12.0
