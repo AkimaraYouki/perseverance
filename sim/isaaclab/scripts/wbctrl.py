@@ -98,6 +98,8 @@ class WBController:
         self.h0 = np.where(m, self.P.idle_h, getattr(self, "h0", np.zeros(n)))
         self.air_pmin = np.where(m, 99.0, getattr(self, "air_pmin", np.full(n, 99.0)))
         self.lift_on = np.where(m, False, getattr(self, "lift_on", np.zeros(n, bool)))
+        self.h_prev_j = np.where(m, self.P.idle_h, getattr(self, "h_prev_j", np.zeros(n)))   # 착지 판정 (다리 눌림 속도) 용 직전 다리 길이
+        self.t_jend = np.where(m, -99.0, getattr(self, "t_jend", np.full(n, -99.0)))          # 마지막 점프 LAND 끝 시각 (jump_cooldown_s)
         self.soft = np.where(m, False, getattr(self, "soft", np.zeros(n, bool)))
         old = getattr(self, "jumps", [[] for _ in range(n)])
         self.jumps = [[] if m[i] else old[i] for i in range(n)]
@@ -201,8 +203,13 @@ class WBController:
             # 막힘 → 물러남 → 다시 달려 점프 (2026-10-12): 턱에 막혀 서 있으면 (앞 명령인데 거의 안 감) 바퀴 중심 ≈ 모서리 앞 retry_contact.
             # 그 자리 (오도메트리 x_b) 에서 retry_back_m 물러났다가 다시 달려, 바퀴 중심이 모서리 앞 trigger 가 되는 x_b + retry_contact − trigger
             # 에서 점프 요청. 짧게 착지한 점프의 재시도이자, 카메라 없이 쓰는 접촉 점프. 점프 상태기계는 그대로 (요청만 만든다).
+            # 2026-10-20 사용자 "턱 감지 주행 모드" (평지 전용): 천천히 접근 (retry_approach_v) -> 안 감 = 턱 -> retry_back_m 후진
+            # -> retry_v 로 가속 -> 점프. retry_approach_v / retry_v 0 = 조종자 스틱 속도 그대로 (옛 동작)
             self.odo = self.odo + v_now * DT
-            want = vx > 0.15
+            vec = lambda k, d: np.broadcast_to(np.asarray(getattr(P, k, d), float), (n,))  # noqa: E731
+            av, rv = vec("retry_approach_v", 0.0), vec("retry_v", 0.0)
+            want = vx > np.where(av > 0, 0.05, 0.15)
+            vx = np.where(want & (self.rt_phase == 0) & (av > 0), av, vx)                   # 천천히 접근
             blk = (ph == DRIVE) & ~self.lift_on & want & (v_now < 0.05) & (self.rt_phase == 0)
             self.blk_t = np.where(blk, self.blk_t + DT, 0.0)
             st_ = self.blk_t >= P.retry_block_s
@@ -212,20 +219,29 @@ class WBController:
             bk = self.rt_phase == 1
             vx = np.where(bk, -P.retry_back_v, vx)                           # 물러남
             self.rt_phase = np.where(bk & (self.odo <= self.rt_x - P.retry_back_m), 2, self.rt_phase)
+            vx = np.where((self.rt_phase == 2) & want & (rv > 0), rv, vx)                    # 정해진 속도로 다시 달림
             fire = (self.rt_phase == 2) & (self.odo >= self.rt_x + P.retry_contact - P.trigger)
             self.rt_phase = np.where(fire | ~want & (self.rt_phase == 2), 0, self.rt_phase)   # 쏘거나 조종자가 앞 명령을 놓으면 끝
             self.n_retry = self.n_retry + fire
             jump = jump | fire
-        blocked = jump & (ph == DRIVE) & ((v_now < P.jump_min_v) | (np.abs(wz_now) > P.jump_max_wz))   # 제자리·후진·회전 중 점프 막기
+        cool = t - self.t_jend < getattr(P, "jump_cooldown_s", 0.0)     # 2026-10-15 실기 연속 점프 (1.8 s 간격) 넘어짐 -> 착지 뒤 대기. 0 = 끔
+        blocked = jump & (ph == DRIVE) & ((v_now < P.jump_min_v) | (np.abs(wz_now) > P.jump_max_wz) | cool)   # 제자리·후진·회전 중·착지 직후 점프 막기
         self.jump_blocked = [""] * n
         for i in np.flatnonzero(blocked):
-            self.jump_blocked[i] = f"{v_now[i] * 3.6:+.1f} km/h" if v_now[i] < P.jump_min_v else f"turning {wz_now[i]:+.1f} rad/s"
+            self.jump_blocked[i] = (f"{v_now[i] * 3.6:+.1f} km/h" if v_now[i] < P.jump_min_v else
+                                    f"turning {wz_now[i]:+.1f} rad/s" if abs(wz_now[i]) > P.jump_max_wz else "cooldown")
         jump = jump & ~blocked
         m0 = (ph == DRIVE) & ~self.lift_on & (auto | jump)
         m1 = (ph == RETRACT) & (tp >= P.t_retract)
         m2 = (ph == EXTRACT) & ((f.h.min(1) >= H_MAX - 0.008) | (tp >= 0.25))
         m3 = (ph == FLY) & (tp >= P.t_tuck)
-        m4 = (ph == DESCEND) & (((tp > 0.04) & (np.abs(f.tau_hip).max(1) > P.contact_tau)) | (t - self.t_takeoff >= P.t_fly_max))
+        # 접지 판정: 기본 = 고관절 토크 > contact_tau. touch_dh > 0 이면 다리가 눌리는 속도 (평균 h 가 touch_dh [m/s] 보다 빨리 줄어듦) 로.
+        # 2026-10-15 실기: 보고 전류 기반 토크는 공중에서 다리를 펴는 동안 이미 커서 DESCEND 가 늘 최소 40 ms 로 끝남 (공중에서 LAND)
+        hm_ = f.h.mean(1)
+        tdh = np.broadcast_to(np.asarray(getattr(P, "touch_dh", 0.0), float), (n,))
+        touch = np.where(tdh > 0, (hm_ - self.h_prev_j) / DT < -tdh, np.abs(f.tau_hip).max(1) > P.contact_tau)
+        self.h_prev_j = hm_
+        m4 = (ph == DESCEND) & (((tp > 0.04) & touch) | (t - self.t_takeoff >= P.t_fly_max))
         m5 = (ph == LAND) & (tp >= P.land_s)
         for i in np.flatnonzero(m0):
             self.jumps[i].append(dict(edge=int(self.next_edge[i]), t_trigger=t, x_trigger=float(f.wx[i])))
@@ -240,6 +256,7 @@ class WBController:
         self.bump_t = np.where(m0, 0.0, self.bump_t)
         self.air_pmin = np.where(m2, 99.0, self.air_pmin)
         self.t_takeoff = np.where(m2, t, self.t_takeoff)
+        self.t_jend = np.where(m5, t, self.t_jend)
         self.soft = np.where(m3, True, np.where(m5, False, self.soft))
         self.next_edge = self.next_edge + m5
         self.bump_quiet = np.where(m5, t + 1.0, self.bump_quiet)                  # 착지 충격을 턱으로 보지 않게
