@@ -99,7 +99,9 @@ class WBController:
         self.air_pmin = np.where(m, 99.0, getattr(self, "air_pmin", np.full(n, 99.0)))
         self.lift_on = np.where(m, False, getattr(self, "lift_on", np.zeros(n, bool)))
         self.h_prev_j = np.where(m, self.P.idle_h, getattr(self, "h_prev_j", np.zeros(n)))   # 착지 판정 (다리 눌림 속도) 용 직전 다리 길이
-        self.t_jend = np.where(m, -99.0, getattr(self, "t_jend", np.full(n, -99.0)))          # 마지막 점프 LAND 끝 시각 (jump_cooldown_s)
+        self.t_jend = np.where(m, -99.0, getattr(self, "t_jend", np.full(n, -99.0)))
+        self.rt_moved = np.where(m, False, getattr(self, "rt_moved", np.zeros(n, bool)))      # 턱 감지 모드: 접근 속도에 닿았나
+        self.rt_run = np.where(m, 0.0, getattr(self, "rt_run", np.zeros(n)))                  # 접근 속도로 달린 시간          # 마지막 점프 LAND 끝 시각 (jump_cooldown_s)
         self.soft = np.where(m, False, getattr(self, "soft", np.zeros(n, bool)))
         old = getattr(self, "jumps", [[] for _ in range(n)])
         self.jumps = [[] if m[i] else old[i] for i in range(n)]
@@ -206,11 +208,20 @@ class WBController:
             # 2026-10-20 사용자 "턱 감지 주행 모드" (평지 전용): 천천히 접근 (retry_approach_v) -> 안 감 = 턱 -> retry_back_m 후진
             # -> retry_v 로 가속 -> 점프. retry_approach_v / retry_v 0 = 조종자 스틱 속도 그대로 (옛 동작)
             self.odo = self.odo + v_now * DT
-            vec = lambda k, d: np.broadcast_to(np.asarray(getattr(P, k, d), float), (n,))  # noqa: E731
-            av, rv = vec("retry_approach_v", 0.0), vec("retry_v", 0.0)
+            pvec = lambda k, d: np.broadcast_to(np.asarray(getattr(P, k, d), float), (n,))  # noqa: E731   (vec 는 아래에서 다른 뜻으로 씀)
+            av, rv = pvec("retry_approach_v", 0.0), pvec("retry_v", 0.0)
             want = vx > np.where(av > 0, 0.05, 0.15)
             vx = np.where(want & (self.rt_phase == 0) & (av > 0), av, vx)                   # 천천히 접근
-            blk = (ph == DRIVE) & ~self.lift_on & want & (v_now < 0.05) & (self.rt_phase == 0)
+            self.rt_cap = np.where(want & (av > 0), pvec("retry_vmax", 0.0), 0.0)        # 턱 감지 모드 동안 속도 보호 상한 (아래 vm)
+            # 2026-10-20 시뮬: 턱에 부딪힌 뒤 0.43 s 판정 동안 앞으로 넘어짐 (점프 전 넘어짐 전부) / 출발 직후 느린 가속을 막힘으로 오판 (모서리 0.65 m 앞에서 점프)
+            # -> 막힘 = 접근 속도에 한 번 닿은 뒤 (rt_moved) 속도가 retry_stall_frac × 접근 속도 아래. retry_stall_frac 0 = 옛 판정 (|v| < 0.05)
+            sf_ = pvec("retry_stall_frac", 0.0)
+            # 접근 속도 (0.8 x) 로 retry_settle_s 이상 꾸준히 달린 뒤에만 막힘 판정 (출발·착지 직후 출렁임 오판 방지, 2026-10-20)
+            self.rt_run = np.where(want & (self.rt_phase == 0) & (v_now >= 0.8 * av), getattr(self, "rt_run", np.zeros(n)) + DT,
+                                   np.where(want & (self.rt_phase == 0), getattr(self, "rt_run", np.zeros(n)), 0.0))
+            self.rt_moved = self.rt_run >= pvec("retry_settle_s", 0.0) + 1e-9
+            stall = np.where(sf_ > 0, self.rt_moved & (v_now < sf_ * av), v_now < 0.05)
+            blk = (ph == DRIVE) & ~self.lift_on & want & stall & (self.rt_phase == 0)
             self.blk_t = np.where(blk, self.blk_t + DT, 0.0)
             st_ = self.blk_t >= P.retry_block_s
             self.rt_x = np.where(st_, self.odo, self.rt_x)
@@ -272,6 +283,8 @@ class WBController:
         ctl = (ph == DRIVE) | (ph == RETRACT) | (ph == EXTRACT) | (ph == LAND)
         th_ref = np.where(ph == RETRACT, np.radians(P.retract_lean), 0.0)      # 점프 파라미터는 로봇마다 배열이어도 됨 (CMA 튜닝)
         vm = np.minimum(P.vmax_kmh / 3.6, P.vmax_motor_frac * w_max * R_WHEEL)
+        rc = getattr(self, "rt_cap", np.zeros(n))                       # 2026-10-20 사용자: 점프 전 속도 0.2–0.3 m/s (실측 이륙 0.97 m/s 로 넘침 -> 넘어짐)
+        vm = np.where((rc > 0) & (ph == DRIVE), np.minimum(vm, rc), vm)          # 점프 전 (주행) 에만 — 신전 중엔 브레이크가 이륙을 막음
         g_vf = self.g_vf + (1.0 - math.exp(-2 * math.pi * P.speed_lpf_hz * DT)) * (v_now - self.g_vf)
         e = np.abs(g_vf) - vm
         g_i = np.clip(self.g_i + P.brake_ki * e * DT, 0.0, vm)
@@ -402,6 +415,10 @@ class WBController:
                 act[:, 2:] = np.where(pd[:, None], np.clip(uw / P.air_tau, -1.0, 1.0), act[:, 2:])
             else:
                 act[:, 2:] = np.where(pd[:, None], 0.0, act[:, 2:])
+            # ex_w_max > 0: 웅크림·신전 중 바퀴 관절 속도가 이 값을 넘는 방향으론 토크 0 -> 이륙 때 바퀴 속도 여유 (공중 제어·착지 회전 맞추기). 0 = 끔
+            ew = np.broadcast_to(np.asarray(getattr(P, "ex_w_max", 0.0), float), (n,))[:, None]
+            exr = ((ph == RETRACT) | (ph == EXTRACT))[:, None] & (ew > 0)
+            act[:, 2:] = np.where(exr & (np.sign(act[:, 2:]) * f.w_wheel_joint > ew), 0.0, act[:, 2:])
             leg_kp = np.where(legT & self.soft, P.land_kp, np.where(legT & (ph != LAND), P.leg_kp, leg_kp))
             leg_kd = np.where(legT & self.soft, P.land_kd, np.where(legT & (ph != LAND), P.leg_kd, leg_kd))
 

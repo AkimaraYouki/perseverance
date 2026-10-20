@@ -149,7 +149,11 @@ TUNE = dict(
     jump_min_v=0.2,      # 패드 점프는 앞으로 이 속도 [m/s] 이상일 때만 (0.72 km/h). 제자리·후진 중 점프 막기
     jump_retry=False,    # 막힘 → 물러남 → 다시 달려 점프 (짧은 착지 재시도 = 카메라 없는 접촉 점프). 0 = 끔 (지금 실기). 2026-10-12
     retry_approach_v=0.0,  # [m/s] 턱 감지 모드 접근 속도 (조종자가 앞으로만 밀면 이 속도). 0 = 스틱 그대로 (2026-10-20)
-    retry_v=0.0,         # [m/s] 후진 뒤 다시 달리는 속도 (점프 접근 속도). 0 = 스틱 그대로
+    retry_v=0.0,
+    retry_vmax=0.0,      # [m/s] 턱 감지 모드 (접근·후진·재가속·점프 준비) 동안 속도 보호 상한 (넘치면 브레이크). 0 = 끔. 사용자: 0.2–0.3
+    retry_stall_frac=0.0,
+    retry_settle_s=0.0,  # [s] 접근 속도로 이만큼 꾸준히 달린 뒤에만 막힘 판정 (retry_stall_frac > 0 일 때)  # 막힘 = 접근 속도에 닿은 뒤 v < 이 비율 x 접근 속도 (0 = 옛 판정 |v| < 0.05)
+    ex_w_max=0.0,        # [rad/s] 웅크림·신전 중 바퀴 속도 상한 방향 토크 끊기 (이륙 때 여유). 0 = 끔         # [m/s] 후진 뒤 다시 달리는 속도 (점프 접근 속도). 0 = 스틱 그대로
     retry_block_s=0.4,   # 앞 명령 (> 0.15 m/s) 인데 |v| < 0.05 m/s 가 이만큼 이어지면 막힘 [s]
     retry_back_m=0.5,    # 물러나는 거리 [m] (오도메트리). 다시 달려 접근 속도 0.4 m/s 에 닿을 거리 포함
     retry_back_v=0.3,    # 물러나는 속도 [m/s]
@@ -305,6 +309,7 @@ ap.add_argument("--no_reset", action="store_true", help="넘어져도 되돌리�
 ap.add_argument("--stop_x", type=float, default=None, help="바퀴가 이 x [m] 를 지나면 속도 0, 2 s 뒤 끝 (코스 끝)")
 ap.add_argument("--stop_at", type=float, default=None, help="자동 시험: 이 시각 [s] 에 속도 명령 0 (달리다 멈추기)")
 ap.add_argument("--record", default=None, metavar="DIR")
+ap.add_argument("--hip_cap_nm", type=float, default=0.0, help="실기식 고관절 상한: 명령 PD ≤ 이 값 -> 실제 ≤ 값 × hip_gain_eff (jump_rl --hip_robot_cap 과 같음). 0 = 액추에이터 한계만")
 ap.add_argument("--rec_label", default=None, help="녹화 화면 왼쪽 위 지형 이름 (없으면 장애물 설정으로)")
 ap.add_argument("--out", default=None)
 AppLauncher.add_app_launcher_args(ap)
@@ -1030,7 +1035,7 @@ def episode():
                   f"K(l=0.25) {_np.round(lqr.gain(0.25), 2).tolist()}  — 제어기 wbctrl (로봇용), 모터 추정 x{MOTOR['est']:.2f}", flush=True)
         if CTRL is None:                                        # 센서 치우침은 실행 동안 그대로 (제어기 시드), 모델 오차와 같은 시드
             CTRL = wbctrl.WBController(args, lqr, _m_pend, n=1, seed=int(args.dr_seed) if args.dr_seed else int(_rng.integers(1 << 30)),
-                                       edges=edges if (pad is None and args.mode == "jump") else ())
+                                       edges=edges if (pad is None and args.mode == "jump" and not args.jump_retry) else ())   # 턱 감지 모드는 모서리 위치를 모른다
         CTRL.lqr = lqr
         CTRL.reset()
         CJ["n"] = 0
@@ -1194,6 +1199,8 @@ def episode():
             else:
                 ge = args.hip_gain_eff                            # mit_pos: PD 가 드라이브 안 (물리 주기), 드라이브 실효 배율
                 legs_act.stiffness[:] = float(kp_) * ge; legs_act.damping[:] = float(kd_) * ge
+                if args.hip_cap_nm > 0:                           # 실기 balance_node hip_pd_tau_max: 명령 ≤ cap -> 실제 ≤ cap × 실효
+                    legs_act.effort_limit[:] = args.hip_cap_nm * ge
                 robot.set_joint_effort_target(ffj * ge, joint_ids=leg_ids)
             EST.update(th=info["th"], thd=info["thd"], v=info["v"])
             stats.update(brake=bool(info.get("brake", False)), bump=bool(info.get("bump", False)), lift=bool(CTRL.lift_on[0]),
