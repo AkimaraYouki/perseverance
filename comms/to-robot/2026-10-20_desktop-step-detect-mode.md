@@ -40,3 +40,27 @@ trigger: 0.311            # m
 시뮬 (보정 플랜트, 15 N·m, 각 2048 판): 턱 6 / 8 / 10 / 12 cm 성공 91 / 90 / 86 / 75 %, 넘어짐 2.7 / 3.3 / 6.6 / 15.9 %, 턱 앞 착지 6–9 %.
 주의: 녹화에서 재가속 실제 속도가 1.5 km/h (0.42 m/s) 까지 넘침 (명령 0.28) — 실기 로그로 확인 필요.
 녹화 (데스크톱 바탕화면): 8 / 10 / 12 cm 각 1 회 성공.
+
+## 갱신 2 (2026-10-21) — 대회 2 단 계단 최적화. 이 값으로 포팅·적용해 주세요
+시뮬에 대회 코스 (2 단, 칸 1 m) 추가, 턱 앞 착지는 실기처럼 자동 재시도 (최대 3 회) 로 평가. 새 옵션 하나 (wb_core 포팅 필요):
+- `retry_trig_k` [s]: 점프 지점 = trigger + retry_trig_k × (실제 속도 − retry_v). 느리면 모서리에 더 가까이서 (느린 이륙 → 모서리 걸침 착지 → 넘어짐).
+그 밖 (구현했지만 효과 없어 0 = 끔): retry_land_hold_s, retry_fire_frac.
+최종 묶음 (점프 tune 은 CMA-11 15 N·m 묶음 위에 덮어씀):
+```
+extract_pitch: 6.7183
+h_land: 0.2051
+land_kd: 0.5
+land_kp: 22.8847
+retry_approach_v: 0.14
+retry_back_m: 0.3004
+retry_block_s: 0.15
+retry_settle_s: 0.5
+retry_stall_frac: 0.5
+retry_trig_k: 0.4
+retry_v: 0.3
+spin_match_k: 0.6944
+trigger: 0.27
+```
+시뮬 (보정 플랜트, 15 N·m, 각 2048 판, 재시도 포함): **2 단 6 cm 97.3 %, 2 단 8 cm 98.5 %, 단 10 cm 99.8 %, 단 12 cm 98.3 %** (넘어짐 0.2–2.4 %).
+몇 값이 탐색 경계에 붙음 (trigger 0.27, retry_trig_k 0.4, retry_v 0.3 = 사용자 상한, approach 0.14, back 0.30, land_kd 0.5) — 실기 로그 보고 다시 넓혀 볼 수 있음.
+궤적 그림·녹화: 데스크톱 바탕화면 (점프궤적/, ascento_jump_stairs2_*.mp4).
