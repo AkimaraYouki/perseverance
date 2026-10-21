@@ -57,12 +57,16 @@ ap.add_argument("--hip_eff_max", type=float, default=1.0)
 ap.add_argument("--hip_cap_nm", type=float, default=9.0, help="실기 balance_node hip_pd_tau_max (명령 PD 상한) [N·m]")
 ap.add_argument("--hip_robot_cap", type=int, default=1, help="1 = 실기처럼 명령 PD 를 9 N·m 로 자른 뒤 실효 배율 (실제 최대 9 x hip_eff). 0 = 옛 시뮬 (실효 배율 뒤 9 N·m)")
 ap.add_argument("--dump", default=None, help="평가 때 판마다 기록 npz (결과, 턱, 이륙 거리·속도·gy, 바퀴 ω, 고관절 실효 ...)")
+ap.add_argument("--p_stairs", type=float, default=0.0, help="2 단 계단 (대회: 칸 tread, 높이 h 씩 두 번) 비율")
+ap.add_argument("--max_tries", type=int, default=1, help="턱 감지 모드 평가: 턱 앞 착지면 최대 이 횟수까지 재시도 (1 = 재시도 없음)")
+ap.add_argument("--trace_envs", type=int, default=0, help="평가 때 로봇 몇 대의 궤적을 npz 로 (--dump 경로 옆)")
 ap.add_argument("--retry", type=int, default=0, help="1 = 턱 감지 모드 평가: 조종자는 앞으로만, 점프는 wbctrl jump_retry 가 (막힘 -> 후진 -> 가속 -> 점프)")
-ap.add_argument("--cma_space", default="jump", choices=("jump", "retry", "all"))
+ap.add_argument("--cma_space", default="jump", choices=("jump", "retry", "all", "stairs", "stairs2"))
 ap.add_argument("--cma", type=int, default=0, help="점프 상태기계 파라미터 CMA-ES 세대 수 (정책 없음, 로봇을 후보 수로 나눠 동시 평가)")
 ap.add_argument("--cma_pop", type=int, default=16)
 ap.add_argument("--cma_w_bottom", type=float, default=0.5, help="착지 때 다리가 끝까지 눌린 (스프링 바닥) 비율 벌점")
 ap.add_argument("--cma_w_hub", type=float, default=0.3, help="허브 하중 평균이 cma_hub_ref 를 넘는 비율 벌점")
+ap.add_argument("--cma_w_fell", type=float, default=0.7, help="넘어짐 벌점 (점수 = 성공 − 이 값 × 넘어짐 − ...)")
 ap.add_argument("--cma_w_slip", type=float, default=0.3, help="접지 미끄럼 평균 [m/s] 벌점 (실기 파손 땐 1.4 m/s)")
 ap.add_argument("--cma_hub_ref", type=float, default=350.0, help="[N] 옛 기본 파라미터의 착지 허브 하중 중간값 (평지 0.2-0.4 m/s)")
 ap.add_argument("--cma_eps", type=int, default=1, help="세대마다 로봇 한 대당 에피소드 (처음 k 판만 센다)")
@@ -102,7 +106,7 @@ P.edge_stop = False
 DT = 1.0 / 200.0
 JUMP_PH = (wbctrl.RETRACT, wbctrl.EXTRACT, wbctrl.FLY, wbctrl.DESCEND, wbctrl.LAND)
 AFTER_LAND_S = 1.0          # 착지 (LAND 끝) 뒤 보정·채점 시간
-EP_S = 7.0 if "--retry" not in sys.argv else 22.0   # 턱 감지 모드는 천천히 접근 + 후진 + 재가속
+EP_S = 7.0 if "--retry" not in sys.argv else (36.0 if "--p_stairs" in sys.argv else 22.0)   # 턱 감지 모드는 천천히 접근 + 후진 + 재가속
 BOX_L, BOX_W, BOX_T = 1.4, 2.0, 0.20
 
 # --- 장면: 평면 + 로봇마다 키네마틱 턱 (높이를 리셋 때마다 바꾼다) -------------------------------------------------
@@ -124,6 +128,7 @@ cfg.scene.step = RigidObjectCfg(
                               mass_props=sim_utils.MassPropertiesCfg(mass=50.0),
                               physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0)),
     init_state=RigidObjectCfg.InitialStateCfg(pos=(2.0, 0.0, -0.5)))
+cfg.scene.step2 = cfg.scene.step.replace(prim_path="{ENV_REGEX_NS}/Step2")   # 2 단 계단의 윗단 (안 쓰면 땅 밑)
 cfg.episode_length_s = 1e6                                                 # 리셋은 여기서 직접
 for grp in (cfg.rewards, cfg.curriculum, cfg.terminations):
     for n_ in list(vars(grp)):
@@ -146,7 +151,7 @@ cfg.sim.dt = 1.0 / (200.0 * cfg.decimation)
 env = gym.make(TASK, cfg=cfg).unwrapped
 dev = env.device
 N = env.num_envs
-robot, step_obj = env.scene["robot"], env.scene["step"]
+robot, step_obj, step2_obj = env.scene["robot"], env.scene["step"], env.scene["step2"]
 cmd_term = env.command_manager.get_term("base_velocity")
 cmd_term.pin(True)
 cmd_term.cfg.auto_height = cmd_term.cfg.default_height = P.idle_h
@@ -215,12 +220,14 @@ class JumpEnv:
         self.episode_length_buf = torch.zeros(N, dtype=torch.long, device=dev)
         self.rng = np.random.default_rng(args.seed + 7)
         self.h = np.zeros(N); self.edge = np.zeros(N); self.dtrig = np.zeros(N); self.vcmd = np.zeros(N)  # noqa: E702
+        self.ntry = np.zeros(N, int)                                      # 점프 시도 횟수 (턱 앞 착지 재시도)
+        self.nst = np.ones(N, int); self.stage = np.zeros(N, int); self.h1 = np.zeros(N); self.hprev = np.zeros(N)  # 계단 단 수, 지금 단, 한 단 높이  # noqa: E702
         self.jumped = np.zeros(N, bool); self.landed_t = np.full(N, np.nan); self.t = np.zeros(N)  # noqa: E702
         self.gt = 0.0                                                    # 제어기 전역 시간 (단계 타이머는 이것의 차이)
         self.res = np.zeros((N, 4)); self.resq = collections.deque([np.zeros((N, 4))] * 4, maxlen=4)  # noqa: E702
         self.base = np.zeros((N, 4)); self.x_prev = np.zeros(N)  # noqa: E702
         self.stats = collections.defaultdict(list)
-        self.eplog = []; self.prelog = []  # noqa: E702
+        self.eplog = []; self.prelog = []; self.trace = []  # noqa: E702
         self.cnt = np.zeros((N, 4))                                       # 로봇별 success / short / fell / timeout (CMA)
         self.land = np.zeros((N, 4))                                      # CMA: 로봇별 (착지 수, 다리 바닥 닿음 수, 허브 하중 합, 접지 미끄럼 합) — 세는 판만
         self.zb0 = np.full(N, np.nan); self.zbmax = np.zeros(N); self.rise = []   # 몸통 (base) 높이: 점프 시작 때 / 공중 최고 -> 상승 [m]  # noqa: E702
@@ -256,6 +263,13 @@ class JumpEnv:
         pose[:, 2] = torch.tensor(self.h[ids] - BOX_T / 2, device=dev, dtype=torch.float32)
         pose[:, 3] = 1.0
         step_obj.write_root_pose_to_sim(pose, idt)
+        st2 = self.rng.random(n) < args.p_stairs
+        self.ntry[ids] = 0
+        self.nst[ids] = np.where(st2, 2, 1); self.stage[ids] = 0; self.h1[ids] = self.h[ids]; self.hprev[ids] = 0.0  # noqa: E702
+        pose2 = pose.clone()
+        pose2[:, 0] = pose[:, 0] + args.tread
+        pose2[:, 2] = torch.tensor(np.where(st2, 2 * self.h[ids], -1.0) - BOX_T / 2, device=dev, dtype=torch.float32)
+        step2_obj.write_root_pose_to_sim(pose2, idt)
         CTRL.reset(m)
         self.jumped[ids] = False; self.landed_t[ids] = np.nan; self.t[ids] = 0.0  # noqa: E702
         self.res[ids] = 0.0
@@ -372,7 +386,19 @@ class JumpEnv:
                - 3.0 * wsat - 0.05 * (res ** 2).sum(1) - 0.2 * (dres ** 2).sum(1))
         after = ~np.isnan(self.landed_t) & (self.t - np.nan_to_num(self.landed_t, nan=9e9) >= AFTER_LAND_S)
         success = after & on_top & upright & (f.wx >= self.edge + 0.05)
-        short = after & ~success
+        nxt = success & (self.stage < self.nst - 1)                        # 계단 첫 단 성공 -> 다음 단으로 (판 계속)
+        if nxt.any():
+            self.stage[nxt] += 1; self.hprev[nxt] = self.h[nxt]; self.edge[nxt] += args.tread; self.h[nxt] += self.h1[nxt]  # noqa: E702
+            self.jumped[nxt] = False; self.landed_t[nxt] = np.nan  # noqa: E702
+            success = success & ~nxt
+            on_top = f.wheel_z_min >= self.h - 0.015
+        short = after & ~success & ~nxt
+        if args.retry and args.max_tries > 1:   # 턱 앞 착지 -> 실기처럼 다시 막혀 재시도 (넘어지지 않았으면, 최대 max_tries 번)
+            tilt_ = np.degrees(np.arccos(np.clip(-f.g_b[:, 2], -1, 1)))
+            again = short & (tilt_ < 30.0) & (self.ntry < args.max_tries - 1)
+            if again.any():
+                self.ntry[again] += 1; self.jumped[again] = False; self.landed_t[again] = np.nan  # noqa: E702
+                short = short & ~again
         fell = tilt > 50.0
         timeout = self.episode_length_buf.cpu().numpy() >= self.max_episode_length
         rew += 30.0 * success - 15.0 * short - 20.0 * fell + 0.5 * (self.jumped & on_top & (self.h > 0.01) & (f.wx > self.edge))   # 턱 위에 올라가 있으면 매 스텝 (2026-10-13 jr2: jr1 은 덜 뛰어 턱 앞 착지로 수렴)
@@ -395,7 +421,7 @@ class JumpEnv:
         self.h_td = np.where(td_now, hm, self.h_td)
         # 닿기 직전 (바퀴가 아직 지면·턱 윗면 위 3 mm 넘게 떠 있는 마지막 순간) 의 바퀴 둘레 속도 - 몸 속도.
         # 시뮬 강체 접촉은 닿는 1–2 ms 안에 마찰로 맞춰 버려서, 접지 판정 (고관절 토크) 순간 값은 작게 나온다 (2026-10-13 CMA 1: 0.08 m/s vs 실기 1.4)
-        surf = np.where(f.wx > self.edge, self.h, 0.0)
+        surf = np.where(f.wx > self.edge, self.h, self.hprev)
         up = np.isin(CTRL.phase, (wbctrl.FLY, wbctrl.DESCEND)) & (f.wheel_z_min - surf > 0.003)
         self.slip_td = np.where(up, np.abs(f.w_wheel_abs.mean(1) * R - f.truth_v), self.slip_td)
         self.wair = np.where(np.isin(CTRL.phase, (wbctrl.FLY, wbctrl.DESCEND)), np.maximum(self.wair, np.abs(f.w_wheel_joint).max(1)), self.wair)
@@ -416,6 +442,13 @@ class JumpEnv:
             ok_ = done & ~np.isnan(self.zb0) & (self.zbmax > 0)
             self.rise.extend((self.zbmax[ok_] - self.zb0[ok_]).tolist())
         self.zb0[done] = np.nan; self.zbmax[done] = 0.0
+        if args.trace_envs:
+            k_ = args.trace_envs
+            self.trace.append(np.stack([np.full(k_, self.gt), self.t[:k_], f.wx[:k_], f.wheel_z_min[:k_], zb[:k_], CTRL.phase[:k_].astype(float),
+                                        f.truth_th[:k_], f.truth_v[:k_], self.edge[:k_], self.h[:k_], self.stage[:k_].astype(float),
+                                        CTRL.rt_phase[:k_].astype(float), done[:k_].astype(float),
+                                        np.where(success, 0, np.where(short, 1, np.where(fell, 2, 3)))[:k_].astype(float),
+                                        self.h1[:k_], self.nst[:k_].astype(float), f.h.mean(1)[:k_]], 1))
         self.d_desc += (CTRL.phase == wbctrl.DESCEND) * DT
         self.ex_t += ex * DT
         self.dh_max = np.where(ex, np.maximum(self.dh_max, (hm - self.h_last) / DT), self.dh_max); self.h_last = hm  # noqa: E702
@@ -478,6 +511,16 @@ if args.cma_space == "all":     # 점프 + 턱 감지 + 신전 바퀴 속도 상
     CMA_SPACE = CMA_SPACE + [("retry_approach_v", 0.06, 0.2), ("retry_block_s", 0.05, 0.5), ("retry_back_m", 0.15, 0.9),
                              ("retry_v", 0.15, 0.3), ("trigger", 0.08, 0.5), ("retry_stall_frac", 0.15, 0.8), ("ex_w_max", 5.0, 19.0)]
     # 사용자: 점프 전 속도 0.2–0.3 m/s -> 명령 범위로만 (retry_vmax 속도 보호 상한 0.3 은 넘어짐 14 -> 50 %, 2026-10-20 비교)
+if args.cma_space == "stairs":   # 2 단 계단 (2026-10-21): 이륙·착지 속도에 걸린 점프 값 + 턱 감지 값
+    CMA_SPACE = [("t_retract", 0.12, 0.40), ("retract_lean", -3.0, 12.0), ("extract_pitch", -8.0, 12.0), ("leg_kp", 30.0, 120.0),
+                 ("air_kp", 0.0, 60.0), ("air_kd", 0.0, 10.0), ("land_kp", 8.0, 60.0), ("land_kd", 0.2, 4.0), ("land_s", 0.10, 0.70),
+                 ("h_land", 0.13, 0.2425), ("spin_match_k", 0.0, 0.8),
+                 ("retry_approach_v", 0.12, 0.25), ("retry_back_m", 0.15, 0.7), ("retry_v", 0.15, 0.3), ("trigger", 0.15, 0.45),
+                 ("retry_settle_s", 0.2, 1.2), ("retry_stall_frac", 0.2, 0.7), ("retry_block_s", 0.08, 0.4)]
+if args.cma_space == "stairs2":  # 2026-10-21 2 차: 노이즈 줄이려 10 개만 (점프 지점·속도·착지)
+    CMA_SPACE = [("trigger", 0.27, 0.36), ("retry_trig_k", -0.3, 0.4), ("retry_v", 0.2, 0.3), ("retry_approach_v", 0.14, 0.22),
+                 ("retry_back_m", 0.3, 0.6), ("land_kp", 15.0, 45.0), ("land_kd", 0.5, 2.5), ("h_land", 0.18, 0.235),
+                 ("spin_match_k", 0.2, 0.7), ("extract_pitch", 4.0, 12.0)]
 if args.cma_space == "retry":   # 턱 감지 모드 파라미터만 (점프 묶음은 고정)
     CMA_SPACE = [("retry_approach_v", 0.06, 0.25), ("retry_block_s", 0.15, 0.6), ("retry_back_m", 0.15, 0.9),
                  ("retry_v", 0.2, 0.6), ("trigger", 0.08, 0.5)]
@@ -503,7 +546,7 @@ def cma_eval(cands, k_eps):
 def cma_score(r, land):
     # 성공 − 0.7 × 넘어짐 (턱 앞 착지 short 는 0) − 착지 벌점 (2026-10-13: 1 차 CMA 는 다리를 접은 채 착지 -> 매번 바닥 닿음, 허브 하중 1.4 배 -> 바퀴 파손 위험)
     # 2026-10-13 실기 파손 로그: 접지 미끄럼 1.4 m/s (바퀴 -0.9 vs 몸 +0.5) -> 미끄럼 벌점
-    return (r[:, 0] - 0.7 * r[:, 2] - args.cma_w_bottom * land[:, 0] - args.cma_w_hub * np.maximum(0.0, land[:, 1] / args.cma_hub_ref - 1.0)
+    return (r[:, 0] - args.cma_w_fell * r[:, 2] - args.cma_w_bottom * land[:, 0] - args.cma_w_hub * np.maximum(0.0, land[:, 1] / args.cma_hub_ref - 1.0)
             - args.cma_w_slip * land[:, 2])
 
 
@@ -604,6 +647,8 @@ if args.eval:
     if args.dump:
         np.save(os.path.expanduser(args.dump), np.array(venv.eplog, float))
         np.save(os.path.expanduser(args.dump).replace(".npy", "_pre.npy"), np.array(venv.prelog, float))
+        if venv.trace:   # (스텝, 로봇, 열): gt, t, wx, 바퀴 바닥 z, 몸통 z, 단계, pitch, v, 모서리, 목표 높이, 계단 단, 재시도 단계, done, 결과, 한 단 높이, 단 수, 다리 h
+            np.save(os.path.expanduser(args.dump).replace(".npy", "_trace.npy"), np.array(venv.trace, np.float32))
         print("[dump]", args.dump, len(venv.eplog), "판 (결과 0성공 1짧음 2넘어짐 3시간, h, to_d, to_v, gy_to, to_w, to_pitch, hip_eff, ex_vmax, ex_wmax, sat_t, 끝 pitch, vcmd)", flush=True)
     os._exit(0)                                                          # app.close() 가 가끔 멈춤
 

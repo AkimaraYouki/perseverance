@@ -212,13 +212,17 @@ class WBController:
             av, rv = pvec("retry_approach_v", 0.0), pvec("retry_v", 0.0)
             want = vx > np.where(av > 0, 0.05, 0.15)
             vx = np.where(want & (self.rt_phase == 0) & (av > 0), av, vx)                   # 천천히 접근
+            # 착지 뒤 retry_land_hold_s 동안 멈춰 섰다가 다시 접근 (2 단 계단: 착지 속도 0.6 m/s 로 다음 턱에 부딪혀 고꾸라짐, 2026-10-21)
+            hold_ = (t - getattr(self, "t_jend", np.full(n, -99.0))) < pvec("retry_land_hold_s", 0.0)
+            vx = np.where(want & (av > 0) & hold_, 0.0, vx)
             self.rt_cap = np.where(want & (av > 0), pvec("retry_vmax", 0.0), 0.0)        # 턱 감지 모드 동안 속도 보호 상한 (아래 vm)
             # 2026-10-20 시뮬: 턱에 부딪힌 뒤 0.43 s 판정 동안 앞으로 넘어짐 (점프 전 넘어짐 전부) / 출발 직후 느린 가속을 막힘으로 오판 (모서리 0.65 m 앞에서 점프)
             # -> 막힘 = 접근 속도에 한 번 닿은 뒤 (rt_moved) 속도가 retry_stall_frac × 접근 속도 아래. retry_stall_frac 0 = 옛 판정 (|v| < 0.05)
             sf_ = pvec("retry_stall_frac", 0.0)
             # 접근 속도 (0.8 x) 로 retry_settle_s 이상 꾸준히 달린 뒤에만 막힘 판정 (출발·착지 직후 출렁임 오판 방지, 2026-10-20)
-            self.rt_run = np.where(want & (self.rt_phase == 0) & (v_now >= 0.8 * av), getattr(self, "rt_run", np.zeros(n)) + DT,
-                                   np.where(want & (self.rt_phase == 0), getattr(self, "rt_run", np.zeros(n)), 0.0))
+            drv_ = (ph == DRIVE) & ~self.lift_on                                            # 점프·착지 중엔 0 (착지 감속을 막힘으로 오판, 2 단 계단 2026-10-21)
+            self.rt_run = np.where(drv_ & want & (self.rt_phase == 0) & (v_now >= 0.8 * av), getattr(self, "rt_run", np.zeros(n)) + DT,
+                                   np.where(drv_ & want & (self.rt_phase == 0), getattr(self, "rt_run", np.zeros(n)), 0.0))
             self.rt_moved = self.rt_run >= pvec("retry_settle_s", 0.0) + 1e-9
             stall = np.where(sf_ > 0, self.rt_moved & (v_now < sf_ * av), v_now < 0.05)
             blk = (ph == DRIVE) & ~self.lift_on & want & stall & (self.rt_phase == 0)
@@ -231,7 +235,15 @@ class WBController:
             vx = np.where(bk, -P.retry_back_v, vx)                           # 물러남
             self.rt_phase = np.where(bk & (self.odo <= self.rt_x - P.retry_back_m), 2, self.rt_phase)
             vx = np.where((self.rt_phase == 2) & want & (rv > 0), rv, vx)                    # 정해진 속도로 다시 달림
-            fire = (self.rt_phase == 2) & (self.odo >= self.rt_x + P.retry_contact - P.trigger)
+            # 점프는 재가속 속도의 retry_fire_frac 배 이상일 때만 (2 단 계단: 거의 멈춘 채 뛰어 넘어짐 0.46 m/s vs 성공 0.72, 2026-10-21). 0 = 속도 무관
+            ff_ = pvec("retry_fire_frac", 0.0)
+            # 속도 따라 점프 지점 보정: 느리면 웅크림·신전 동안 덜 가고 덜 날아감 -> 모서리에 더 가까이서 (2 단 계단 모서리 걸침 착지, 2026-10-21)
+            trg = P.trigger + pvec("retry_trig_k", 0.0) * (v_now - rv)
+            fire = (self.rt_phase == 2) & (self.odo >= self.rt_x + P.retry_contact - trg) & (v_now >= ff_ * np.where(rv > 0, rv, 0.0))
+            # 재가속 중 다시 막히면 (점프 못 한 채 턱에 닿음) 후진부터 다시
+            re_ = (self.rt_phase == 2) & (ph == DRIVE) & (v_now < 0.05) & (self.odo >= self.rt_x - 0.05) & (ff_ > 0)
+            self.rt_x = np.where(re_, self.odo, self.rt_x)
+            self.rt_phase = np.where(re_, 1, self.rt_phase)
             self.rt_phase = np.where(fire | ~want & (self.rt_phase == 2), 0, self.rt_phase)   # 쏘거나 조종자가 앞 명령을 놓으면 끝
             self.n_retry = self.n_retry + fire
             jump = jump | fire
