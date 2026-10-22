@@ -5,6 +5,7 @@
 # 끝나면: 새 터미널 → cw check → cw up      (자세한 건 ~/perseverance/tools/gcs/README.md)
 set -e
 ROBOT_IP=192.168.50.124
+ROBOT_IP_HOTSPOT=10.75.26.250   # 핫스팟 "robot" (2026-10-22). ssh 는 ~/.ssh/config 가 .124 → 이 주소로 돌린다
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 
 say "1/7 기본 도구"
@@ -38,7 +39,7 @@ say "5/7 DDS (Cyclone, 도메인 42, 로봇 $ROBOT_IP 를 peer 로)"
 IF=$(ls /sys/class/net | grep -m1 '^wl' || true)
 cat > ~/gen2_desk/cyclonedds.xml <<XML
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- GCS 노트북 → 로봇. Wi-Fi $IF, 로봇 $ROBOT_IP 를 peer 로 (멀티캐스트가 막힌 망에서도 찾게). -->
+<!-- GCS 노트북 → 로봇. Wi-Fi $IF, 로봇 $ROBOT_IP ("ROBOT") · $ROBOT_IP_HOTSPOT (핫스팟 "robot") 를 peer 로 (멀티캐스트가 막힌 망에서도 찾게). -->
 <CycloneDDS xmlns="https://cdds.io/config">
   <Domain Id="any">
     <General>
@@ -48,11 +49,21 @@ cat > ~/gen2_desk/cyclonedds.xml <<XML
     <Discovery>
       <ParticipantIndex>auto</ParticipantIndex>
       <MaxAutoParticipantIndex>60</MaxAutoParticipantIndex>
-      <Peers><Peer address="$ROBOT_IP"/></Peers>
+      <Peers><Peer address="$ROBOT_IP"/><Peer address="$ROBOT_IP_HOTSPOT"/></Peers>
     </Discovery>
   </Domain>
 </CycloneDDS>
 XML
+mkdir -p ~/.ssh
+if ! grep -q 'originalhost 192.168.50.124' ~/.ssh/config 2>/dev/null; then
+  cat >> ~/.ssh/config <<SSHCFG
+# C-WANG 로봇: 핫스팟 "robot" (10.75.26.x) 에 있으면 .124 로의 접속을 그 망의 로봇 주소로 (호스트 키는 .124 것으로 검사)
+Match originalhost $ROBOT_IP exec "ip -4 -o addr show | grep -q ' 10\\.75\\.26\\.'"
+    HostName $ROBOT_IP_HOTSPOT
+    HostKeyAlias $ROBOT_IP
+SSHCFG
+  chmod 600 ~/.ssh/config
+fi
 cat > ~/gen2_desk/env.sh <<'ENV'
 # 로봇 조종·관제용 환경: source ~/gen2_desk/env.sh
 source /opt/ros/jazzy/setup.bash
