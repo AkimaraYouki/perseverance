@@ -96,12 +96,11 @@ static constexpr bool STATUS_LED_ACTIVE_LOW = true;
 // ============================================================================
 // Rates
 // ============================================================================
-// 2026-10-14 (user): GPS, IST8310 magnetometer and the I2C RGB LED / GPS safety LED were removed from the robot.
-// Only the two PM02 voltage/current channels remain. The HostFrame layout is unchanged (Jetson parser): the GPS
-// and magnetometer fields stay 0 and their valid flags are never set. Set these to true to bring them back.
-static constexpr bool ENABLE_GPS = false;   // Holybro GPS UART (GPIO20/21) + safety LED (GPIO5)
-static constexpr bool ENABLE_MAG = false;   // IST8310 on I2C (GPIO6/7)
-static constexpr bool ENABLE_RGB = false;   // Holybro RGB LED controller on I2C
+// 2026-10-14: GPS, magnetometer and LEDs were removed (all false). 2026-10-22 (user): refitted -> all true again,
+// host link stays USB only. With a switch false the HostFrame layout is unchanged: those fields stay 0.
+static constexpr bool ENABLE_GPS = true;    // Holybro GPS UART (GPIO20/21) + safety LED (GPIO5)
+static constexpr bool ENABLE_MAG = true;    // IST8310 on I2C (GPIO6/7)
+static constexpr bool ENABLE_RGB = true;    // Holybro RGB LED controller on I2C
 
 static constexpr uint32_t HOST_RATE_HZ = 100;
 static constexpr uint32_t HOST_PERIOD_US = 1000000UL / HOST_RATE_HZ;
