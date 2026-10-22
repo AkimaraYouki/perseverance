@@ -45,6 +45,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "std_msgs/msg/bool.hpp"
+#include "std_msgs/msg/int8.hpp"
 #include "std_msgs/msg/empty.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include "std_srvs/srv/trigger.hpp"
@@ -359,6 +360,8 @@ public:
           RCLCPP_INFO(get_logger(), "step-detect mode %s", rq->data ? "ON" : "OFF");
         });
     step_pub_ = create_publisher<std_msgs::msg::Bool>("balance/step_mode_active", rclcpp::QoS(1).transient_local());
+    // step-detect stage for the GCS HUD: 0 approach / idle, 1 backing off, 2 running at the step (latched, on change)
+    step_phase_pub_ = create_publisher<std_msgs::msg::Int8>("balance/step_phase", rclcpp::QoS(1).transient_local());
     pub_ = create_publisher<gen2_msgs::msg::ControllerState>("controller/state", 10);
     // wheel + gyro odometry (odom -> base_link, planar) for SLAM / RViz; integrated while standing/balancing
     odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("odom", 10);
@@ -592,6 +595,7 @@ private:
   void enter(Mode m, const std::string & why = "")
   {
     link_lost_ = false; sit_hold_ = false;
+    rt_phase_now_ = 0;   // the core restarts its step-detect state on every mode change
     if (m != Mode::kStand) {start_ = false; homing_ = false;}
     if (m == Mode::kFault || m == Mode::kDisarmed) {
       zero_all();
@@ -904,6 +908,7 @@ private:
         if (o.phase == gen2_control::kRetract) {RCLCPP_INFO(get_logger(), "jump: start, %s (v %.2f m/s)", who, o.v);}
         else {RCLCPP_WARN(get_logger(), "jump: refused, %s (v %.2f m/s, need %.2f-%.2f forward and |wz| <= %.1f)", who, o.v, params_.jump_min_v, params_.jump_max_v, params_.jump_max_wz);}
       }
+      rt_phase_now_ = o.rt_phase;
       if (o.rt_phase != last_.rt_phase) {
         static const char * kRt[] = {"approach", "blocked -> back off", "run at the step"};
         RCLCPP_INFO(get_logger(), "step-detect: %s (odo %.2f m, v %.2f m/s)", kRt[std::clamp(o.rt_phase, 0, 2)], o.odo, o.v);
@@ -1060,6 +1065,12 @@ private:
 
   void publish()
   {
+    if (rt_phase_now_.load() != step_phase_last_) {
+      step_phase_last_ = rt_phase_now_.load();
+      std_msgs::msg::Int8 m;
+      m.data = static_cast<int8_t>(step_phase_last_);
+      step_phase_pub_->publish(m);
+    }
     if (static_cast<int>(step_mode_.load()) != step_pub_last_) {   // latched: published on change only
       step_pub_last_ = step_mode_.load();
       std_msgs::msg::Bool b;
@@ -1192,6 +1203,9 @@ private:
   std::atomic<int> step_req_{-1};          // step-detect mode request for the loop: -1 none, 0 off, 1 on
   std::atomic<bool> step_mode_{false};     // as last requested (published on balance/step_mode_active)
   int step_pub_last_ = -1;
+  rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr step_phase_pub_;
+  std::atomic<int> rt_phase_now_{0};      // written by the control loop, published by publish()
+  int step_phase_last_ = -1;
   bool sit_ = false, sit_hold_ = false, link_lost_ = false, link_stop_ = true;
   int64_t t_lost_ = 0;
   double link_sit_after_s_ = 2.0, link_disarm_s_ = 30.0;
