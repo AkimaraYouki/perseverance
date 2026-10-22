@@ -4,7 +4,7 @@
 sensor_msgs/Joy -> cmd_vel/teleop (cmd_mux), balance/height, balance/heartbeat (20 Hz) and the
 balance/* services. Only standard messages, so it also runs on ROS 2 Humble.
 
-  START          start: (home hips) -> stand -> balance by itself once upright
+  START          start: (home hips) -> stand -> balance by itself once upright (height reset to default)
   BACK           sit down slowly, then disarm
   left stick ↕   forward / backward (full = vx_max)
   right stick ↔  turn (full = wz_max, left = +)
@@ -95,6 +95,7 @@ class PadTeleop(Node):
             return          # no heartbeat: balance_node stops, sits and disarms on its own
         self.hb.publish(Empty())
         if self._edge('start'):
+            self.h = H_DEFAULT   # stand up at the default height, not a height left over from the last run
             self._call('start')
         if self._edge('back'):
             self._call('sit')
