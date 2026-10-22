@@ -7,6 +7,7 @@
   /people/legs     PoseArray     laser 좌표 다리 쌍 = 사람 후보 (leg_detector)
   /follow/status   String        "FOLLOW target 1.23 m @ +5 deg" (person_follow, 대상 = laser 좌표)
   /gesture, /gesture/action String
+  /balance/step_mode_active Bool, /balance/step_phase Int8 (latched)  턱 감지 모드 배지 (우상단)
 실행: source ~/gen2_desk/env.sh; python3 ~/gen2_desk/hud.py    (q / Esc 끝, s 화면 저장)
 """
 import json
@@ -20,9 +21,9 @@ import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseArray
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage
-from std_msgs.msg import String
+from std_msgs.msg import Bool, Int8, String
 
 FX, CX = 530.0, 320.0                  # person_detector 기본값 (보정 전 추정)
 LASER_X, CAM_X = -0.0774, 0.1080       # base_link 기준 x [m] (footprint.yaml)
@@ -46,6 +47,11 @@ class Hud(Node):
         self.create_subscription(String, "follow/status", lambda m: self._set("status", m.data), 10)
         self.create_subscription(String, "gesture", lambda m: setattr(self, "gesture", m.data), 10)
         self.create_subscription(String, "gesture/action", self._action, 10)
+        # 턱 감지 모드 (balance_node, 바뀔 때만 발행 + latched): 콜백은 값만 저장, 그리기는 draw() 에서
+        latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.step_on, self.step_phase = False, 0
+        self.create_subscription(Bool, "balance/step_mode_active", lambda m: setattr(self, "step_on", bool(m.data)), latched)
+        self.create_subscription(Int8, "balance/step_phase", lambda m: setattr(self, "step_phase", int(m.data)), latched)
         self.fps_t, self.fps = time.monotonic(), 0.0
 
     def _set(self, k, v):
@@ -132,6 +138,17 @@ def draw(n: Hud):
     g = n.gesture.split()[0] if n.gesture else ""
     gtxt = f"hand: {g}" + (f"  [{n.action}]" if n.action and now - n.action_t < 3 else "")
     cv2.putText(img, gtxt, (W - 8 - 9 * len(gtxt), 23), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (230, 230, 230), 1)
+    # 턱 감지 모드 배지 (우상단, 켜졌을 때만): 0 접근, 1 막힘 -> 후진, 2 재주행 -> 점프
+    if n.step_on:
+        ph_txt = {0: "APPROACH", 1: "BLOCKED > BACK", 2: "RUN > JUMP"}.get(n.step_phase, "")
+        (tw, _), _ = cv2.getTextSize("STEP", cv2.FONT_HERSHEY_DUPLEX, 1.1, 2)
+        (pw, _), _ = cv2.getTextSize(ph_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        bw = max(tw, pw) + 24
+        x0, y0 = W - bw - 8, 42
+        cv2.rectangle(img, (x0, y0), (x0 + bw, y0 + 70), (255, 255, 255), -1)
+        cv2.rectangle(img, (x0, y0), (x0 + bw, y0 + 70), (0, 140, 255), 3)
+        cv2.putText(img, "STEP", (x0 + (bw - tw) // 2, y0 + 36), cv2.FONT_HERSHEY_DUPLEX, 1.1, (20, 20, 20), 2, cv2.LINE_AA)
+        cv2.putText(img, ph_txt, (x0 + (bw - pw) // 2, y0 + 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 110, 230), 2, cv2.LINE_AA)
     # 미니맵 (위에서 본 모습, base_link, 위 = 앞)
     S, R = 170, 3.0
     mp = np.full((S, S, 3), 25, np.uint8)
