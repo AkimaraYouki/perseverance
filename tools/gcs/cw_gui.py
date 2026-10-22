@@ -179,6 +179,14 @@ class Ros(QtCore.QObject):
             self.node.create_subscription(String, t, lambda m, t=t: self.topic.emit(t, m.data), 10)
         # 점프 결과 — balance_node 는 거절을 로그 (/rosout) 로만 남긴다. pad_teleop 의 "ok: jump requested" 는 접수일 뿐
         self.node.create_subscription(Log, 'rosout', self._rosout, 100)
+        # 턱 감지 모드 (로봇 2026-10-23): 바뀔 때만 발행 + latched → 늦게 붙어도 마지막 값을 받게 transient_local
+        from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+        from std_msgs.msg import Bool, Int8
+        latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        # latched 값은 구독하자마자 오는데 그때는 GUI 가 아직 신호에 안 붙었을 수 있다 → 저장해 두고 _emit_state (0.5 s) 가 다시 넘긴다
+        self._step = {}
+        self.node.create_subscription(Bool, 'balance/step_mode_active', lambda m: self._step.__setitem__('step_mode', str(int(m.data))), latched)
+        self.node.create_subscription(Int8, 'balance/step_phase', lambda m: self._step.__setitem__('step_phase', str(m.data)), latched)
         try:   # 균형 상태 (100 Hz) — 최신 것만, 0.5 초마다 GUI 로
             from gen2_msgs.msg import ControllerState
             self._cs = None
@@ -215,7 +223,7 @@ class Ros(QtCore.QObject):
             pass
 
     def _rosout(self, m):
-        if m.name == 'balance' and m.msg.startswith('jump: '):
+        if m.name == 'balance' and (m.msg.startswith('jump: ') or m.msg.startswith('step-detect')):
             self.topic.emit('jump', m.msg)
 
     def att_on(self, on):
@@ -316,6 +324,8 @@ class Ros(QtCore.QObject):
         self.panel.emit({k: v for k, (t, v) in list(self._panel.items()) if now - t < (3.0 if k == 'temp' else 1.5)})
 
     def _emit_state(self):
+        for k, v in list(self._step.items()):
+            self.topic.emit(k, v)
         if self._cs:
             t, mode, fault, pitch, v = self._cs
             if time.monotonic() - t < 1.5:
@@ -605,6 +615,7 @@ class Gui(QtWidgets.QMainWindow):
         self.bal_mode = ''
         self.pending = {}              # 노드 → {이름: 값}
         self.att_win = None            # 자세 창
+        self.step_on, self.step_phase = False, 0     # 턱 감지 모드 (balance/step_mode_active, step_phase)
 
         w = QtWidgets.QWidget()
         self.setCentralWidget(w)
@@ -670,6 +681,19 @@ class Gui(QtWidgets.QMainWindow):
         g.addWidget(self.t_ros, 0, 3)
         g.addWidget(self.t_follow, 1, 1)
         g.addWidget(self.t_mux, 1, 3)
+        # 턱 감지 모드 배지 (켜졌을 때만) + 점프 순간 배지 (2 초)
+        self.b_step = QtWidgets.QLabel(' STEP ')
+        self.b_step.setStyleSheet('background:#111; color:#fff; font-weight:bold; font-size:15pt; padding:2px 8px; border-radius:3px')
+        self.b_step.setToolTip('턱 감지 모드 (평지 전용) — 끄기: 패드 십자키 ↓ 또는 기능 탭')
+        self.b_step.hide()
+        self.b_jump = QtWidgets.QLabel(' JUMP ')
+        self.b_jump.setStyleSheet('background:#e67e22; color:#fff; font-weight:bold; font-size:15pt; padding:2px 8px; border-radius:3px')
+        self.b_jump.hide()
+        bb = QtWidgets.QHBoxLayout()
+        bb.addWidget(self.b_step)
+        bb.addWidget(self.b_jump)
+        bb.addStretch()
+        g.addLayout(bb, 2, 1, 1, 3)
         g.setColumnStretch(1, 1)
         g.setColumnStretch(3, 1)
         sit = QtWidgets.QPushButton('로봇 앉기')
@@ -743,6 +767,10 @@ class Gui(QtWidgets.QMainWindow):
                 self._btn('켜기', lambda: self.ros.set_params(PF, {'camera_only': True}), '켜기/끄기는 균형 중에도 됨'),
                 self._btn('끄기', lambda: self.ros.set_params(PF, {'camera_only': False}))]),
             ('jump', '점프 (패드 Y) — 읽기 전용', []),
+            ('step', '턱 감지 모드 (평지 전용, 패드 십자키 ↑/↓)', [
+                self._btn('켜기', lambda: self.ros.set_bool('/balance/step_mode', True, '턱 감지 모드 켜기'),
+                          '앞으로 밀면: 0.14 m/s 접근 → 턱에 막히면 0.3 m 후진 → 0.3 m/s 재주행 → 자동 점프. 스틱 놓으면 취소'),
+                self._btn('끄기', lambda: self.ros.set_bool('/balance/step_mode', False, '턱 감지 모드 끄기'))]),
             ('lidar', '장애물 앞 정지·감속 (라이다)', [
                 self._btn('켜기', lambda: self.ros.set_params('/cmd_mux', {'lidar_limit': True})),
                 self._btn('끄기', self.lidar_off, '로봇 기본 = 꺼짐. 켜면 자기 다리·바퀴를 장애물로 잡아 못 갈 수 있다 (2026-10-09)')]),
@@ -1092,6 +1120,9 @@ class Gui(QtWidgets.QMainWindow):
         else:
             self.lamp['jump'].set('off')
             self.note['jump'].setText('균형 노드 안 보임')
+            self.lamp['step'].set('off')
+            self.note['step'].setText('balance_node 없음')
+            self.b_step.hide()
         if '/cmd_mux' in names:
             self.ros.get_params('/cmd_mux', ['lidar_limit'])
         else:
@@ -1181,16 +1212,43 @@ class Gui(QtWidgets.QMainWindow):
             self.log(f'손짓: {s}')
         elif t == 'jump':
             self._on_jump(s)
+        elif t == 'step_mode':
+            self.step_on = s == '1'
+            self._show_step()
+        elif t == 'step_phase':
+            self.step_phase = int(s)
+            self._show_step()
+
+    def _show_step(self):
+        """상단 STEP 배지 (로봇 LCD 처럼 반전) + 단계, 기능 탭 줄."""
+        phase = {0: '접근', 1: '막힘 → 후진', 2: '재주행 → 점프'}.get(self.step_phase, str(self.step_phase))
+        self.b_step.setText(f' STEP · {phase} ')
+        self.b_step.setVisible(self.step_on)
+        self.lamp['step'].set('warn' if self.step_on else 'off')
+        self.note['step'].setText(f'켜짐 — {phase} (평지 전용: 앞으로만 밀기, 스틱 놓으면 취소)' if self.step_on
+                                  else '꺼짐 (패드 십자키 ↑ 켜기 / ↓ 끄기)')
 
     def _on_jump(self, s):
-        # balance_node.cpp: "jump: refused (v 0.76 m/s, need 0.20-0.40 forward and |wz| <= 1.0)" / "jump: start (v 0.37 m/s)"
-        m = re.match(r'jump: refused \(v (\S+) m/s, need (\S+)-(\S+) forward and \|wz\| <= (\S+)\)', s)
+        # balance_node.cpp (2026-10-23): "jump: refused, operator (v 0.76 m/s, need 0.20-0.40 forward and |wz| <= 1.0)",
+        # "jump: start, step-detect (v 0.30 m/s)", "step-detect: blocked -> back off (odo …)". 10-13 형식 (", who" 없음) 도 받는다
+        who_ko = {'operator': 'Y', 'step-detect': '턱 감지'}
+        m = re.match(r'jump: refused(?:, (\S+))? \(v (\S+) m/s, need (\S+)-(\S+) forward and \|wz\| <= (\S+)\)', s)
         if m:
-            v, lo, hi, wz = m.groups()
-            self.log(f'점프 거절: 속도 {v} m/s — {lo}–{hi} m/s 로 직진 중 (회전 {wz} rad/s 이하) 에 Y', err=True)
+            who, v, lo, hi, wz = m.groups()
+            self.log(f'점프 거절 ({who_ko.get(who, who or "Y")}): 속도 {v} m/s — {lo}–{hi} m/s 로 직진 중 (회전 {wz} rad/s 이하) 에만', err=True)
             return
-        m = re.match(r'jump: start \(v (\S+) m/s\)', s)
-        self.log(f'점프 시작 (속도 {m.group(1)} m/s)' if m else f'점프: {s[6:]}')
+        m = re.match(r'jump: start(?:, (\S+))? \(v (\S+) m/s\)', s)
+        if m:
+            self.log(f'점프 시작 ({who_ko.get(m.group(1), m.group(1) or "Y")}, 속도 {m.group(2)} m/s)')
+            self.b_jump.show()
+            QtCore.QTimer.singleShot(2000, self.b_jump.hide)
+            return
+        if s.startswith('step-detect: '):
+            ko = {'approach': '접근', 'blocked -> back off': '막힘 → 후진', 'run at the step': '재주행 → 점프'}
+            m = re.match(r'step-detect: (.*?) \(', s)
+            self.log(f'턱 감지: {ko.get(m.group(1), m.group(1)) if m else s[13:]}' + (s[s.index(' ('):] if ' (' in s else ''))
+            return
+        self.log(f'점프: {s[6:]}')
 
     def _on_done(self, what, ok, msg):
         if what.startswith('읽기'):
