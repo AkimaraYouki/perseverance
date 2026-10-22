@@ -14,6 +14,8 @@ balance/* services. Only standard messages, so it also runs on ROS 2 Humble.
   LB + RB 0.5 s  emergency DISARM (0 A — the robot drops)
   X              person follow on / off (registers the person ahead) (sticks override; release = follow resumes)
   Y              jump (balance/jump: needs >= 0.2 m/s forward, not turning — robot wb_core 2026-10-12)
+  D-pad ↑ / ↓    step-detect mode on / off (balance/step_mode): then just push forward — it approaches, backs off
+                 from a step and jumps it by itself; release the stick to cancel
 If /joy stops (pad unplugged, joy_node dead) the heartbeat stops: the robot stops, sits and disarms.
 
 Index defaults = the user's pad (Xbox over Bluetooth, joy_node on Humble, measured 2026-10-09):
@@ -46,7 +48,7 @@ class PadTeleop(Node):
         self.dead = p('deadzone', 0.08)
         self.joy_to = p('joy_timeout_s', 0.5)
         # defaults = the user's pad on the desktop (Xbox over Bluetooth, measured 2026-10-09)
-        self.ax = {k: p(f'{k}_axis', v) for k, v in dict(vx=1, wz=2, lt=5, rt=4).items()}
+        self.ax = {k: p(f'{k}_axis', v) for k, v in dict(vx=1, wz=2, lt=5, rt=4, dpad_y=7).items()}   # D-pad ↕: up = +1
         self.bt = {k: p(f'{k}_button', v) for k, v in dict(a=0, b=1, x=3, y=4, back=10, start=11, lb=6, rb=7).items()}
         self.joy, self.joy_t, self.prev = None, 0.0, {}
         self.h, self.estop_t = H_DEFAULT, None
@@ -55,12 +57,15 @@ class PadTeleop(Node):
         self.hp = self.create_publisher(Float64, 'balance/height', 10)
         self.cli = {k: self.create_client(Trigger, f'balance/{k}') for k in ('start', 'sit', 'disarm', 'jump')}
         self.cli_follow = self.create_client(SetBool, 'follow/enable')    # person_follow
+        self.cli_step = self.create_client(SetBool, 'balance/step_mode')  # step-detect mode
+        self.dpad_up = p('dpad_up_sign', 1.0)   # value of dpad_y_axis when ↑ is pressed (+1 or -1, check /joy)
+        self.dpad_prev = 0
         self.follow = False
         self.active_t = 0.0      # last time the sticks / A were used: the pad only commands while in use,
         #                          so cmd_mux falls back to cmd_vel/auto (ArUco follow) when the sticks rest
         self.create_subscription(Joy, 'joy', self._joy, 10)
         self.create_timer(0.05, self._tick)
-        self.get_logger().info('pad_teleop ready: START = start, BACK = sit, LB+RB 0.5 s = disarm')
+        self.get_logger().info('pad_teleop ready: START = start, BACK = sit, LB+RB 0.5 s = disarm, D-pad ↑/↓ = step mode')
         Live(self, {'vx_max': 'vx_max', 'wz_max': 'wz_max', 'deadzone': 'dead', 'height_rate': 'h_rate'})
 
     def _joy(self, m):
@@ -87,6 +92,13 @@ class PadTeleop(Node):
         f = self.cli[k].call_async(Trigger.Request())
         f.add_done_callback(lambda fu: self.get_logger().info(f'{k}: {fu.result().message}' if fu.result() else f'{k}: no reply'))
 
+    def _step_mode(self, on):
+        if not self.cli_step.service_is_ready():
+            self.get_logger().warn('balance/step_mode: balance_node not reachable')
+            return
+        f = self.cli_step.call_async(SetBool.Request(data=on))
+        f.add_done_callback(lambda fu: self.get_logger().info(f'step mode: {fu.result().message}' if fu.result() else 'step mode: no reply'))
+
     def _dz(self, v):
         return 0.0 if abs(v) < self.dead else (v - self.dead * (1 if v > 0 else -1)) / (1 - self.dead)
 
@@ -101,6 +113,11 @@ class PadTeleop(Node):
             self._call('sit')
         if self._edge('y'):
             self._call('jump')
+        d = self._axis('dpad_y') * self.dpad_up
+        d = 1 if d > 0.5 else -1 if d < -0.5 else 0
+        if d != 0 and d != self.dpad_prev:
+            self._step_mode(d > 0)
+        self.dpad_prev = d
         if self._btn('lb') and self._btn('rb'):
             self.estop_t = self.estop_t or time.monotonic()
             if time.monotonic() - self.estop_t > 0.5:

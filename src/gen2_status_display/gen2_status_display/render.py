@@ -352,7 +352,13 @@ def render(s, fast=True, slow=True):
     clock = time.strftime('%H:%M', time.localtime(s.get('wall_time', time.time())))
     if not slow:
         clock = clock.replace(':', ' ')  # colon ticks once a second: the display is alive
-    _txt(d, (W - 6 - d.textlength(clock, font=F_S), 5), clock, F_S, DIM)
+    cx = W - 6 - d.textlength(clock, font=F_S)
+    if s.get('step_mode'):   # step-detect mode on (pad D-pad up): steady inverted tag after the mode badge
+        sx, sw = x + tw + 12, d.textlength('STEP', font=F_SB)
+        if sx + sw + 8 < cx - 4:
+            d.rectangle([sx, 3, sx + sw + 8, 17], fill=FG)
+            d.text((sx + 4, 5), 'STEP', font=F_SB, fill=BG)
+    _txt(d, (cx, 5), clock, F_S, DIM)
 
     L, M, R = 2, 160, 318
     T, C, B = 21, 128, 238

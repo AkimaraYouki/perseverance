@@ -11,7 +11,7 @@ import rclpy
 from PIL import ImageChops
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 
 from . import lcd_handover, splash
 from .render import BAD, DIM, OK, USED, WARN, render
@@ -59,6 +59,11 @@ class StatusDisplay(Node):
         self.state, self.state_t = None, 0.0
         self.create_subscription(DiagnosticArray, 'diagnostics', self._on_diag, 20)
         self.create_subscription(String, 'robot/state', self._on_state, 10)
+        # step-detect mode (balance_node, latched): 'STEP' tag in the header
+        from rclpy.qos import QoSProfile as _Q, DurabilityPolicy as _D
+        self.step_mode = False
+        self.create_subscription(Bool, 'balance/step_mode_active', lambda m: setattr(self, 'step_mode', m.data),
+                                 _Q(depth=1, durability=_D.TRANSIENT_LOCAL))
         # balance_node mode (controller/state is 100 Hz: polled on a side node, no per-message callbacks)
         from gen2_msgs.msg import ControllerState
         from rclpy.qos import QoSProfile, ReliabilityPolicy
@@ -152,7 +157,7 @@ class StatusDisplay(Node):
         if state is None and self._cs is not None and now - self._cs_t < 2.0:
             m = self._cs.mode
             state = f'FAULT {self._cs.fault[:18]}' if m == 'fault' else m.upper()
-        return dict(robot_state=state, wall_time=time.time(), sys=sy,
+        return dict(robot_state=state, step_mode=self.step_mode, wall_time=time.time(), sys=sy,
                     compute=self._battery('sensor_hub: power compute'),
                     motor=self._battery('sensor_hub: power motor'),
                     motors=motors, hub=hub, gps=gps, mag=mag,

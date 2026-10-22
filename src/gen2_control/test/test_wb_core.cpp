@@ -31,7 +31,7 @@ static std::vector<std::vector<double>> read_csv(const std::string & path, std::
   return rows;
 }
 
-static void run_case(const char * file, const Params & P)
+static void run_case(const char * file, const Params & P, int min_jumps = 5)
 {
   LqrTable lqr;
   for (const auto & r : read_csv(std::string(GOLDEN_DIR) + "/lqr.csv", nullptr)) {
@@ -48,6 +48,8 @@ static void run_case(const char * file, const Params & P)
   std::size_t worst_k = 0;
   int lifted = 0, jumps = 0, prev_phase = 0;
   const bool has_jump = c.count("jump") > 0;
+  const bool has_rt = c.count("rt_phase") > 0;
+  int fires = 0;
   for (std::size_t k = 0; k < rows.size(); ++k) {
     const auto & r = rows[k];
     Frame f;
@@ -66,6 +68,10 @@ static void run_case(const char * file, const Params & P)
       jumps += prev_phase == kDrive && o.phase == kRetract;
       prev_phase = o.phase;
     }
+    if (has_rt) {
+      ASSERT_EQ(o.rt_phase, static_cast<int>(r[c["rt_phase"]])) << "step " << k << " step-detect phase";
+      fires += o.rt_fire;
+    }
     const double exp_[] = {r[c["a0"]], r[c["a1"]], r[c["a2"]], r[c["a3"]], r[c["kp"]], r[c["kd"]], r[c["ff"]],
                            r[c["th"]], r[c["v"]], r[c["lifted"]]};
     const double got[] = {o.act[0], o.act[1], o.act[2], o.act[3], o.leg_kp, o.leg_kd, o.ff_force, o.th, o.v,
@@ -77,8 +83,10 @@ static void run_case(const char * file, const Params & P)
     }
     lifted += o.lifted;
   }
-  if (has_jump) {EXPECT_GE(jumps, 5);} else {EXPECT_GT(lifted, 50);}   // the jump / lift path was exercised
-  std::printf("max |diff| %.3g at step %zu, lifted steps %d, jumps %d\n", worst, worst_k, lifted, jumps);
+  if (has_jump) {EXPECT_GE(jumps, min_jumps);} else {EXPECT_GT(lifted, 50);}   // the jump / lift path was exercised
+  if (has_rt) {EXPECT_EQ(fires, jumps);}   // every jump came from the step-detect mode (no operator requests in that case)
+  std::printf("max |diff| %.3g at step %zu, lifted steps %d, jumps %d, step-detect fires %d\n", worst, worst_k, lifted, jumps,
+    fires);
 }
 
 TEST(WBCore, MatchesPythonSpec) {run_case("golden.csv", Params{});}
@@ -106,4 +114,35 @@ TEST(WBCore, MatchesPythonSpecJumpSpinMatch)   // GOLDEN_SPIN=1 WBCTRL_DIR=<jump
   P.yaw_kd = 0.15; P.yaw_ki = 1.0; P.yaw_i_max = 0.5;
   P.spin_match_k = 0.25; P.air_w_max = 5.0;
   run_case("golden_jump_spin.csv", P);
+}
+
+TEST(WBCore, MatchesPythonSpecStepDetect)   // GOLDEN_RETRY=1 WBCTRL_DIR=<jump-rl 6b64ca0 wbctrl> python3 test/gen_golden.py
+{
+  Params P;
+  P.jerk_max = 3.0; P.accel_max = 0.8; P.x_hold_moving = false; P.x_leak_moving = 0.5; P.lean_ff = 1.0;
+  P.yaw_kd = 0.15; P.yaw_ki = 1.0; P.yaw_i_max = 0.5;
+  P.jump_retry = true; P.retry_approach_v = 0.14; P.retry_v = 0.3; P.retry_settle_s = 0.5; P.retry_stall_frac = 0.5;
+  P.retry_block_s = 0.15; P.retry_back_m = 0.3004; P.retry_back_v = 0.3; P.retry_contact = 0.07; P.trigger = 0.27;
+  P.retry_trig_k = 0.4; P.retry_fire_frac = 0.5; P.retry_land_hold_s = 0.5; P.retry_vmax = 0.4;
+  run_case("golden_retry.csv", P, 2);
+}
+
+TEST(WBCore, StepDetectSwitchClearsState)
+{
+  LqrTable lqr;
+  lqr.l = {0.1, 0.3};
+  lqr.K = {{-1.0, -1.0, -10.0, -1.0}, {-1.0, -1.0, -10.0, -1.0}};
+  Params P;
+  P.jump_retry = true; P.retry_approach_v = 0.14; P.retry_block_s = 0.05;
+  WBCore core(P, lqr);
+  Frame f;
+  f.tau_hip[0] = f.tau_hip[1] = 2.0;
+  Output o;
+  for (int k = 0; k < 40; ++k) {f.t = k * kDt; o = core.step(f, 0.5, 0.0, 0.1825);}   // forward but not moving: blocked
+  EXPECT_EQ(o.rt_phase, 1);
+  core.set_jump_retry(false);
+  f.t += kDt;
+  o = core.step(f, 0.5, 0.0, 0.1825);
+  EXPECT_EQ(o.rt_phase, 0);
+  EXPECT_FALSE(core.jump_retry());
 }

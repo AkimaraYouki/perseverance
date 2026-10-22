@@ -1,6 +1,6 @@
 // Wheel-leg balance controller core = C++ port of sim/isaaclab/scripts/wbctrl.py (WBController.step),
 // one robot, DRIVE + jump state machine (2026-10-12; no automatic edge trigger: the jump is requested by the caller),
-// bump_slow off, jump_retry off, no sensor noise / delay models.
+// bump_slow off, jump_retry = step-detect mode (2026-10-23, off unless Params::jump_retry), no sensor noise / delay models.
 // Pure computation, no ROS: the node builds a Frame from the hardware each 5 ms and applies the output.
 // Units and signs as wbctrl.py:
 //   pitch = asin(g_x) (+ = nose down), roll = asin(g_y) (+ = left side low)
@@ -72,6 +72,17 @@ struct Params      // climb_test.py TUNE defaults (2026-10-07)
   bool air_ctrl = true, air_pd_extract = true;        // wheel pitch PD in the air (and already in EXTRACT)
   double air_pitch = -5.0, land_pitch = 0.0, extract_pitch = 0.0;   // [deg] targets FLY / DESCEND / EXTRACT
   double air_kp = 30.0, air_kd = 5.0, air_tau = 7.0;  // [N·m/rad], [N·m·s/rad], clip [N·m] per wheel
+  // --- step-detect mode (wbctrl jump_retry, desktop/jump-rl 6b64ca0; defaults = climb_test.py TUNE). The operator only pushes
+  // forward: approach at retry_approach_v -> not moving = a step -> back off retry_back_m at retry_back_v -> run again at retry_v
+  // -> jump request when the wheel centre is trigger (+ retry_trig_k (v - retry_v)) before the edge. Releasing forward cancels
+  // (a back-off already started finishes). The jump state machine is unchanged: this only makes the request (and sets vx).
+  bool jump_retry = false;
+  double retry_approach_v = 0.0, retry_v = 0.0;        // [m/s] 0 = the stick speed
+  double retry_vmax = 0.0;                             // [m/s] speed cap while the mode is driving (0 = off)
+  double retry_stall_frac = 0.0, retry_settle_s = 0.0; // stall = v < frac x approach after settle_s at >= 0.8 x approach (0 = |v| < 0.05)
+  double retry_land_hold_s = 0.0;                      // [s] stand still this long after a landing before approaching again
+  double retry_trig_k = 0.0, retry_fire_frac = 0.0;    // speed-adaptive trigger [s]; fire only at >= frac x retry_v
+  double retry_block_s = 0.4, retry_back_m = 0.5, retry_back_v = 0.3, retry_contact = 0.07, trigger = 0.30;
 };
 
 struct LqrTable    // K(l) for x = [x_err, v_err, th, thd]; tau = -K x (sum of both wheels)
@@ -104,6 +115,9 @@ struct Output
   bool lifted = false;
   int phase = kDrive;               // jump phase after this step
   bool jump_blocked = false;        // a jump was requested but refused (too slow / turning)
+  int rt_phase = 0;                 // step-detect mode: 0 approach / idle, 1 backing off, 2 running at the step
+  double odo = 0.0;                 // step-detect odometry [m]
+  bool rt_fire = false;             // step-detect mode requested the jump this step
 };
 
 class WBCore
@@ -117,9 +131,13 @@ public:
   int phase() const {return phase_;}
   const Params & params() const {return P_;}
   void set_vmax_kmh(double v) {P_.vmax_kmh = v;}     // runtime speed cap (balance_node live param, disarmed only)
+  // step-detect mode on / off at run time (operator, balance/step_mode); switching clears its state
+  void set_jump_retry(bool on) {P_.jump_retry = on; reset_retry();}
+  bool jump_retry() const {return P_.jump_retry;}
 
 private:
   double lqr_torque(double l, double x_err, double v_err, double th, double thd) const;
+  void reset_retry();
   Params P_;
   LqrTable lqr_;
   // state (names as wbctrl.py)
@@ -130,6 +148,9 @@ private:
   double t_phase_ = 0.0, t_takeoff_ = 0.0, h0_ = 0.1825;
   bool soft_ = false;
   double wf_[2], db_e_[2];
+  // step-detect mode (wbctrl odo, rt_x, blk_t, rt_run, rt_phase, t_jend, rt_cap)
+  double odo_ = 0.0, rt_x_ = 0.0, blk_t_ = 0.0, rt_run_ = 0.0, t_jend_ = -99.0, rt_cap_ = 0.0;
+  int rt_phase_ = 0;
 };
 
 }  // namespace gen2_control

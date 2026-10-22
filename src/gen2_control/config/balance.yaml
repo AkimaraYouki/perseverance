@@ -94,3 +94,21 @@ balance:
       leg_kd: 0.56              # 2026-10-23 CMA-11 hip15 [0.2 CMA-11 hip12]
       spin_match_k: 0.6944      # 2026-10-23 stairs2 hip15 [0.325 CMA-11 hip12]
       air_w_max: 12.0           # 2026-10-23 CMA-11 hip15 [15.0 CMA-11 hip12]
+      # step-detect mode (2026-10-23 port of wbctrl jump_retry, desktop 2026-10-21 "갱신 2" final values; comms 2026-10-20 step-detect):
+      # pad D-pad up = on, down = off (balance/step_mode). Push forward only: approach 0.14 m/s -> stalled = a step -> back off
+      # 0.30 m -> run at 0.30 m/s -> jump at trigger + retry_trig_k (v - retry_v) before the edge. Release forward = cancel.
+      # Sim (2048 runs, 15 N·m, auto retries): 2-tier stairs 6 cm 97.3 %, 8 cm 98.5 %, step 10 cm 99.8 %, 12 cm 98.3 %.
+      jump_retry: false         # off at start; the D-pad switches it
+      retry_approach_v: 0.14
+      retry_settle_s: 0.5
+      retry_stall_frac: 0.5
+      retry_block_s: 0.15
+      retry_back_m: 0.3004
+      retry_back_v: 0.3
+      retry_v: 0.3
+      retry_trig_k: 0.4
+      retry_contact: 0.07       # wheel radius
+      trigger: 0.27
+      retry_fire_frac: 0.0      # desktop: tried, no gain -> off
+      retry_land_hold_s: 0.0    # desktop: tried, no gain -> off
+      retry_vmax: 0.0           # desktop: falls 14 -> 50 % -> off
