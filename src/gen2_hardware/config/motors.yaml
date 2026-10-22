@@ -105,7 +105,7 @@
         gear_ratio: 6.0             # AK60-6 = 6:1
         raw_deg_per_output_rev: 360.0  # VERIFY (scale check)
         direction: 1               # hip_cli 2026-10-07: + = leg extends (sim M)
-        position_offset_rad: -0.464258  # user zero pose 2026-10-06: raw -26.6 deg (drive frame) = joint 0
+        position_offset_rad: -0.474730  # 2026-10-22 hip_cli zero (CAD theta 45 deg) = 0.572468 saved while the power-up 60 deg wrap was wrong -> minus 60 deg (0.6 deg from the 10-06 zero -0.464258)
         kt_nm_per_a: 0.81           # PROVISIONAL 2026-10-07: product page 0.135 x 6 (manual table 0.5994 is 35 % off;
                                     # hanging-leg test -> 0.67–0.82). Confirm with the weight-difference test.
         current_limit_a: 15.0       # 2026-10-15 user ok (desktop CMA-11): hip command cap 12 N·m. [10.0 = datasheet peak 10.3 A @24 V x 0.81 = 8.1 N·m]
@@ -120,8 +120,8 @@
         # Power-up 60 deg ambiguity (rotor encoder only, 6:1): resolved from the end stops measured
         # 2026-10-07 (0.2 rad/s into each stop, |I| > 2.5 A while not moving). CAD: -9.9 .. +55.4.
         wrap_deg: 60.0
-        stop_min_deg: -13.7         # retracted end (joint deg)
-        stop_max_deg: 58.9          # extended end; legs hang here when the robot is lifted
+        stop_min_deg: -13.1         # retracted end (joint deg; 2026-10-22 re-zero shifted the 10-07 stops by +0.6)
+        stop_max_deg: 59.5          # extended end; legs hang here when the robot is lifted
         stop_margin_deg: 2.0
         protocol: "servo"           # drives upload servo 0x29 at 500 Hz (2026-10-03); "mit_v3" ready
         mit:                        # manual V3.2.0 §4.2 table (AK60-6); p from the V3 example

@@ -16,6 +16,11 @@ sys.path.insert(0, os.path.join(WS, 'sim/isaaclab/scripts'))
 # GOLDEN_SPIN=1 -> golden_jump_spin.csv: the jump case with spin_match_k 0.25 + air_w_max 5 (wbctrl from WBCTRL_DIR, e.g. a
 # `git show origin/desktop/jump-rl:sim/isaaclab/scripts/wbctrl.py` copy, until that wbctrl is merged)
 SPIN = os.environ.get('GOLDEN_SPIN') == '1'
+# GOLDEN_RETRY=1 -> golden_retry.csv: step-detect mode (wbctrl jump_retry, desktop/jump-rl 6b64ca0 via WBCTRL_DIR) on a scripted
+# step course: the wheels follow the mode's own phase (approach / stalled at the edge / back off / run) and the jumps land on the
+# next step. Exercises approach, settle, stall, back-off, run, speed-adaptive trigger, fire gating, landing hold, speed cap and a
+# released stick.
+RETRY = os.environ.get('GOLDEN_RETRY') == '1'
 if os.environ.get('WBCTRL_DIR'):
     sys.path.insert(0, os.environ['WBCTRL_DIR'])
 import lqr_vmc  # noqa: E402
@@ -38,13 +43,17 @@ P = SimpleNamespace(
     air_kp=30.0, air_kd=5.0, air_tau=7.0, bump_rate=1.5, bump_acc=4.0, bump_hold_s=2.0, bump_vmax=0.45)
 M_PEND = 4.02
 lqr = lqr_vmc.WheelLQR(M_PEND, 0.0293, 0.145, 2 * (1.8414e-3 + 4.5e-4), wbctrl.R_WHEEL)
-JUMP = os.environ.get('GOLDEN_JUMP') == '1' or SPIN
+JUMP = os.environ.get('GOLDEN_JUMP') == '1' or SPIN or RETRY
 ROBOT = os.environ.get('GOLDEN_ROBOT') == '1' or JUMP
 if ROBOT:   # robot additions (2026-10-09): S-curve, x_leak, lean_ff, x_hold_moving off, yaw integral
     P.jerk_max, P.accel_max, P.x_hold_moving, P.x_leak_moving, P.lean_ff = 3.0, 0.8, False, 0.5, 1.0
     P.yaw_kd, P.yaw_ki, P.yaw_i_max = 0.15, 1.0, 0.5
 if SPIN:
     P.spin_match_k, P.air_w_max = 0.25, 5.0
+if RETRY:   # desktop 2026-10-21 bundle (갱신 2) + the optional parts switched on so they are covered
+    P.jump_retry, P.retry_approach_v, P.retry_v, P.retry_settle_s, P.retry_stall_frac = True, 0.14, 0.3, 0.5, 0.5
+    P.retry_block_s, P.retry_back_m, P.retry_back_v, P.retry_contact, P.trigger = 0.15, 0.3004, 0.3, 0.07, 0.27
+    P.retry_trig_k, P.retry_fire_frac, P.retry_land_hold_s, P.retry_vmax = 0.4, 0.5, 0.5, 0.4
 ctl = wbctrl.WBController(P, lqr, M_PEND, n=1, seed=0)
 
 with open(os.path.join(HERE, 'lqr.csv'), 'w') as f:
@@ -52,14 +61,56 @@ with open(os.path.join(HERE, 'lqr.csv'), 'w') as f:
         f.write(f'{l!r},{K[0]!r},{K[1]!r},{K[2]!r},{K[3]!r}\n')
 
 rng = np.random.default_rng(1)
-N = 3000
+N = 5200 if RETRY else 3000
 cols = ['t', 'gx_b', 'gy_b', 'gz_b', 'wx', 'wy', 'wz_b', 'hL', 'hR', 'tauL', 'tauR', 'wjL', 'wjR', 'waL', 'waR',
         'th_kin', 'l_pend', 'sf', 'motor_scale', 'vx', 'wzc', 'h_ref', 'h_mid',
-        'a0', 'a1', 'a2', 'a3', 'kp', 'kd', 'ff', 'th', 'v', 'lifted'] + (['jump', 'phase'] if JUMP else [])
+        'a0', 'a1', 'a2', 'a3', 'kp', 'kd', 'ff', 'th', 'v', 'lifted'] + (['jump', 'phase'] if JUMP else []) \
+    + (['rt_phase'] if RETRY else [])
 pitch = roll = 0.0
 w = np.zeros(2)
 rows = []
+x_pos, edge, n_desc = 0.0, 0.8, 0      # RETRY: body position [m], next step edge [m], steps in DESCEND
 for k in range(N):
+    if RETRY:
+        # step course: forward stick (released while approaching at 13 s and while running at 16 s); the wheels follow the
+        # mode's phase; blocked at the edge
+        t = k * wbctrl.DT
+        pitch += rng.normal(0, 0.004); pitch *= 0.995
+        roll += rng.normal(0, 0.003); roll *= 0.99
+        vx, wzc = (0.0 if 2600 <= k < 2800 or 3190 <= k < 3260 else 0.5), 0.0   # released: approaching / running
+        ph, rp = int(ctl.phase[0]), int(ctl.rt_phase[0])
+        R = wbctrl.R_WHEEL
+        if ph == wbctrl.DRIVE:
+            wv = -0.3 / R if rp == 1 else 0.3 / R if rp == 2 else (0.14 / R if vx > 0.05 else 0.0)
+            if rp != 1 and x_pos >= edge - 0.07:
+                wv = 0.0                                   # wheel against the step
+        else:
+            wv = 0.3 / R                                   # carried forward over the edge while jumping
+        w = wv + rng.normal(0, 0.05, 2)
+        x_pos += R * float(np.mean(w)) * wbctrl.DT
+        n_desc = n_desc + 1 if ph == wbctrl.DESCEND else 0
+        tau = 2.0 + rng.normal(0, 0.3, 2)
+        if ph == wbctrl.FLY or (ph == wbctrl.DESCEND and n_desc < 10):
+            tau = 0.5 + rng.normal(0, 0.1, 2)              # legs unloaded in the air
+        elif ph == wbctrl.DESCEND:
+            tau = np.array([3.0, 2.6])                     # touch-down
+        g = np.array([math.sin(pitch), math.sin(roll) * math.cos(pitch), math.cos(roll) * math.cos(pitch)])
+        wb = rng.normal(0, 0.2, 3)
+        h = 0.1825 + rng.normal(0, 0.01, 2)
+        th_kin = 0.02 + rng.normal(0, 0.005)
+        l_pend = 0.22 + 0.05 * math.sin(k / 400)
+        sf = 1.0 + rng.normal(0, 0.05)
+        f = wbctrl.Frame(t=t, g_b=g[None], w_b=wb[None], h=h[None], tau_hip=tau[None], w_wheel_joint=w[None].copy(),
+                         w_wheel_abs=(w + rng.normal(0, 0.05, 2))[None], th_kin=np.array([th_kin]),
+                         l_pend=np.array([l_pend]), wx=np.array([0.0]), wheel_z_min=np.array([0.0]), yaw=np.array([0.0]),
+                         sf=np.array([sf]), truth_th=np.array([0.0]), truth_v=np.array([0.0]), motor_scale=np.array([1.0]))
+        act, kp, kd, ff, info = ctl.step(f, vx, wzc, 0.1825, jump=False, h_mid=None)
+        if ph == wbctrl.LAND and int(ctl.phase[0]) == wbctrl.DRIVE:
+            edge = x_pos + 0.9                             # landed on the step: the next edge is ahead
+        rows.append([t, *g, *wb, *h, *tau, *f.w_wheel_joint[0], *f.w_wheel_abs[0], th_kin, l_pend, sf, 1.0, vx, wzc,
+                     0.1825, -1.0, *act[0], kp[0], kd[0], ff[0], info['th'][0], info['v'][0], float(ctl.lift_on[0]),
+                     0.0, float(ctl.phase[0]), float(ctl.rt_phase[0])])
+        continue
     t = k * wbctrl.DT
     pitch += rng.normal(0, 0.004); pitch *= 0.995
     roll += rng.normal(0, 0.003); roll *= 0.99
@@ -105,12 +156,20 @@ for k in range(N):
     rows.append([t, *g, *wb, *h, *tau, *f.w_wheel_joint[0], *f.w_wheel_abs[0], th_kin, l_pend, sf, ms, vx, wzc,
                  0.1825, h_mid, *act[0], kp[0], kd[0], ff[0], info['th'][0], info['v'][0], float(ctl.lift_on[0])]
                 + ([float(jump), float(ctl.phase[0])] if JUMP else []))
-name = 'golden_jump_spin.csv' if SPIN else 'golden_jump.csv' if JUMP else 'golden_robot.csv' if ROBOT else 'golden.csv'
+name = ('golden_retry.csv' if RETRY else 'golden_jump_spin.csv' if SPIN else 'golden_jump.csv' if JUMP else
+        'golden_robot.csv' if ROBOT else 'golden.csv')
 with open(os.path.join(HERE, name), 'w') as fo:
     fo.write(','.join(cols) + '\n')
     for r in rows:
         fo.write(','.join(repr(float(x)) for x in r) + '\n')
-if JUMP:
+if RETRY:
+    rp = [int(r[-1]) for r in rows]
+    ph = [int(r[-2]) for r in rows]
+    print(f'golden_retry: {N} steps, jumps {sum(1 for a, b in zip(ph, ph[1:]) if a == 0 and b == 1)}, '
+          f'blocked (0->1) {sum(1 for a, b in zip(rp, rp[1:]) if a == 0 and b == 1)}, '
+          f'run (1->2) {sum(1 for a, b in zip(rp, rp[1:]) if a == 1 and b == 2)}, '
+          f'released (2->0 without a jump) {sum(1 for i in range(1, N) if rp[i - 1] == 2 and rp[i] == 0 and ph[i] == 0)}')
+elif JUMP:
     ph = [int(r[-1]) for r in rows]
     print(f'golden_jump: {N} steps, requests {sum(r[-2] for r in rows):.0f}, phase steps',
           {n: ph.count(i) for i, n in enumerate(('DRIVE', 'RETRACT', 'EXTRACT', 'FLY', 'DESCEND', 'LAND'))},

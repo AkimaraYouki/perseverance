@@ -13,9 +13,11 @@ status_display:
     invert_colors: true
     bgr: false
     rotate_180: false         # panel orientation (true = flip 180°)
-    # 2026-10-14: sensor hub (GPS, magnetometer, PM02 battery sensing) removed -> computer power estimated:
-    pc_power_factor: 1.08     # computer W = 1.08 x Jetson VDD_IN + 3.93 (Rigol two-point fit 2026-10-12)
-    pc_power_offset_w: 3.93
+    gps_expected: true        # GPS connected (NEO-M8N @230400): missing NAV-PVT blinks
+    compute_cells: 3
+    motor_cells: 6
+    warn_cell_v: 3.5
+    error_cell_v: 3.3
     wifi_iface: "auto"
     eth_iface: "auto"
     snapshot_path: "/tmp/gen2_lcd.png"   # latest rendered frame, for viewing over SSH

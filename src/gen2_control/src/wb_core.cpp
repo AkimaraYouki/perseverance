@@ -36,6 +36,14 @@ void WBCore::reset()
   lift_on_ = false;
   wf_[0] = wf_[1] = db_e_[0] = db_e_[1] = 0.0;
   phase_ = kDrive; t_phase_ = t_takeoff_ = 0.0; h0_ = P_.idle_h; soft_ = false;
+  reset_retry();
+}
+
+void WBCore::reset_retry()
+{
+  odo_ = rt_x_ = blk_t_ = rt_run_ = rt_cap_ = 0.0;
+  t_jend_ = -99.0;
+  rt_phase_ = 0;
 }
 
 double WBCore::lqr_torque(double l, double x_err, double v_err, double th, double thd) const
@@ -80,6 +88,45 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
   const double t = f.t;
   const int ph0 = phase_;
   const double tp = t - t_phase_;
+  bool fire = false;
+  if (P.jump_retry) {
+    // step-detect mode (wbctrl jump_retry): approach slowly -> blocked = a step -> back off -> run again -> jump request.
+    // Same order of updates as wbctrl; every condition uses the phase at the start of this step (ph0) and lift_on_ before
+    // this step's lift detection.
+    odo_ += v_now * kDt;
+    const double av = P.retry_approach_v, rv = P.retry_v;
+    const bool want = vx > (av > 0 ? 0.05 : 0.15);
+    if (want && rt_phase_ == 0 && av > 0) {vx = av;}                                  // approach slowly
+    if (want && av > 0 && t - t_jend_ < P.retry_land_hold_s) {vx = 0.0;}               // stand after a landing
+    rt_cap_ = want && av > 0 ? P.retry_vmax : 0.0;
+    const bool drv0 = ph0 == kDrive && !lift_on_;                                      // not while jumping / landing
+    if (drv0 && want && rt_phase_ == 0) {
+      if (v_now >= 0.8 * av) {rt_run_ += kDt;}
+    } else {
+      rt_run_ = 0.0;
+    }
+    const bool moved = rt_run_ >= P.retry_settle_s + 1e-9;
+    const bool stall = P.retry_stall_frac > 0 ? moved && v_now < P.retry_stall_frac * av : v_now < 0.05;
+    const bool blk = drv0 && want && stall && rt_phase_ == 0;
+    blk_t_ = blk ? blk_t_ + kDt : 0.0;
+    if (blk_t_ >= P.retry_block_s) {rt_x_ = odo_; rt_phase_ = 1; blk_t_ = 0.0;}          // blocked: remember where
+    if (rt_phase_ == 1) {
+      vx = -P.retry_back_v;                                                           // back off
+      if (odo_ <= rt_x_ - P.retry_back_m) {rt_phase_ = 2;}
+    }
+    if (rt_phase_ == 2 && want && rv > 0) {vx = rv;}                                   // run again at a fixed speed
+    const double trg = P.trigger + P.retry_trig_k * (v_now - rv);
+    fire = rt_phase_ == 2 && odo_ >= rt_x_ + P.retry_contact - trg && v_now >= P.retry_fire_frac * (rv > 0 ? rv : 0.0);
+    // blocked again while running at it (did not jump): back off again
+    if (rt_phase_ == 2 && ph0 == kDrive && v_now < 0.05 && odo_ >= rt_x_ - 0.05 && P.retry_fire_frac > 0) {
+      rt_x_ = odo_; rt_phase_ = 1;
+    }
+    if (fire || (!want && rt_phase_ == 2)) {rt_phase_ = 0;}                           // fired, or forward released
+    jump = jump || fire;
+  } else {
+    rt_cap_ = 0.0;
+  }
+  o.rt_fire = fire;
   const bool blocked = jump && ph0 == kDrive && (v_now < P.jump_min_v || v_now > P.jump_max_v || std::fabs(wz_now) > P.jump_max_wz);
   o.jump_blocked = blocked;
   jump = jump && !blocked;
@@ -93,12 +140,14 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
   if (m0) {h0_ = 0.5 * (f.h[0] + f.h[1]);}
   if (m2) {t_takeoff_ = t;}
   if (m3) {soft_ = true;} else if (m5) {soft_ = false;}
+  if (m5) {t_jend_ = t;}
   phase_ = m0 ? kRetract : m1 ? kExtract : m2 ? kFly : m3 ? kDescend : m4 ? kLand : m5 ? kDrive : ph0;
   if (m0 || m1 || m2 || m3 || m4 || m5) {t_phase_ = t;}
   const int ph = phase_;
   const bool ctl = ph == kDrive || ph == kRetract || ph == kExtract || ph == kLand;   // LQR drives the wheels
   // --- speed limit / brake / LQR (state committed only while ctl)
-  const double vm = std::min(P.vmax_kmh / 3.6, P.vmax_motor_frac * w_max * P.r_wheel);
+  double vm = std::min(P.vmax_kmh / 3.6, P.vmax_motor_frac * w_max * P.r_wheel);
+  if (rt_cap_ > 0 && ph == kDrive) {vm = std::min(vm, rt_cap_);}   // step-detect speed cap: before the jump only
   double g_vf = g_vf_ + lpf_a(P.speed_lpf_hz) * (v_now - g_vf_);
   const double e = std::fabs(g_vf) - vm;
   double g_i = clip(g_i_ + P.brake_ki * e * kDt, 0.0, vm);
@@ -259,6 +308,7 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
   o.leg_kp = leg_kp; o.leg_kd = leg_kd; o.ff_force = ffF;
   o.th = th; o.thd = thd; o.v = v_now; o.pitch = pitch; o.roll = roll; o.x_err = x_err_;
   o.th_bias = th_bias_; o.lifted = lifted; o.phase = ph;
+  o.rt_phase = rt_phase_; o.odo = odo_;
   return o;
 }
 

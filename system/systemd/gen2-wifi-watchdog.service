@@ -1,0 +1,6 @@
+[Unit]
+Description=Gen2 Wi-Fi reconnect watchdog
+After=NetworkManager.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/gen2-wifi-watchdog.sh

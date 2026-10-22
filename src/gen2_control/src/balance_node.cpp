@@ -44,7 +44,10 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
+#include "std_msgs/msg/bool.hpp"
+#include "std_msgs/msg/int8.hpp"
 #include "std_msgs/msg/empty.hpp"
+#include "std_srvs/srv/set_bool.hpp"
 #include "std_srvs/srv/trigger.hpp"
 
 using namespace std::chrono_literals;
@@ -78,6 +81,7 @@ struct StepRec
   double h[2], M[2], Md[2], h_tgt[2], hip_tau[2], hip_cur_fb[2], hip_age_ms[2];
   double w_wheel[2], tau_lqr, tau_yaw, wheel_pre_lpf[2], wheel_tau[2], wheel_tau_fb[2], wheel_age_ms[2];
   int jump_phase;
+  int rt_phase;       // step-detect mode phase (0 approach, 1 back off, 2 run)
 };
 constexpr std::size_t kRing = 8192;
 
@@ -238,6 +242,21 @@ public:
     P.air_kp = declare_parameter("tune.air_kp", P.air_kp);
     P.air_kd = declare_parameter("tune.air_kd", P.air_kd);
     P.air_tau = declare_parameter("tune.air_tau", P.air_tau);
+    // step-detect mode (wb_core jump_retry, desktop 2026-10-21 bundle): off at start, switched by balance/step_mode (pad D-pad)
+    P.jump_retry = declare_parameter("tune.jump_retry", false);
+    P.retry_approach_v = declare_parameter("tune.retry_approach_v", P.retry_approach_v);
+    P.retry_v = declare_parameter("tune.retry_v", P.retry_v);
+    P.retry_vmax = declare_parameter("tune.retry_vmax", P.retry_vmax);
+    P.retry_stall_frac = declare_parameter("tune.retry_stall_frac", P.retry_stall_frac);
+    P.retry_settle_s = declare_parameter("tune.retry_settle_s", P.retry_settle_s);
+    P.retry_land_hold_s = declare_parameter("tune.retry_land_hold_s", P.retry_land_hold_s);
+    P.retry_trig_k = declare_parameter("tune.retry_trig_k", P.retry_trig_k);
+    P.retry_fire_frac = declare_parameter("tune.retry_fire_frac", P.retry_fire_frac);
+    P.retry_block_s = declare_parameter("tune.retry_block_s", P.retry_block_s);
+    P.retry_back_m = declare_parameter("tune.retry_back_m", P.retry_back_m);
+    P.retry_back_v = declare_parameter("tune.retry_back_v", P.retry_back_v);
+    P.retry_contact = declare_parameter("tune.retry_contact", P.retry_contact);
+    P.trigger = declare_parameter("tune.trigger", P.trigger);
     P.m_pend = model_ok_ ? m_pend_ : P.m_pend;
     // wheels in MIT (legacy AK45-10 firmware): no 0.5 A deadband -> no sigma-delta compensation
     for (const auto & c : motors) {
@@ -329,6 +348,20 @@ public:
           rs->success = true;
           rs->message = "ok: jump requested (needs " + std::to_string(params_.jump_min_v).substr(0, 4) + "-" + std::to_string(params_.jump_max_v).substr(0, 4) + " m/s forward, not turning)";
         });
+    // step-detect mode on / off (pad D-pad up / down): applied by the control loop on its next step
+    step_mode_ = params_.jump_retry;
+    srv_step_ = create_service<std_srvs::srv::SetBool>("balance/step_mode",
+        [this](std_srvs::srv::SetBool::Request::ConstSharedPtr rq, std_srvs::srv::SetBool::Response::SharedPtr rs) {
+          if (!core_) {rs->success = false; rs->message = "no controller model"; return;}
+          step_req_ = rq->data ? 1 : 0;
+          step_mode_ = rq->data;
+          rs->success = true;
+          rs->message = rq->data ? "ok: step-detect mode ON (push forward: approach, back off, run, jump)" : "ok: step-detect mode OFF";
+          RCLCPP_INFO(get_logger(), "step-detect mode %s", rq->data ? "ON" : "OFF");
+        });
+    step_pub_ = create_publisher<std_msgs::msg::Bool>("balance/step_mode_active", rclcpp::QoS(1).transient_local());
+    // step-detect stage for the GCS HUD: 0 approach / idle, 1 backing off, 2 running at the step (latched, on change)
+    step_phase_pub_ = create_publisher<std_msgs::msg::Int8>("balance/step_phase", rclcpp::QoS(1).transient_local());
     pub_ = create_publisher<gen2_msgs::msg::ControllerState>("controller/state", 10);
     // wheel + gyro odometry (odom -> base_link, planar) for SLAM / RViz; integrated while standing/balancing
     odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("odom", 10);
@@ -562,6 +595,7 @@ private:
   void enter(Mode m, const std::string & why = "")
   {
     link_lost_ = false; sit_hold_ = false;
+    rt_phase_now_ = 0;   // the core restarts its step-detect state on every mode change
     if (m != Mode::kStand) {start_ = false; homing_ = false;}
     if (m == Mode::kFault || m == Mode::kDisarmed) {
       zero_all();
@@ -866,10 +900,18 @@ private:
       h_set_ = h_set_ > 0 ? h_set_ + std::clamp(hc - h_set_, -dh, dh) : params_.idle_h;
       const double h_mid = sit_u >= 0 ? sit_h0_ + sit_u * (kHMinSit - sit_h0_) : h_set_;
       const bool jreq = jump_req_.exchange(false) && sit_u < 0;
+      const int sreq = step_req_.exchange(-1);
+      if (sreq >= 0) {core_->set_jump_retry(sreq == 1);}
       const Output o = core_->step(f, sit_u >= 0 ? 0.0 : vx, sit_u >= 0 ? 0.0 : wz, params_.idle_h, h_mid, jreq);
-      if (jreq) {
-        if (o.phase == gen2_control::kRetract) {RCLCPP_INFO(get_logger(), "jump: start (v %.2f m/s)", o.v);}
-        else {RCLCPP_WARN(get_logger(), "jump: refused (v %.2f m/s, need %.2f-%.2f forward and |wz| <= %.1f)", o.v, params_.jump_min_v, params_.jump_max_v, params_.jump_max_wz);}
+      if (jreq || o.rt_fire) {
+        const char * who = o.rt_fire ? "step-detect" : "operator";
+        if (o.phase == gen2_control::kRetract) {RCLCPP_INFO(get_logger(), "jump: start, %s (v %.2f m/s)", who, o.v);}
+        else {RCLCPP_WARN(get_logger(), "jump: refused, %s (v %.2f m/s, need %.2f-%.2f forward and |wz| <= %.1f)", who, o.v, params_.jump_min_v, params_.jump_max_v, params_.jump_max_wz);}
+      }
+      rt_phase_now_ = o.rt_phase;
+      if (o.rt_phase != last_.rt_phase) {
+        static const char * kRt[] = {"approach", "blocked -> back off", "run at the step"};
+        RCLCPP_INFO(get_logger(), "step-detect: %s (odo %.2f m, v %.2f m/s)", kRt[std::clamp(o.rt_phase, 0, 2)], o.odo, o.v);
       }
       if (o.phase != last_.phase) {RCLCPP_INFO(get_logger(), "jump phase %d -> %d", last_.phase, o.phase);}
       last_ = o;
@@ -951,7 +993,7 @@ private:
       const bool bal = mode_ == Mode::kBalance;
       r.th = bal ? last_.th : 0; r.thd = bal ? last_.thd : 0; r.th_kin = th_kin_; r.th_bias = bal ? last_.th_bias : 0;
       r.x_err = bal ? last_.x_err : 0; r.v = bal ? last_.v : 0; r.v_ref = bal ? last_.v_ref : 0; r.vx = vx; r.wz = wz;
-      r.tau_lqr = bal ? last_.tau_lqr : 0; r.tau_yaw = bal ? last_.tau_yaw : 0; r.jump_phase = bal ? last_.phase : 0;
+      r.tau_lqr = bal ? last_.tau_lqr : 0; r.tau_yaw = bal ? last_.tau_yaw : 0; r.jump_phase = bal ? last_.phase : 0; r.rt_phase = bal ? last_.rt_phase : 0;
       for (int k = 0; k < 2; ++k) {
         const auto & cw = bus_->motors()[idx_.at(names[2 + k])];
         r.h[k] = h_[k]; r.M[k] = M[k]; r.Md[k] = Md[k]; r.h_tgt[k] = h_tgt[k];
@@ -999,20 +1041,20 @@ private:
             RCLCPP_INFO(get_logger(), "step log -> %s", path.c_str());
             std::fprintf(fp, "step,t_ns,mode,dt_ms,imu_age_ms,pitch,roll,gx,gy,gz,th,thd,th_kin,th_bias,x_err,v,v_ref,vx,wz,"
               "hL,hR,ML,MR,MdL,MdR,h_tgtL,h_tgtR,hip_tauL,hip_tauR,hip_curL,hip_curR,hip_ageL,hip_ageR,"
-              "wwL,wwR,tau_lqr,tau_yaw,pre_lpfL,pre_lpfR,wheel_tauL,wheel_tauR,wheel_fbL,wheel_fbR,wheel_ageL,wheel_ageR,jump_phase\n");
+              "wwL,wwR,tau_lqr,tau_yaw,pre_lpfL,pre_lpfR,wheel_tauL,wheel_tauR,wheel_fbL,wheel_fbR,wheel_ageL,wheel_ageR,jump_phase,rt_phase\n");
           }
         }
         if (fp) {
           std::fprintf(fp, "%llu,%lld,%d,%.3f,%.2f,%.5f,%.5f,%.4f,%.4f,%.4f,%.5f,%.4f,%.5f,%.5f,%.4f,%.4f,%.3f,%.3f,%.3f,"
             "%.4f,%.4f,%.4f,%.4f,%.3f,%.3f,%.4f,%.4f,%.3f,%.3f,%.2f,%.2f,%.2f,%.2f,"
-            "%.3f,%.3f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%.2f,%d\n",
+            "%.3f,%.3f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%.2f,%d,%d\n",
             static_cast<unsigned long long>(r.step), static_cast<long long>(r.t_ns), r.mode, r.dt_ms, r.imu_age_ms,  // NOLINT
             r.pitch, r.roll, r.gx, r.gy, r.gz, r.th, r.thd, r.th_kin, r.th_bias, r.x_err, r.v, r.v_ref, r.vx, r.wz,
             r.h[0], r.h[1], r.M[0], r.M[1], r.Md[0], r.Md[1], r.h_tgt[0], r.h_tgt[1], r.hip_tau[0], r.hip_tau[1],
             r.hip_cur_fb[0], r.hip_cur_fb[1], r.hip_age_ms[0], r.hip_age_ms[1],
             r.w_wheel[0], r.w_wheel[1], r.tau_lqr, r.tau_yaw, r.wheel_pre_lpf[0], r.wheel_pre_lpf[1],
             r.wheel_tau[0], r.wheel_tau[1], r.wheel_tau_fb[0], r.wheel_tau_fb[1], r.wheel_age_ms[0], r.wheel_age_ms[1],
-            r.jump_phase);
+            r.jump_phase, r.rt_phase);
         }
       }
       ring_r_.store(rd, std::memory_order_release);
@@ -1023,6 +1065,18 @@ private:
 
   void publish()
   {
+    if (rt_phase_now_.load() != step_phase_last_) {
+      step_phase_last_ = rt_phase_now_.load();
+      std_msgs::msg::Int8 m;
+      m.data = static_cast<int8_t>(step_phase_last_);
+      step_phase_pub_->publish(m);
+    }
+    if (static_cast<int>(step_mode_.load()) != step_pub_last_) {   // latched: published on change only
+      step_pub_last_ = step_mode_.load();
+      std_msgs::msg::Bool b;
+      b.data = step_mode_.load();
+      step_pub_->publish(b);
+    }
     {
       double x, y, yaw, v, wz;
       {
@@ -1144,6 +1198,14 @@ private:
   double start_t_ = 0.0, home_still_ = 0.0, home_tau_ = 0.4, home_kd_ = 0.3, home_timeout_s_ = 3.0, auto_tilt_ = 0.087, auto_wait_s_ = 10.0;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_start_, srv_jump_;
   std::atomic<bool> jump_req_{false};
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr srv_step_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr step_pub_;
+  std::atomic<int> step_req_{-1};          // step-detect mode request for the loop: -1 none, 0 off, 1 on
+  std::atomic<bool> step_mode_{false};     // as last requested (published on balance/step_mode_active)
+  int step_pub_last_ = -1;
+  rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr step_phase_pub_;
+  std::atomic<int> rt_phase_now_{0};      // written by the control loop, published by publish()
+  int step_phase_last_ = -1;
   bool sit_ = false, sit_hold_ = false, link_lost_ = false, link_stop_ = true;
   int64_t t_lost_ = 0;
   double link_sit_after_s_ = 2.0, link_disarm_s_ = 30.0;

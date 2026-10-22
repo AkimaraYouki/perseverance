@@ -48,9 +48,22 @@ colcon test && colcon test-result --verbose     # unit tests (parser, codec, con
 | `can0-up.service` | can0 1 Mbit/s, restart-ms 100 |
 | `lcd-pinmux.service` | 40-pin pinmux for the LCD (SPI1 + DC/RST/BL) |
 | `chrony` | Jetson serves NTP to the LAN / phone hotspot (`system/chrony/`) for camera latency measurement |
+| `gen2-bootscreen.service` | boot status on the LCD from right after `lcd-pinmux` until the status display takes over |
 | `gen2-bench.service` | **bench profile** at boot: sensor hub + read-only motor monitor + LCD + camera |
+| `gen2-wifi-watchdog.timer` | every 30 s: Wi-Fi down → `nmcli c up` the highest-priority saved SSID that is visible (`/usr/local/sbin/gen2-wifi-watchdog.sh`) |
 
 `journalctl -u gen2-bench -f` for logs. Motors are never commanded by anything that starts at boot.
+
+### 부팅 화면 읽는 법 (gen2-bootscreen)
+전원을 넣고 **화면이 아예 안 켜지면** 커널·부트로더 단계에서 멈춘 것 (LCD 는 리눅스가 `lcd-pinmux` 를 돌린 뒤에야 켜짐) →
+USB-C 디버그 콘솔이나 HDMI 로 봐야 함. 화면이 켜지면 처음 3 초는 **지난 부팅** (얼마나 돌았나, 정상 종료 / `ABRUPT` = 전원 차단·멈춤,
+systemd 마지막 줄, 마지막 에러), 그 뒤 1 초마다 **이번 부팅**: 오른쪽 위 = 전원 켠 뒤 초, `SYSTEM` (starting / running / degraded),
+`WAITING ON` = systemd 가 아직 기다리는 유닛 (`>` = 실행 중; 같은 유닛이 계속 보이면 거기서 막힌 것), `FAILED` 유닛, 저널 마지막 에러,
+Wi-Fi SSID·IP, 장치 (● 있음 / ○ 없음: IMU, LIDAR, HUB, THS1, CAM, can0 상태), 서비스 (■ = 실패 또는 재시작 횟수 xN).
+`status_display` 노드 (gen2-bench) 가 뜨면 화면을 넘겨받음 (`/dev/shm/gen2_lcd.lock`). 부팅이 끝났는데 이 화면이 계속 남아 있으면
+gen2-bench 가 안 뜬 것 → `SERVICES` 줄과 `journalctl -u gen2-bench`. 오프라인 미리보기:
+`sudo env PYTHONPATH=install/gen2_status_display/lib/python3.12/site-packages python3 -m gen2_status_display.bootscreen --png /tmp/boot.png`.
+주의: RTC 가 없어 `journalctl -b -1` 은 "no boot entry" 로 실패함 → 지난 부팅은 `journalctl --list-boots` 의 `-1` 부팅 ID 로 조회.
 
 ## Profiles
 

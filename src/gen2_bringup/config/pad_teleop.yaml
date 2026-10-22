@@ -16,6 +16,8 @@ pad_teleop:
     wz_axis: 2
     lt_axis: 5
     rt_axis: 4
+    dpad_y_axis: 7             # D-pad ↕ (step-detect mode on/off): GCS laptop pad measured 2026-10-23 01:35 (comms 0140): ↑ +1, ↓ -1
+    dpad_up_sign: 1.0          # axis value when ↑ is pressed
     a_button: 0
     b_button: 1
     x_button: 3
