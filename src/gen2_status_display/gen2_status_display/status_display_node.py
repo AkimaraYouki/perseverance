@@ -13,7 +13,7 @@ from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from . import splash
+from . import lcd_handover, splash
 from .render import BAD, DIM, OK, USED, WARN, render
 from .sysinfo import SysInfo
 
@@ -67,6 +67,7 @@ class StatusDisplay(Node):
             ControllerState, 'controller/state', lambda m: None, QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         self._cs, self._cs_t = None, 0.0
         self.lcd = None
+        self._lcd_lock = None       # flock fd shared with gen2-bootscreen (lcd_handover)
         self._last_status = None
         self._lcd_retry = 0.0
         self._shown = None          # PIL image currently on the panel
@@ -166,6 +167,8 @@ class StatusDisplay(Node):
             return False
         try:
             from .st7789 import ST7789
+            if self._lcd_lock is None:  # gen2-bootscreen.service may still own the panel
+                self._lcd_lock = lcd_handover.take_over()
             self.lcd = ST7789(**self.lcd_cfg)
             self._shown = None
             self.get_logger().info('LCD initialised')

@@ -1,0 +1,20 @@
+# Boot status on the SPI LCD from right after lcd-pinmux until the status_display node takes the panel
+# (gen2_status_display/bootscreen.py, handover via /dev/shm/gen2_lcd.lock). How to read it: docs/robot_bench.md
+# Install: sudo cp gen2-bootscreen.service /etc/systemd/system/ && sudo systemctl enable gen2-bootscreen
+[Unit]
+Description=Gen2 boot status screen on the SPI LCD (until the status display takes over)
+DefaultDependencies=no
+After=lcd-pinmux.service local-fs.target systemd-journald.service
+Wants=lcd-pinmux.service
+Conflicts=shutdown.target
+Before=shutdown.target gen2-bench.service
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=/home/parksudo/gen2_ws/install/gen2_status_display/lib/python3.12/site-packages
+ExecStart=/usr/bin/python3 -m gen2_status_display.bootscreen
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
