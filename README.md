@@ -1,12 +1,14 @@
 # PERSEVERANCE Gen2 — 4절 링크 바퀴형 이족 로봇
 
 <p align="center">
-  <img src="docs/media/real_balance.gif" height="320" alt="실기 밸런싱 테스트">
-  <img src="docs/media/robot_cad_front.png" height="320" alt="PERSEVERANCE Gen2 CAD, 정면">
-  <img src="docs/media/robot_cad_inside.png" height="320" alt="PERSEVERANCE Gen2 CAD, 전장부">
+  <img src="docs/media/real_balance.gif" height="250" alt="실기 밸런싱 테스트">
+  <img src="docs/media/real_step_jump.gif" height="250" alt="실기 10 cm 턱 점프">
+  <img src="docs/media/real_curb_leaves.gif" height="250" alt="실기 야외 낙엽·연석 내려가기">
+  <img src="docs/media/real_grass_turn.gif" height="250" alt="실기 잔디 주행·회전">
 </p>
-<p align="center"><sub><b>왼쪽: 실기 밸런싱 테스트 (2026-10-08)</b> — LQR + VMC, MIT 바퀴, 200 Hz. 손으로 밀어도 제자리에서 균형을 되찾는다
-(<a href="docs/video/밸런싱테스트.mp4">원본 영상</a>). 가운데·오른쪽: CAD.</sub></p>
+<p align="center"><sub><b>실기</b> — LQR + VMC, MIT 바퀴, 200 Hz.
+① 밸런싱 테스트 (2026-10-08): 손으로 밀어도 제자리에서 균형을 되찾는다 (<a href="docs/video/밸런싱테스트.mp4">원본 영상</a>).
+② 실내 10 cm 턱 점프, 턱 감지 모드 (2026-10-24). ③ 야외 낙엽 땅 → 연석 내려가기 (2026-10-24). ④ 잔디 주행·회전 (2026-10-24).</sub></p>
 
 **LQR 과 가상 모델 제어(VMC)를 이용한 4절 링크 바퀴형 이족 로봇의 균형 및 주행 제어**
 *Balance and locomotion control of a wheeled bipedal robot with four-bar legs using LQR and virtual model control.*
@@ -38,6 +40,12 @@
 | 컴퓨터 | Jetson Orin Nano 8 GB · Ubuntu 24.04 · ROS 2 Jazzy · Cyclone DDS |
 | 센서 | iAHRS IMU (500 Hz), RPLIDAR C1, IMX219 카메라, NEO-M8N GNSS + 지자기, PM02 전력계 ×2 (ESP32-C3 센서 허브) |
 | 버스 | CAN 1 Mbit/s (모터 4 개), 제어 200 Hz |
+
+<p align="center">
+  <img src="docs/media/robot_cad_front.png" height="320" alt="PERSEVERANCE Gen2 CAD, 정면">
+  <img src="docs/media/robot_cad_inside.png" height="320" alt="PERSEVERANCE Gen2 CAD, 전장부">
+</p>
+<p align="center"><sub>CAD — 왼쪽: 정면, 오른쪽: 전장부.</sub></p>
 
 CAD (Onshape) → URDF + 폐루프 관절 → Isaac Sim 5.1. 4절 링크 치수는 계단 등반 조건을 목적함수로 최적화했다 ([하드웨어 ① CAD](docs/lab-meeting/hardware/01_cad.md)).
 
