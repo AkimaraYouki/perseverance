@@ -1,4 +1,11 @@
-# PERSEVERANCE Gen2 — 4절 링크 바퀴형 이족 로봇
+# PERSEVERANCE Gen2 (C-WANG) — 4절 링크 바퀴형 이족 로봇
+**두 바퀴로 균형을 잡고, 다리를 늘였다 줄여 험지를 달리고, 점프로 턱을 넘는다.**
+
+![ROS 2 Jazzy](https://img.shields.io/badge/ROS%202-Jazzy-22314E?logo=ros)
+![Isaac Lab 2.3.2](https://img.shields.io/badge/Isaac%20Lab-2.3.2-76B900?logo=nvidia)
+![Jetson Orin Nano](https://img.shields.io/badge/Jetson-Orin%20Nano-76B900?logo=nvidia)
+![Control 200 Hz](https://img.shields.io/badge/control-200%20Hz-1f6f8b)
+![Status](https://img.shields.io/badge/status-active%20research-orange)
 
 <p align="center">
   <img src="docs/media/real_step_jump.gif" width="45%" alt="실기 10 cm 턱 점프">
@@ -6,11 +13,37 @@
   <img src="docs/media/real_grass_turn.gif" width="26.5%" alt="실기 잔디 주행·회전">
 </p>
 
+---
+
+## 📖 목차 (Table of Contents)
+- [프로젝트 소개](#-프로젝트-소개-about-the-project)
+- [주요 기능](#-주요-기능-key-features)
+- [결과](#-결과-results)
+- [폴더 구조](#-폴더-구조-directory-structure)
+- [시작하기](#️-시작하기-getting-started)
+- [사용법](#-사용법-usage)
+- [기여하기](#-기여하기-contributing)
+- [문서](#-문서-documentation)
+- [라이선스](#-라이선스-license)
+- [Contact](#-contact)
+
+---
+
+## 🚀 프로젝트 소개 (About The Project)
+
 **LQR 과 가상 모델 제어(VMC)를 이용한 4절 링크 바퀴형 이족 로봇의 균형 및 주행 제어**
 *Balance and locomotion control of a wheeled bipedal robot with four-bar legs using LQR and virtual model control.*
 
-두 바퀴로 균형을 잡으며 다리 길이를 바꿔 험지를 달리고, 점프로 턱·계단(대회 6 / 8 cm, 목표 10 cm)을 넘는 바퀴-다리 로봇이다.
-제어기 **하나** (`wbctrl.py`) 를 시뮬레이션에서 설계·검증하고, 그 규격을 그대로 C++ 로 옮겨 실기에서 돌린다.
+**배경.** 바퀴는 평지에서 빠르고 효율적이지만 턱·계단을 못 넘고, 다리는 넘을 수 있지만 느리고 복잡하다.
+바퀴 달린 다리는 둘을 합치지만, 다리 길이가 계속 바뀌는 역진자를 균형 잡으면서 점프까지 해야 한다.
+이 로봇은 사람 추종 보급 로봇 대회 (계단 6 / 8 cm, 웨이브 12 / 14°) 를 목표로 만들었다.
+
+**풀려는 문제.**
+1. **4절 링크 다리 + 바퀴** 구조에서, 다리 길이가 바뀌어도 하나의 선형 제어기(이득 스케줄 LQR)로 균형·주행이 되는가?
+2. 다리(높이·롤)와 바퀴(균형·회전)를 **VMC 로 나눠** 맡겨도 험지·점프에서 서로 방해하지 않는가?
+3. 시뮬레이션에서 고른 제어기가 **실기의 지연·백래시·모터 출력 손실** 아래에서도 같은 성능을 내는가 — 무엇이 차이를 만드는가?
+
+**접근.** 제어기 **하나** (`wbctrl.py`) 를 시뮬레이션에서 설계·검증하고, 그 규격을 그대로 C++ 로 옮겨 실기에서 돌린다.
 점프 파라미터는 실기 로그에 맞춘 시뮬 플랜트 위에서 CMA-ES 로 고른다.
 
 | 거친 지형 (돌·물결, 최대 6 cm) | 최고 속도 지그재그 (3.5 km/h) | 8 cm 턱 두 번 점프 |
@@ -19,15 +52,7 @@
 
 <sub>Isaac Lab, 실시간 1×. 실기와 같은 제어기, 실측 바퀴 마찰·모델 오차·센서 잡음 포함 (`pv demo <scene> --record`).</sub>
 
----
-
-## 1. 연구 질문
-
-1. **4절 링크 다리 + 바퀴** 구조에서, 다리 길이가 바뀌어도 하나의 선형 제어기(이득 스케줄 LQR)로 균형·주행이 되는가?
-2. 다리(높이·롤)와 바퀴(균형·회전)를 **VMC 로 나눠** 맡겨도 험지·점프에서 서로 방해하지 않는가?
-3. 시뮬레이션에서 고른 제어기가 **실기의 지연·백래시·모터 모드** 아래에서도 같은 성능을 내는가 — 무엇이 차이를 만드는가?
-
-## 2. 로봇
+### 로봇
 
 | 항목 | 사양 |
 |---|---|
@@ -46,7 +71,7 @@
 
 CAD (Onshape) → URDF + 폐루프 관절 → Isaac Sim 5.1. 4절 링크 치수는 계단 등반 조건을 목적함수로 최적화했다 ([하드웨어 ① CAD](docs/lab-meeting/hardware/01_cad.md)).
 
-## 3. 제어 구조
+## ✨ 주요 기능 (Key Features)
 
 ```mermaid
 flowchart LR
@@ -64,15 +89,16 @@ flowchart LR
   JMP -.-> WHL
 ```
 
-- **바퀴 LQR**: 상태 [진행거리 x, 속도 v, 진자각 θ, 각속도 θ̇], 가상 다리 길이 l 0.12 – 0.40 m 에서 미리 푼 이득 표를 보간.
-- **다리 VMC**: 4절 링크 자코비안으로 가상 다리 힘 → 고관절 토크. 높이 추종, 롤 수평 PI, 자중 피드포워드.
-- **점프**: 6 단계 상태기계, 공중에서는 바퀴를 반작용 휠로 써서 몸통 pitch 를 잡는다 ([규격](comms/to-robot/attachments/jump_state_machine.md)).
+* **바퀴 LQR** — 상태 [진행거리 x, 속도 v, 진자각 θ, 각속도 θ̇], 가상 다리 길이 l 0.12 – 0.40 m 에서 미리 푼 이득 표를 보간.
+* **다리 VMC** — 4절 링크 자코비안으로 가상 다리 힘 → 고관절 토크. 높이 추종, 롤 수평 PI, 자중 피드포워드.
+* **점프** — 6 단계 상태기계, 공중에서는 바퀴를 반작용 휠로 써서 몸통 pitch 를 잡는다 ([규격](comms/to-robot/attachments/jump_state_machine.md)).
   파라미터 (웅크림 시간·신전 자세·공중 게인·착지 판정 등) 는 시뮬 2048 대 병렬 CMA-ES 로 고르고, 점수는 성공률 − 넘어짐 − 착지 벌점 (다리 바닥 닿음·바퀴 하중·착지 pitch·착지 뒤 후진).
-- **턱 감지 모드**: 천천히 다가가 막히면 (바퀴가 멈춤) 일정 거리 물러났다가 다시 가속해 스스로 점프한다. 조종자는 앞으로 밀기만 하면 되고, 스틱을 놓으면 취소.
-- **경사 보상**: 정상 주행 중 속도 오차를 적분해 속도 목표를 올린다 (경사로·바퀴 손실 보상).
-- **하나의 제어기 원칙**: 시뮬 창 (1 대) · 시험 세트 (수십 대) · 가혹 평가 (4096 대) 가 모두 같은 [`wbctrl.py`](sim/isaaclab/scripts/wbctrl.py) (로봇 N 대 배열) 를 쓰고, 실기 [`wb_core`](src/gen2_control/src/wb_core.cpp) 는 그 C++ 이식이다 (주행 경로는 골든 테스트로 출력 일치 확인).
+* **턱 감지 모드** — 천천히 다가가 막히면 (바퀴가 멈춤) 일정 거리 물러났다가 다시 가속해 스스로 점프한다. 조종자는 앞으로 밀기만 하면 되고, 스틱을 놓으면 취소.
+* **경사 보상** — 정상 주행 중 속도 오차를 적분해 속도 목표를 올린다 (경사로·바퀴 손실 보상).
+* **하나의 제어기 원칙** — 시뮬 창 (1 대) · 시험 세트 (수십 대) · 가혹 평가 (4096 대) 가 모두 같은 [`wbctrl.py`](sim/isaaclab/scripts/wbctrl.py) (로봇 N 대 배열) 를 쓰고, 실기 [`wb_core`](src/gen2_control/src/wb_core.cpp) 는 그 C++ 이식이다 (골든 테스트로 출력 일치 확인).
+* **관제** — 패드 조종, HUD (턱 감지 모드 STEP 배지), 상태판, SLAM 을 데스크톱·관제 노트북에서. 판단·주행은 전부 젯슨이라 Wi-Fi 가 끊겨도 로봇은 안전하게 멈춘다.
 
-## 4. 결과
+## 📊 결과 (Results)
 
 수치 표기: **[측정]** 시뮬·실기에서 잰 값 / **[설정]** 코드 값 / **[계산]** 식으로 낸 값.
 
@@ -126,48 +152,108 @@ flowchart LR
 
 </details>
 
-## 5. 저장소 구성
+## 📁 폴더 구조 (Directory Structure)
+```text
+📦 perseverance
+ ┣ 📂 sim                    시뮬·설계 (데스크톱)
+ ┃ ┣ 📂 isaaclab/scripts     wbctrl.py (제어기 규격), climb_test.py (TUNE 블록 = 모든 파라미터),
+ ┃ ┃                         robust_suite.py, harsh_eval.py  · 점프 CMA-ES jump_rl.py 는 desktop/jump-rl 브랜치
+ ┃ ┣ 📂 model                URDF, LQR·4절 링크 표 (balance_tables*.yaml), 발자국·센서 위치
+ ┃ ┗ 📂 control              VMC + LQR 게인 설계
+ ┣ 📂 src                    ROS 2 패키지 (젯슨)
+ ┃ ┣ 📂 gen2_control         balance_node (200 Hz), wb_core (wbctrl 의 C++ 이식)
+ ┃ ┣ 📂 gen2_hardware        SocketCAN, CubeMars AK 코덱
+ ┃ ┣ 📂 gen2_sensor_hub      ESP32-C3 센서 허브 드라이버
+ ┃ ┣ 📂 gen2_camera          IMX219 → 압축 영상
+ ┃ ┣ 📂 gen2_status_display  SPI LCD 상태 화면
+ ┃ ┣ 📂 gen2_tools           pad_teleop, cmd_mux, 시험·보정 도구
+ ┃ ┗ 📂 gen2_bringup         launch, Cyclone DDS 설정, systemd 유닛
+ ┣ 📂 tools
+ ┃ ┣ 📂 gcs                  관제 노트북 GUI·설치 스크립트
+ ┃ ┗ 📂 desktop              데스크톱 HUD (STEP 배지), 대시보드, RViz 설정
+ ┣ 📂 firmware               ESP32 센서 허브 펌웨어
+ ┣ 📂 system                 젯슨 systemd·네트워크·udev 설정
+ ┣ 📂 logs                   실기 기록 CSV (200 Hz 스텝 기록)
+ ┣ 📂 comms                  데스크톱 ↔ 젯슨 ↔ 관제 에이전트 우편함 (메시지 하나 = 파일 하나)
+ ┣ 📂 docs                   랩미팅 자료, 확장요약문, 운용 흐름, 벤치 문서, 공급사 문서
+ ┗ 📜 README.md
+```
 
-| 경로 | 내용 | 담당 |
-|---|---|---|
-| [`sim/isaaclab/`](sim/isaaclab) | Isaac Lab 프로젝트: `wbctrl.py` (제어기 규격), `climb_test.py` (TUNE 블록 = 모든 파라미터), `robust_suite.py`, `harsh_eval.py`, 모터 모델 (`cad.py`). 점프 CMA-ES `jump_rl.py` 는 `desktop/jump-rl` 브랜치 | 데스크톱 |
-| [`sim/model/`](sim/model) | URDF, LQR·4절 링크 표 (`balance_tables*.yaml`), 발자국·센서 위치 (`footprint.yaml`) | 데스크톱 |
-| [`src/`](src) | ROS 2 패키지: `gen2_control` (balance_node, wb_core), `gen2_hardware` (CAN·AK 코덱), `gen2_sensor_hub`, `gen2_camera`, `gen2_tools` (조종·시험 도구), `gen2_bringup` | 젯슨 |
-| [`logs/`](logs) | 실기 기록 CSV (200 Hz 스텝 기록, 균형·회전 시험) | 젯슨 |
-| [`comms/`](comms/README.md) | 데스크톱 ↔ 젯슨 에이전트 우편함 (메시지 하나 = 파일 하나) | 공용 |
-| [`docs/`](docs) | 랩미팅 자료, 확장요약문, 운용 흐름, 벤치 문서, 공급사 문서 | 공용 |
-| [`tools/gcs/`](tools/gcs/README.md) | 관제 노트북 GUI (`cw-gui`, 상태·자세·SLAM), 설치 `setup_gcs.sh` | 관제 |
-| `tools/desktop/` | 데스크톱 HUD (`hud.py`, STEP 배지), 대시보드, RViz 설정 | 데스크톱 |
-| `firmware/`, `system/`, `tools/shr1` | ESP32 센서 허브 펌웨어, systemd·네트워크 설정, SHR1 도구 | 젯슨 / 데스크톱 |
+## ⚙️ 시작하기 (Getting Started)
 
-## 6. 실행
+### 사전 요구사항 (Prerequisites)
+| 기기 | 환경 |
+|---|---|
+| 로봇 | Jetson Orin Nano 8 GB, Ubuntu 24.04, ROS 2 Jazzy, Cyclone DDS, CAN (can0 1 Mbit/s) |
+| 시뮬 (데스크톱) | Ubuntu 22.04, RTX GPU, Isaac Sim 5.1 + Isaac Lab 2.3.2 |
+| 조종 (데스크톱) | ROS 2 Humble + Cyclone DDS, 도메인 42, 게임패드 |
+| 관제 노트북 | Ubuntu 24.04, ROS 2 Jazzy |
 
-**시뮬 (데스크톱, Isaac Lab 2.3.2)** — 파라미터는 `climb_test.py` 의 TUNE 블록에서 고친다.
+### 설치 및 실행 (Installation)
+```bash
+# 저장소 복제
+git clone https://github.com/AkimaraYouki/perseverance.git ~/perseverance
+```
+
+**로봇 (젯슨)** — 빌드·부팅 서비스·모터 시험은 [실기 벤치 문서](docs/robot_bench.md), 전원 → 균형 순서는 [운용 흐름](docs/operation_flow.md).
+```bash
+cd ~/gen2_ws && source /opt/ros/jazzy/setup.bash
+colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
+colcon test && colcon test-result --verbose
+ros2 launch gen2_control balance.launch.py      # balance_node + cmd_mux (부팅 때 자동, 해제 상태)
+```
+
+**관제 노트북** — 설치 스크립트 하나 (일반 Wi-Fi 에서, 10 – 20 분). 자세한 순서는 [`tools/gcs`](tools/gcs/README.md).
+```bash
+bash ~/perseverance/tools/gcs/setup_gcs.sh
+```
+
+**시뮬 (데스크톱)** — Isaac Lab 설치 뒤 `sim/isaaclab` 을 Isaac Lab 프로젝트로 쓴다. 자산 파이프라인은 [시뮬 자산](sim/README.md).
+
+## 💻 사용법 (Usage)
+
+**시뮬** — 파라미터는 `climb_test.py` 의 TUNE 블록에서 고친다.
 ```bash
 pv demo <scene>        # 창 1 대 (rough, steer, jump …), --record 로 GIF
 pv robust              # 시나리오 11 종 × 8 대
 pv harsh               # 가혹 평가 (수천 대)
 ```
 
-**실기 (젯슨)** — 빌드·부팅 서비스·모터 시험은 [실기 벤치 문서](docs/robot_bench.md), 전원 → 균형 순서는 [운용 흐름](docs/operation_flow.md).
-```bash
-ros2 launch gen2_control balance.launch.py      # balance_node + cmd_mux (부팅 때 자동, 해제 상태)
-```
-
 **조종 (데스크톱 ROS 2 Humble ↔ 로봇 Jazzy, Cyclone DDS, 도메인 42)**
 ```bash
 source ~/gen2_desk/env.sh
 ros2 run joy joy_node --ros-args -p autorepeat_rate:=20.0     # 터미널 1
-ros2 run gen2_tools pad_teleop                                  # 터미널 2: START 시작 · BACK 앉기 · LB+RB 비상 해제
+ros2 run gen2_tools pad_teleop                                  # 터미널 2
 ```
-패드: Y 점프 (0.2 m/s 이상 전진 중) · 십자키 ↑ / ↓ 턱 감지 모드 켜기 / 끄기 (켠 뒤 앞으로 밀기만, 스틱 놓으면 취소). 관제 노트북은 [`tools/gcs`](tools/gcs/README.md).
 
-## 7. 문서
+| 패드 | 동작 |
+|---|---|
+| START | 시작 (서기 → 균형) |
+| BACK | 앉기 |
+| LB + RB | 비상 해제 |
+| Y | 점프 (0.2 m/s 이상 전진 중) |
+| 십자키 ↑ / ↓ | 턱 감지 모드 켜기 / 끄기 (켠 뒤 앞으로 밀기만, 스틱 놓으면 취소) |
 
+**부호 규약** (전 파일 공통): 전진 +x, 왼쪽 +y (REP-103), 위 +z. θ 는 윗부분이 앞으로 기울면 +. 양의 바퀴 토크 → 전진.
+
+## 🤝 기여하기 (Contributing)
+데스크톱 (시뮬)·젯슨 (로봇)·관제 노트북이 각자 브랜치에서 작업하고 `main` 으로 합친다.
+1. 브랜치는 담당별로: `desktop/<주제>`, `robot/<주제>`.
+2. 제어기 수정은 `wbctrl.py` 한 곳에서 하고, 로봇은 같은 내용을 `wb_core` 로 이식한 뒤 골든 테스트로 일치를 확인한다.
+3. 파라미터는 TUNE 블록 (`climb_test.py`) / `balance.yaml` 에 모으고, 바꿀 때는 이전 값과 근거 (측정·시뮬 결과) 를 주석으로 남긴다.
+4. 다른 기기에 부탁·보고할 일은 [`comms/`](comms/README.md) 에 파일 하나로 (근거 수치·파일 경로·커밋 포함).
+5. Pull Request 로 `main` 에 합친다.
+
+## 📚 문서 (Documentation)
 - [랩미팅 자료](docs/lab-meeting/README.md) — 학습·통신·ROS 2·제어 / CAD·센서·액추에이터
 - [확장요약문 (PDF)](docs/abstract/extended_abstract_lqr_vmc.pdf)
 - [운용 흐름](docs/operation_flow.md) · [실기 벤치·운용 참고](docs/robot_bench.md) · [시뮬 자산](sim/README.md)
 - [실기 제어기 구조](docs/controller_structure.md) · [젯슨 / 데스크톱 역할 분배](docs/roles.md)
 - [점프 상태기계 규격](comms/to-robot/attachments/jump_state_machine.md)
 
-**부호 규약** (전 파일 공통): 전진 +x, 왼쪽 +y (REP-103), 위 +z. θ 는 윗부분이 앞으로 기울면 +. 양의 바퀴 토크 → 전진.
+## 📜 라이선스 (License)
+아직 라이선스를 정하지 않았다 (`LICENSE` 파일 없음). 정해지기 전까지 모든 권리는 저작자에게 있다.
+
+## 📬 Contact
+* parksuho (스마트모빌리티 학부연구생) — GitHub [@AkimaraYouki](https://github.com/AkimaraYouki)
+* 프로젝트 링크: [github.com/AkimaraYouki/perseverance](https://github.com/AkimaraYouki/perseverance)
