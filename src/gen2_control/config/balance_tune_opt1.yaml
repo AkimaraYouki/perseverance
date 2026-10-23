@@ -1,0 +1,25 @@
+# "최적1" — desktop landing CMA 2026-10-24 (overlay on balance.yaml; NOT loaded by default).
+# Load only when the user says "최적1 테스트": pass as an extra --params-file after balance.yaml. Without it = current balance.yaml.
+# Plant: real-log calibrated sim (hip eff 0.5-0.6 -> EXTRACT 105 ms like the robot, wheel 0.83, v_ki 0.8, hip cap 15 N·m,
+# step-mode re-run speed x0.6-1.0 random). Objective: success - 2 x falls - landing penalties (|land pitch| > 8 deg, back-off after landing).
+# Sim, step-detect mode, 2048 runs each (before -> after):
+#   2-tier 8 cm 74.4 -> 75.9 %, step 10 cm 87.5 -> 94.9 %, step 12 cm 83.3 -> 90.8 %
+#   landing pitch -16 -> -3 deg, min speed after landing -0.40..-0.46 -> +0.07..+0.19 m/s (no back-down), hub load median 470 -> 155 N.
+# Watch: falls that remain are now mostly FORWARD (93-98 %); wheel-ground slip just before touchdown 0.26 -> 0.49 m/s.
+# Only these 13 keys change; everything else stays as in balance.yaml. Previous value in [].
+balance:
+  ros__parameters:
+    tune:
+      retract_lean: 12.0      # [8.6]
+      extract_pitch: 12.0     # [6.7183]
+      t_tuck: 0.0467          # [0.151]
+      air_kp: 23.551          # [10.1]
+      air_kd: 0.5984          # [0.55]
+      air_pitch: -13.5451     # [-7.5]
+      land_pitch: 7.7672      # [2.1]
+      land_kp: 21.7418        # [22.8847]
+      land_kd: 1.1027         # [0.5]
+      h_land: 0.1827          # [0.2051]
+      spin_match_k: 0.4171    # [0.6944]
+      air_w_max: 17.4808      # [12.0]
+      retry_trig_k: 0.1397    # [0.4]  step-detect mode: jump point vs run-up speed
