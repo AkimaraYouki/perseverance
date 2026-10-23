@@ -20,7 +20,7 @@
 - [주요 기능](#-주요-기능-key-features)
 - [결과](#-결과-results)
 - [폴더 구조](#-폴더-구조-directory-structure)
-- [시작하기](#️-시작하기-getting-started)
+- [시작하기](#-시작하기-getting-started)
 - [사용법](#-사용법-usage)
 - [기여하기](#-기여하기-contributing)
 - [문서](#-문서-documentation)
