@@ -1,9 +1,9 @@
 # PERSEVERANCE Gen2 — 4절 링크 바퀴형 이족 로봇
 
 <p align="center">
-  <img src="docs/media/real_step_jump.gif" height="300" alt="실기 10 cm 턱 점프">
-  <img src="docs/media/real_curb_leaves.gif" height="300" alt="실기 야외 낙엽·연석 내려가기">
-  <img src="docs/media/real_grass_turn.gif" height="300" alt="실기 잔디 주행·회전">
+  <img src="docs/media/real_step_jump.gif" width="45%" alt="실기 10 cm 턱 점프">
+  <img src="docs/media/real_curb_leaves.gif" width="26.5%" alt="실기 야외 낙엽·연석 내려가기">
+  <img src="docs/media/real_grass_turn.gif" width="26.5%" alt="실기 잔디 주행·회전">
 </p>
 
 **LQR 과 가상 모델 제어(VMC)를 이용한 4절 링크 바퀴형 이족 로봇의 균형 및 주행 제어**
