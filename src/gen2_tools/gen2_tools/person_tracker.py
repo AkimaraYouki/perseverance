@@ -39,7 +39,7 @@ MEAN = np.array([0.485, 0.456, 0.406], np.float32)
 STD = np.array([0.229, 0.224, 0.225], np.float32)
 
 
-def build_engine(onnx, engine, logger, max_batch=8):
+def build_engine(onnx, engine, logger, max_batch=4):
     """ONNX -> FP16 TensorRT engine with a dynamic batch 1..max_batch (input 'images' N x 3 x 256 x 128)."""
     b = trt.Builder(logger)
     net = b.create_network(0)
@@ -49,6 +49,9 @@ def build_engine(onnx, engine, logger, max_batch=8):
             raise RuntimeError('ONNX parse: ' + '; '.join(str(parser.get_error(i)) for i in range(parser.num_errors)))
     cfg = b.create_builder_config()
     cfg.set_flag(trt.BuilderFlag.FP16)
+    # gentle build (2026-10-25: two Jetson resets while building on a 30 W USB-C adapter): small workspace, fewer tactics
+    cfg.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 256 << 20)
+    cfg.builder_optimization_level = 2
     prof = b.create_optimization_profile()
     name = net.get_input(0).name
     prof.set_shape(name, (1, 3, 256, 128), (4, 3, 256, 128), (max_batch, 3, 256, 128))
@@ -56,15 +59,17 @@ def build_engine(onnx, engine, logger, max_batch=8):
     ser = b.build_serialized_network(net, cfg)
     if ser is None:
         raise RuntimeError('TensorRT build failed')
-    with open(engine, 'wb') as f:
+    tmp = engine + '.part'                          # never leave a half-written engine (a reset mid-write = empty file)
+    with open(tmp, 'wb') as f:
         f.write(bytes(ser))
+    os.replace(tmp, engine)
 
 
 class TrtReid:
     """OSNet ReID: crops (BGR) -> unit 512-d embeddings, batch <= max_batch."""
 
-    def __init__(self, onnx, engine, logger, max_batch=8):
-        if not os.path.exists(engine):
+    def __init__(self, onnx, engine, logger, max_batch=4):
+        if not os.path.exists(engine) or os.path.getsize(engine) == 0:
             build_engine(onnx, engine, logger, max_batch)
         with open(engine, 'rb') as f:
             self.engine = trt.Runtime(logger).deserialize_cuda_engine(f.read())
