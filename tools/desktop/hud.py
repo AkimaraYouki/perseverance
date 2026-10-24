@@ -3,7 +3,8 @@
 
 로봇은 결과를 숫자로만 보낸다 — 여기서 겹쳐 그린다 (로봇 부담 0).
   /camera/image_raw/compressed   (JPEG 640x480, 180° 뒤집어 바로 선 영상)
-  /people/camera   String JSON   {stamp, w, h, people: [{box: [x0,y0,x1,y1], score, bearing_deg, ...}]}   (person_detector)
+  /people/camera   String JSON   {stamp, w, h, people: [{box: [x0,y0,x1,y1], score, bearing_deg, ...}]}   (person_detector,
+                   또는 person_tracker: + id, target = 잠긴 사람 -> 초록 굵은 상자 "TARGET #id")
   /people/legs     PoseArray     laser 좌표 다리 쌍 = 사람 후보 (leg_detector)
   /follow/status   String        "FOLLOW target 1.23 m @ +5 deg" (person_follow, 대상 = laser 좌표)
   /gesture, /gesture/action String
@@ -106,7 +107,8 @@ def draw(n: Hud):
     for p in (n.people if fresh else []):
         x0, y0, x1, y1 = p["box"]
         b = math.radians(p.get("bearing_deg", 0.0))
-        is_t = tb is not None and abs(b - tb) < math.radians(8)
+        # 새 스택 (person_tracker): 잠긴 사람이 데이터에 표시됨 (id·target). 옛 스택: follow/status 방위 근처 상자
+        is_t = bool(p["target"]) if "target" in p else (tb is not None and abs(b - tb) < math.radians(8))
         col, th = ((60, 220, 60), 3) if is_t else ((200, 200, 200), 1)
         cv2.rectangle(img, (x0, y0), (x1, y1), col, th)
         kp = p.get("kps")
@@ -119,7 +121,7 @@ def draw(n: Hud):
             for q, (u_, v_, cf) in enumerate(kp):
                 if cf > 0.3:
                     cv2.circle(img, (int(u_), int(v_)), 4 if q >= 11 else 2, (0, 220, 255) if q >= 11 else (220, 220, 220), -1)
-        lab = f"{'TARGET ' if is_t else ''}{p.get('score', 0):.2f}" + (f" ({p['bearing_from']})" if p.get("bearing_from") else "")
+        lab = f"{'TARGET ' if is_t else ''}{('#' + str(p['id']) + ' ') if 'id' in p else ''}{p.get('score', 0):.2f}" + (f" ({p['bearing_from']})" if p.get("bearing_from") else "")
         cv2.putText(img, lab, (x0 + 3, max(14, y0 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1 + is_t)
     # 라이다 다리 (화면 아래 띠에 방위로)
     for (xl, yl) in (n.legs if now - n.legs_t < 1.0 else []):

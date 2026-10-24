@@ -51,6 +51,18 @@ SSH = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=4', '-o', 'ControlMas
 
 # ------------------------------------------------------------------ 파라미터 표 (게인 제외)
 # (노드, 이름, 설명, 최소, 최대, 간격, 기본값, 단위)  기본값 = 소스/설정 파일 값 (2026-10-15). bool 이면 최소~단위 무시
+STACK_FILE = os.path.expanduser('~/.config/cw/follow_stack')      # cw follow cam|legacy 와 같은 파일
+STACK_NAME = {'cam': '카메라 중심 (새)', 'legacy': '다리 + 카메라 (옛)'}
+
+
+def follow_stack():
+    try:
+        k = open(STACK_FILE).read().strip()
+    except OSError:
+        k = 'cam'
+    return k if k in STACK_NAME else 'cam'
+
+
 PF, RPP, LCM, GCM = '/person_follow', '/controller_server', '/local_costmap/local_costmap', '/global_costmap/global_costmap'
 GROUPS = [
     ('주행 속도 한계', '조종·추종·우회 각각의 최대 속도. 균형 노드 한계 (맨 아래) 가 전체 상한', [
@@ -88,6 +100,9 @@ GROUPS = [
         (PF, 'cam_max_dist_m', '카메라 거리 최대 (넘으면 버림)', 1.0, 10.0, 0.5, 5.0, 'm'),
     ]),
     ('사람 인식', '카메라 (YOLO) · 라이다 다리 검출 — 로봇이 live_params 로 열면 실시간', [
+        ('/person_tracker', 'score_min', '사람 표시 최소 확신도 (새 스택)', 0.1, 0.9, 0.05, 0.40, ''),
+        ('/person_tracker', 'process_hz', '사람 추적 주기 (추종 중, 새 스택)', 5.0, 30.0, 1.0, 30.0, 'Hz'),
+        ('/person_tracker', 'idle_hz', '사람 추적 주기 (추종 꺼짐, 새 스택)', 0.5, 10.0, 0.5, 2.0, 'Hz'),
         ('/person_detector', 'score_min', '사람 검출 최소 확신도', 0.1, 0.9, 0.05, 0.40, ''),
         ('/person_detector', 'process_hz', '사람 검출 주기 (추종 중)', 5.0, 30.0, 1.0, 30.0, 'Hz'),
         ('/person_detector', 'idle_hz', '사람 검출 주기 (추종 꺼짐)', 0.5, 10.0, 0.5, 2.0, 'Hz'),
@@ -137,7 +152,7 @@ BAL_INFO = [('tune.jump_min_v', '점프 최소 속도', 'm/s'), ('tune.jump_max_
 MARKERS = ['점프 평지', '점프 턱 5.6 cm']    # 시험 표시 버튼 (gcs/marker → 로봇 health_logger 'MARKER: …')
 MIRROR = {LCM: [GCM]}                       # 로컬 코스트맵 값을 글로벌에도
 RESTART = {'/pad_teleop': 'pad', '/gesture': 'gesture', '/slam_toolbox': 'slam'}   # 노트북에서 띄우는 노드
-ASK_LIVE = ['/balance', '/pad_teleop', '/gesture', '/person_detector', '/leg_detector', PF]   # live_params 물어볼 노드
+ASK_LIVE = ['/balance', '/pad_teleop', '/gesture', '/person_tracker', '/person_detector', '/leg_detector', PF]   # live_params 물어볼 노드
 # 실시간 = 해제 (disarmed) 하고 변경 (사용자 2026-10-13): 균형·주행 중에는 어떤 값도 보내지 않는다
 
 
@@ -757,6 +772,10 @@ class Gui(QtWidgets.QMainWindow):
         rows = [
             ('stack', '사람 추종 스택', [self._btn('켜기', lambda: self.robot_cmd('stack_on')),
                                     self._btn('끄기', lambda: self.robot_cmd('stack_off'))]),
+            ('stackkind', '추종 스택 종류', [
+                self._btn('카메라 중심 (새)', lambda: self.robot_cmd('cam'),
+                          'YOLO + ByteTrack + OSNet ReID, 다리 검출 없이 바로 잠금, 0.7 m/s (2026-10-25)'),
+                self._btn('다리 + 카메라 (옛)', lambda: self.robot_cmd('legacy'), '라이다 다리 트랙에 카메라를 맞춰 잠금 (이전 스택)')]),
             ('follow', '추종 활성화 (= 패드 X)', [self._btn('켜기 (앞사람 등록)', lambda: self.ros.set_bool(
                 '/follow/enable', True, '추종 켜기')), self._btn('끄기', self.follow_off)]),
             ('hold', '일시 정지 (= 손바닥)', [self._btn('정지', lambda: self.ros.set_bool('/follow/hold', True, '일시 정지')),
@@ -778,6 +797,7 @@ class Gui(QtWidgets.QMainWindow):
         for i, (k, t, b) in enumerate(rows):
             self.lamp[k] = Lamp()
             self.note[k] = self._row(g, i, t, self.lamp[k], b)
+        self.note['stackkind'].setText(STACK_NAME[follow_stack()])
         v.addWidget(box)
 
         box = QtWidgets.QGroupBox('시험 표시 (시험 직전에 — 로봇 로그에 MARKER 로 남음)')
@@ -927,9 +947,18 @@ class Gui(QtWidgets.QMainWindow):
             if PF in self.nodes:
                 self.log('사람 추종 스택 이미 켜짐')
                 return
-            self.ssh('추종 스택 켜기', 'setsid nohup ~/gen2_ws/logs/run_follow.sh > ~/gen2_ws/logs/run_follow.out 2>&1 '
-                     '< /dev/null & echo started')
-            self.log('추종 스택 켜는 중 — 10–20 초 뒤 "추종 활성화" 또는 패드 X')
+            k = follow_stack()
+            s_ = 'run_follow.sh' if k == 'legacy' else 'run_follow_cam.sh'
+            self.ssh('추종 스택 켜기', f'S=~/gen2_ws/logs/{s_}; [ -x $S ] || S=~/gen2_ws/logs/run_follow.sh; '
+                     'setsid nohup $S > ~/gen2_ws/logs/run_follow.out 2>&1 < /dev/null & echo $S')
+            self.log(f'추종 스택 ({STACK_NAME[k]}) 켜는 중 — 10–20 초 뒤 "추종 활성화" 또는 패드 X'
+                     + (' (첫 실행은 ReID 엔진 빌드 1–3 분)' if k == 'cam' else ''))
+        elif k in ('cam', 'legacy'):
+            os.makedirs(os.path.dirname(STACK_FILE), exist_ok=True)
+            with open(STACK_FILE, 'w') as f:
+                f.write(k + '\n')
+            self.note['stackkind'].setText(STACK_NAME[k] + ' — 다음 "켜기" 부터 (켜져 있으면 끄고 다시 켜기)')
+            self.log(f'추종 스택 = {STACK_NAME[k]}')
         elif k == 'stack_off':
             self.ssh('추종 스택 끄기', '~/gen2_ws/logs/stop_follow.sh')
             if running(LOCAL['hud'][1]):
@@ -1104,7 +1133,7 @@ class Gui(QtWidgets.QMainWindow):
         self.nodes = names
         stack = PF in names
         self.lamp['stack'].set('on' if stack else 'off')
-        parts = [n for n, k in (('사람검출', '/person_detector'), ('다리', '/leg_detector'),
+        parts = [n for n, k in (('사람추적', '/person_tracker'), ('사람검출', '/person_detector'), ('다리', '/leg_detector'),
                                 ('추종', PF), ('Nav2', RPP)) if k in names]
         self.note['stack'].setText(' · '.join(parts) if parts else '꺼짐')
         if not any('balance' in n for n in names):
