@@ -1,0 +1,17 @@
+# "롤1" — desktop roll A 안 2026-10-24 (overlay on balance.yaml; NOT loaded by default). Load on the user's "롤1 테스트":
+# gen2_tune.sh roll1 (same switch as opt1), back with gen2_tune.sh default.
+# Why: user "롤이 한 박자 늦음". Real 10-24 step logs: leg-length target -> actual leg diff ~200 ms late, 50-60 % amplitude;
+# the roll loop is integral-heavy (kp 1, ki 8) so it waits for the integral. A = more P and D, less I, faster rate filter.
+# Sim (real-log plant: wheel 0.83, v_ki 0.8, delays/backlash, 16 robots per scenario, robot-style hip oscillation guard emulated):
+#   one wheel drops off a 6/8/10 cm edge: now 16/16, 16/16, 8/16 (max roll 10 / 15 / 36 deg) -> A 16/16 x3 (max roll 7 / 9 / 12 deg)
+#   standard 10 scenarios: now 133/160 -> A 134/160; hip oscillation guard trips 0 (bumps no longer read as vibration);
+#   left/right hip-load chatter (1 Hz high-pass RMS) 0.91 -> 1.01 N·m (same). A roll CMA (7 params) did not beat A.
+# Watch on the robot: L/R rocking (the old 2.8 Hz rock was with hip_mode mit; now mit_pos), hip current noise, osc faults.
+# Only these 4 keys change. Previous value in [].
+balance:
+  ros__parameters:
+    tune:
+      roll_kp: 1.5            # [1.0]
+      roll_ki: 4.0            # [8.0]
+      roll_kd: 0.2            # [0.1]
+      roll_rate_lpf_hz: 8.0   # [4.0]
