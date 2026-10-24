@@ -17,8 +17,10 @@ if [ "$name" != default ] && [ ! -f "$share/balance_tune_$name.yaml" ]; then
   echo "no such overlay: $share/balance_tune_$name.yaml" >&2
   exit 1
 fi
+set +u   # the ROS setup scripts read unset variables
 source /opt/ros/jazzy/setup.bash >/dev/null 2>&1
 source "$HOME/gen2_ws/install/setup.bash" >/dev/null 2>&1
+set -u
 export CYCLONEDDS_URI=file://$("$HOME/gen2_ws/install/gen2_bringup/lib/gen2_bringup/gen2_dds.sh" 2>/dev/null)
 mode=$(timeout 6 ros2 topic echo --once /controller/state 2>/dev/null | awk '/^mode:/{print $2}')
 case "$mode" in
