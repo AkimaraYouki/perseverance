@@ -115,12 +115,16 @@ class PersonFollow(Node):
         self.blocked_t = -1e9           # last time the corridor to the person was blocked
         self.scan_b = np.zeros((0, 2))  # scan_level points in base_link
         self.create_subscription(LaserScan, 'scan_level', self._scan, qos_profile_sensor_data)          # controller gave up (boxed in / no progress): steer directly for a while
+        self._declare_extra(p)          # subclasses (person_follow_cam) declare theirs before Live locks the parameters
         live = dict(self._LIVE)
         live['bearing_tol_deg'] = lambda v: setattr(self, 'tol', math.radians(v))
         live['cam_tilt_deg'] = lambda v: setattr(self, 'cam_tilt', math.radians(v))
         live['cam_fov_deg'] = lambda v: setattr(self, 'cam_fov', math.radians(v))
         Live(self, live, always=('use_nav', 'camera_only'))
         self.create_timer(0.05, self._step)
+
+    def _declare_extra(self, p):
+        pass
 
     # runtime-changeable (robot disarmed only, gen2_tools.live): limits / tracking / avoidance — no gains (k_dist, k_yaw)
     _LIVE = {'follow_dist_m': 'd_ref', 'vx_max': 'vx_max', 'wz_max': 'wz_max',
