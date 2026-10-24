@@ -186,24 +186,22 @@ class PersonTracker(Node):
         out = self.yolo(canvas[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32) / 255.0)[0]
         pose = out.shape[0] == 56
         score = out[4]
-        k = np.flatnonzero(score > self.det_low)
-        boxes, scores, kps = [], [], []
-        for j in k:
-            cxb, cyb, wb, hb = out[0, j], out[1, j], out[2, j], out[3, j]
-            boxes.append([float((cxb - wb / 2 - dx) / r), float((cyb - hb / 2 - dy) / r), float(wb / r), float(hb / r)])
-            scores.append(float(score[j]))
-            if pose:
-                kp = out[5:, j].reshape(17, 3).copy()
-                kp[:, 0] = (kp[:, 0] - dx) / r
-                kp[:, 1] = (kp[:, 1] - dy) / r
-                kps.append(kp)
+        k = np.flatnonzero(score > self.det_low)              # vectorised (low threshold -> many anchors; a Python loop cost ~8 ms)
+        bx = np.stack([(out[0, k] - out[2, k] / 2 - dx) / r, (out[1, k] - out[3, k] / 2 - dy) / r, out[2, k] / r, out[3, k] / r], 1)
+        boxes, scores = bx.astype(float).tolist(), score[k].astype(float).tolist()
+        if pose and len(k):
+            kps = out[5:, k].reshape(17, 3, -1).transpose(2, 0, 1).copy()
+            kps[:, :, 0] = (kps[:, :, 0] - dx) / r
+            kps[:, :, 1] = (kps[:, :, 1] - dy) / r
+        else:
+            kps = [None] * len(k)
         dets, dsc, dex = [], [], []
         if boxes:
             for i in np.array(cv2.dnn.NMSBoxes(boxes, scores, self.det_low, 0.5)).reshape(-1):
                 bx, by, bw, bh = boxes[i]
                 dets.append([max(0.0, bx), max(0.0, by), min(W, bx + bw), min(H, by + bh)])
                 dsc.append(scores[i])
-                dex.append(kps[i] if pose else None)
+                dex.append(kps[i])
         t2 = time.monotonic()
         tracks = self.bt.update(dets, dsc, dex)
         fr = self.bt.frame
