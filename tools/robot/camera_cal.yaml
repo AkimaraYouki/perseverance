@@ -1,0 +1,19 @@
+# 카메라 체커보드 캘리브레이션 (2026-10-26, 데스크톱): IMX219 + 새 마운트, 센서 모드 3 (1640x1232 전체) -> 640x480, flip 180 그대로.
+# 보드 8x6 안쪽 코너, 30 장, OpenCV fisheye RMS 0.229 px, 가로 화각 124.2 deg
+# (pinhole 로 맞추면 RMS 0.663 px, fx 399.8 — 옛 스택용 근사). 옛 기본값 fx 530 / cx 320 은 데이터시트 값이라 크게 틀림.
+# 쓰는 법: run_follow_cam.sh / run_follow.sh 가 --params-file 로 얹는다 (~/gen2_ws/logs/camera_cal.yaml).
+person_tracker:
+  ros__parameters:
+    camera_model: opencv_fisheye
+    K: [309.1409, 0.0, 334.447, 0.0, 308.4701, 214.0156, 0.0, 0.0, 1.0]
+    D: [-0.023064, -0.0273, 0.0242, -0.00956]
+person_follow:
+  ros__parameters:
+    camera_model: opencv_fisheye
+    K: [309.1409, 0.0, 334.447, 0.0, 308.4701, 214.0156, 0.0, 0.0, 1.0]
+    D: [-0.023064, -0.0273, 0.0242, -0.00956]
+    cam_fx: 399.8
+person_detector:
+  ros__parameters:
+    fx: 399.8
+    cx: 328.0

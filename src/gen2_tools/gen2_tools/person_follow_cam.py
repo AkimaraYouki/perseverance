@@ -37,8 +37,10 @@ class PersonFollowCam(PersonFollow):
 
     def _declare_extra(self, p):
         self.vx_max = p('cam_vx_max', 0.7)
-        self.cam_model = p('camera_model', 'pinhole')     # pinhole (cam_fx) | equidistant (160 deg: hfov_deg)
+        self.cam_model = p('camera_model', 'pinhole')     # pinhole (cam_fx) | equidistant (hfov_deg) | opencv_fisheye (K, D)
         self.hfov = math.radians(p('hfov_deg', 160.0))
+        self.cam_K, self.cam_D = p('K', [0.0]), p('D', [0.0])  # checkerboard calibration (camera_cal.yaml, 2026-10-26)
+        self.bm = None
         self.lidar_margin = math.radians(p('lidar_span_margin_deg', 2.0))
         self.lidar_max = p('lidar_max_m', 6.0)
         self.tg_msg, self.tg_new, self.tg_t = None, False, -1e9
@@ -75,13 +77,14 @@ class PersonFollowCam(PersonFollow):
         near = rs[rs <= rs[min(len(rs) - 1, max(2, len(rs) // 5))] + 0.25]      # the front cluster (legs / body)
         return float(np.median(near)) if len(near) >= 3 else None
 
-    def _ground_dist(self, feet_row):
-        """Camera -> feet distance on the ground plane from the feet image row (pinhole or equidistant lens)."""
-        cy = 0.5 * self.cam_h
-        if self.cam_model == 'equidistant':                 # f from the horizontal field of view (square pixels)
-            ray = (feet_row - cy) / ((self.cam_w / 2.0) / (self.hfov / 2.0))
-        else:
-            ray = math.atan2(feet_row - cy, self.cam_fx)
+    def _ground_dist(self, feet_row, u=None):
+        """Camera -> feet distance on the ground plane from the feet pixel (lens model from camera_cal / parameters)."""
+        if self.bm is None:
+            from gen2_tools.tracking_core import BearingModel
+            K = self.cam_K if len(self.cam_K) == 9 else None
+            D = self.cam_D if len(self.cam_D) == 4 else None
+            self.bm = BearingModel(self.cam_model, self.cam_w, self.cam_h, fx=self.cam_fx, hfov_deg=math.degrees(self.hfov), K=K, D=D)
+        _, ray = self.bm.ray(self.cam_w / 2.0 if u is None else u, feet_row)
         dep = ray + self.body_pitch + self.cam_tilt
         if dep < math.radians(1.5):
             return None
@@ -114,7 +117,7 @@ class PersonFollowCam(PersonFollow):
             d = self._lidar_dist([math.radians(a) for a in j['span_deg']])
             self.dist_src = 'lidar'
             if d is None:
-                d, self.dist_src = self._ground_dist(j['feet_row']), 'feet'
+                d, self.dist_src = self._ground_dist(j['feet_row'], 0.5 * (j['box'][0] + j['box'][2])), 'feet'
             if d is not None:
                 pc = np.array([self.cam_x + d * math.cos(b), d * math.sin(b)])
                 w = self._to_w(pose, pc)

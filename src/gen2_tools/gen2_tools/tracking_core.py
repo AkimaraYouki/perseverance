@@ -66,6 +66,16 @@ class BearingModel:
         self.K = None if K is None else np.asarray(K, float).reshape(3, 3)
         self.D = None if D is None else np.asarray(D, float).reshape(4, 1)
 
+    def ray(self, u, v):
+        """(bearing + left, depression + down) [rad] of pixel (u, v)."""
+        if self.model == 'opencv_fisheye' and self.K is not None:
+            import cv2
+            p = cv2.fisheye.undistortPoints(np.array([[[u, v]]], np.float64), self.K, self.D)[0, 0]
+            return -math.atan(float(p[0])), math.atan2(float(p[1]), math.hypot(1.0, float(p[0])))
+        if self.model == 'equidistant':
+            return (self.cx - u) / self.f_eq, (v - self.H / 2.0) / self.f_eq
+        return math.atan2(self.cx - u, self.fx), math.atan2(v - self.H / 2.0, self.fx)
+
     def bearing(self, u, v=None):
         if self.model == 'equidistant':
             return (self.cx - u) / self.f_eq
