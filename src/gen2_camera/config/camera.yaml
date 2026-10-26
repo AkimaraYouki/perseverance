@@ -2,6 +2,7 @@
 /**:
   ros__parameters:
     source: "argus"        # argus = CSI (nvarguscamerasrc, ISP 거침) | v4l2 = USB 웹캠 (MJPEG) | test = videotestsrc
+    sensor_mode: 3         # 2026-10-26: IMX219 모드 3 = 1640x1232 (센서 전체, 4:3) -> 640x480. -1 = Argus 자동 — 1920x1080 모드 2 를 골라 가운데만 잘리고 (가로 화각 ~59 %) 16:9 -> 4:3 으로 세로가 늘어났음
     sensor_id: 0           # CSI 포트 번호. IMX219 가 CAM1 이면 1 일 수 있다 — `ls /dev/video*` 와 nvargus 로그로 확인
     width: 640
     height: 480
