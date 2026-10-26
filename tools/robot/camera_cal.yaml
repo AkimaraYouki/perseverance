@@ -13,6 +13,10 @@ person_follow:
     K: [309.1409, 0.0, 334.447, 0.0, 308.4701, 214.0156, 0.0, 0.0, 1.0]
     D: [-0.023064, -0.0273, 0.0242, -0.00956]
     cam_fx: 399.8
+    # 새 마운트 (Onshape Assembly 1, 2026-10-26 onshape-to-robot): camara_link = 고관절 축 중점에서 앞 111.8 mm, 위 20.8 mm, 수평
+    cam_x_m: 0.1118           # [0.108]
+    cam_h_off_m: 0.0863       # base 0.0655 + 카메라 0.0208 [0.081]
+    cam_tilt_deg: 0.0
 person_detector:
   ros__parameters:
     fx: 399.8
