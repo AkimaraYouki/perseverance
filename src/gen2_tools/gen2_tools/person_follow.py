@@ -68,6 +68,12 @@ class PersonFollow(Node):
         # camera-only people (no LiDAR legs at that bearing, or LiDAR down): distance from the ankles' (else the box
         # bottom's) image row on the ground plane: camera height = leg h + cam_h_off, depression = ray + body pitch + tilt
         self.cam_only = p('camera_only', True)
+        # smooth starts / stops while following (GCS 2026-10-26, user "추종시 가감속 부드럽게"): rate limits on the
+        # direct-steering command (Nav2's own output is not touched). Braking stays quicker than speeding up.
+        self.acc = p('follow_accel', 0.4)              # m/s^2 speeding up (forward or backward)
+        self.dec = p('follow_decel', 0.8)              # m/s^2 slowing down
+        self.wacc = p('follow_wz_accel', 2.0)          # rad/s^2 turn rate change
+        self.sm_v, self.sm_w, self.sm_t = 0.0, 0.0, None
         self.cam_fx = p('cam_fx', 530.0)
         self.cam_tilt = math.radians(p('cam_tilt_deg', 0.0))
         self.cam_x = p('cam_x_m', 0.108)          # camera_link in base_link
@@ -126,8 +132,24 @@ class PersonFollow(Node):
     def _declare_extra(self, p):
         pass
 
+    def _smooth(self, t, now):
+        """Rate-limit the direct-steering Twist in place (accel / decel / turn-rate change). After a pause
+        (Nav2 drove, follow off) it restarts from 0 so the first command is limited too."""
+        dt = 0.05 if self.sm_t is None or now - self.sm_t > 0.3 else now - self.sm_t
+        if self.sm_t is None or now - self.sm_t > 0.3:
+            self.sm_v, self.sm_w = 0.0, 0.0
+        self.sm_t = now
+        v, dv = t.linear.x, t.linear.x - self.sm_v
+        lim = (self.acc if abs(v) > abs(self.sm_v) and v * self.sm_v >= 0 else self.dec) * dt
+        self.sm_v += max(-lim, min(lim, dv))
+        lw = self.wacc * dt
+        self.sm_w += max(-lw, min(lw, t.angular.z - self.sm_w))
+        t.linear.x, t.angular.z = float(self.sm_v), float(self.sm_w)
+        return t
+
     # runtime-changeable (robot disarmed only, gen2_tools.live): limits / tracking / avoidance — no gains (k_dist, k_yaw)
     _LIVE = {'follow_dist_m': 'd_ref', 'vx_max': 'vx_max', 'wz_max': 'wz_max',
+             'follow_accel': 'acc', 'follow_decel': 'dec', 'follow_wz_accel': 'wacc',
              'occluded_s': 'occl_s', 'search_wz': 'search_wz', 'appearance_min': 'app_min', 'use_nav': 'use_nav',
              'nav_replan_s': 'nav_period', 'reacquire_min': 'app_reacq', 'grace_s': 'grace',
              'legs_only_s': 'legs_only', 'max_gate_m': 'max_gate', 'predict_s': 'pred_s',
@@ -360,7 +382,7 @@ class PersonFollow(Node):
                 k = 0.0                                       # controller just gave up (blocked): only turn
             t.angular.z = float(np.clip(self.k_yaw * b, -self.wz_max, self.wz_max))
             t.linear.x = float(np.clip(k * self.k_d * (d - self.d_ref) * max(0.0, math.cos(b)), -self.vx_max * 0.5, self.vx_max))
-        self.pub.publish(t)
+        self.pub.publish(self._smooth(t, now))
         self._status(state, pb)
 
     def _match(self, tgt, cands, now):

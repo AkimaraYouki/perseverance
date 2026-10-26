@@ -174,7 +174,7 @@ class PersonFollowCam(PersonFollow):
                 k = 0.0
             t.angular.z = float(np.clip(self.k_yaw * b, -self.wz_max, self.wz_max))
             t.linear.x = float(np.clip(k * self.k_d * (d - self.d_ref) * max(0.0, math.cos(b)), -self.vx_max * 0.5, self.vx_max))
-        self.pub.publish(t)
+        self.pub.publish(self._smooth(t, now))
         self._status(state, pb)
 
 
