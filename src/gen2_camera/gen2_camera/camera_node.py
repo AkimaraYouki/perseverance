@@ -40,7 +40,8 @@ def build_pipeline(p) -> str:
         return f'{p["pipeline"]} ! {SINK}'
     w, h, fps, q = p["width"], p["height"], p["fps"], p["jpeg_quality"]
     if p["source"] == "argus":        # CSI: ISP(자동노출·화이트밸런스·디모자이크) 를 거친다
-        cam = (f'nvarguscamerasrc sensor-id={p["sensor_id"]} ! '
+        sm = f' sensor-mode={p["sensor_mode"]}' if p["sensor_mode"] >= 0 else ""   # IMX219: 3 = 1640x1232 전체 화각 (자동 = 1080p 크롭)
+        cam = (f'nvarguscamerasrc sensor-id={p["sensor_id"]}{sm} ! '
                f"video/x-raw(memory:NVMM),width={w},height={h},framerate={fps}/1")
         if p["encoder"] == "nvjpeg":  # NVMM 그대로 nvjpegenc (CPU 복사 없음)
             return (f'{cam} ! nvvidconv flip-method={p["flip_method"]} ! '
@@ -56,7 +57,7 @@ def build_pipeline(p) -> str:
 class CameraNode(Node):
     def __init__(self):
         super().__init__("camera")
-        d = dict(source="argus", sensor_id=0, width=640, height=480, fps=30, jpeg_quality=80, flip_method=0,
+        d = dict(source="argus", sensor_id=0, sensor_mode=-1, width=640, height=480, fps=30, jpeg_quality=80, flip_method=0,
                  encoder="cpu", stamp_source="capture", frame_id="camera_link",
                  topic="camera/image_raw/compressed", pipeline="", restart_delay_s=2.0, stall_timeout_s=3.0)
         self.p = {k: self.declare_parameter(k, v).value for k, v in d.items()}
