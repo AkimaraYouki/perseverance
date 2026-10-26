@@ -29,6 +29,7 @@ setup(
         'aruco_follow = gen2_tools.aruco_follow:main',
         'leg_detector = gen2_tools.leg_detector:main',
         'person_follow = gen2_tools.person_follow:main',
+        'person_follow_cam = gen2_tools.person_follow_cam:main',
         'health_logger = gen2_tools.health_logger:main',
     ]},
 )
