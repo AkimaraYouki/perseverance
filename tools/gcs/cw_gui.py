@@ -50,7 +50,8 @@ SSH = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=4', '-o', 'ControlMas
        '-o', f'ControlPath={HOME}/.ssh/cm-%r@%h:%p', '-o', 'ControlPersist=120']
 
 # ------------------------------------------------------------------ 파라미터 표 (게인 제외)
-# (노드, 이름, 설명, 최소, 최대, 간격, 기본값, 단위)  기본값 = 소스/설정 파일 값 (2026-10-15). bool 이면 최소~단위 무시
+# (노드, 이름, 설명, 최소, 최대, 간격, 기본값, 단위)  기본값 = 관제 기본 = 프리셋 1026_1414 (사용자 2026-10-26, 그 밖은 소스/설정 파일 값).
+# bool 이면 최소~단위 무시. 로봇 노드는 재시작하면 설정 파일 값 → GUI '기본값으로' 로 다시 보냄
 STACK_FILE = os.path.expanduser('~/.config/cw/follow_stack')      # cw follow cam|legacy 와 같은 파일
 STACK_NAME = {'cam': '카메라 중심 (새)', 'legacy': '다리 + 카메라 (옛)'}
 
@@ -66,25 +67,28 @@ def follow_stack():
 PF, RPP, LCM, GCM = '/person_follow', '/controller_server', '/local_costmap/local_costmap', '/global_costmap/global_costmap'
 GROUPS = [
     ('주행 속도 한계', '조종·추종·우회 각각의 최대 속도. 균형 노드 한계 (맨 아래) 가 전체 상한', [
-        ('/pad_teleop', 'vx_max', '패드 최대 전진 속도', 0.1, 1.2, 0.05, 0.83, 'm/s'),   # 0.83 = 3 km/h (로봇 10-14)
-        ('/pad_teleop', 'wz_max', '패드 최대 회전 속도', 0.2, 3.0, 0.1, 2.0, 'rad/s'),
-        (PF, 'vx_max', '추종 최대 전진 속도', 0.0, 1.2, 0.05, 0.83, 'm/s'),
-        (PF, 'wz_max', '추종 최대 회전 속도', 0.0, 2.5, 0.1, 1.0, 'rad/s'),
-        (PF, 'search_wz', '사람 찾을 때 회전 속도', 0.0, 1.5, 0.05, 0.5, 'rad/s'),
-        (RPP, 'FollowPath.desired_linear_vel', '우회 주행 속도 (Nav2)', 0.1, 1.2, 0.05, 0.83, 'm/s'),
-        (RPP, 'FollowPath.rotate_to_heading_angular_vel', '우회 제자리 회전 속도', 0.1, 2.5, 0.1, 1.0, 'rad/s'),
+        ('/pad_teleop', 'vx_max', '패드 최대 전진 속도', 0.1, 1.2, 0.05, 0.7, 'm/s'),   # 0.83 = 3 km/h (로봇 10-14)
+        ('/pad_teleop', 'wz_max', '패드 최대 회전 속도', 0.2, 3.0, 0.1, 3.0, 'rad/s'),
+        (PF, 'vx_max', '추종 최대 전진 속도', 0.0, 1.2, 0.05, 0.7, 'm/s'),
+        (PF, 'wz_max', '추종 최대 회전 속도', 0.0, 2.5, 0.1, 2.5, 'rad/s'),
+        (PF, 'follow_accel', '추종 가속 (빨라질 때, 작을수록 부드럽게)', 0.1, 1.2, 0.05, 0.4, 'm/s²'),   # PR #8
+        (PF, 'follow_decel', '추종 감속 (느려질 때)', 0.2, 1.5, 0.05, 0.8, 'm/s²'),
+        (PF, 'follow_wz_accel', '추종 회전 변화 한계', 0.5, 6.0, 0.25, 2.0, 'rad/s²'),
+        (PF, 'search_wz', '사람 찾을 때 회전 속도', 0.0, 1.5, 0.05, 1.0, 'rad/s'),
+        (RPP, 'FollowPath.desired_linear_vel', '우회 주행 속도 (Nav2)', 0.1, 1.2, 0.05, 0.7, 'm/s'),
+        (RPP, 'FollowPath.rotate_to_heading_angular_vel', '우회 제자리 회전 속도', 0.1, 2.5, 0.1, 2.0, 'rad/s'),
         (RPP, 'FollowPath.regulated_linear_scaling_min_speed', '우회 곡선 최소 속도', 0.05, 0.7, 0.05, 0.25, 'm/s'),
         (RPP, 'FollowPath.min_approach_linear_velocity', '우회 목표 근처 최소 속도', 0.0, 0.5, 0.05, 0.1, 'm/s'),
         ('/balance', 'tune.vmax_kmh', '균형 노드 최고 속도 (전체 상한)', 0.5, 3.5, 0.1, 3.0, 'km/h'),   # 로봇이 0.5–3.5 밖은 거절
     ]),
     ('사람 추종', '누구를 얼마나 떨어져서 따라가는지, 놓쳤을 때 어떻게 하는지', [
         (PF, 'follow_dist_m', '따라갈 거리', 0.3, 2.0, 0.05, 0.8, 'm'),
-        (PF, 'bearing_tol_deg', '방향 허용 오차 (이 안이면 회전 안 함)', 0.0, 30.0, 1.0, 10.0, '°'),
-        (PF, 'occluded_s', '가려짐 허용 시간 (넘으면 찾기)', 0.0, 15.0, 0.5, 5.0, 's'),
+        (PF, 'bearing_tol_deg', '방향 허용 오차 (이 안이면 회전 안 함)', 0.0, 30.0, 1.0, 6.0, '°'),
+        (PF, 'occluded_s', '가려짐 허용 시간 (넘으면 찾기)', 0.0, 15.0, 0.5, 1.0, 's'),
         (PF, 'predict_s', '가려졌을 때 예측해서 갈 시간', 0.0, 5.0, 0.1, 1.5, 's'),
         (PF, 'grace_s', '잠깐 놓쳐도 추종 유지', 0.0, 3.0, 0.1, 0.5, 's'),
         (PF, 'legs_only_s', '카메라 없이 다리만으로 이어 가기', 0.0, 5.0, 0.1, 1.0, 's'),
-        (PF, 'max_gate_m', '대상이 한 번에 움직일 수 있는 거리', 0.5, 5.0, 0.1, 2.5, 'm'),
+        (PF, 'max_gate_m', '대상이 한 번에 움직일 수 있는 거리', 0.5, 5.0, 0.1, 5.0, 'm'),
         (PF, 'appearance_min', '옷 색 일치 기준 (근처)', 0.0, 1.0, 0.05, 0.5, ''),
         (PF, 'reacquire_min', '옷 색 일치 기준 (오래 놓친 뒤)', 0.0, 1.0, 0.05, 0.65, ''),
     ]),
@@ -102,7 +106,7 @@ GROUPS = [
     ('사람 인식', '카메라 (YOLO) · 라이다 다리 검출 — 로봇이 live_params 로 열면 실시간', [
         ('/person_tracker', 'score_min', '사람 표시 최소 확신도 (새 스택)', 0.1, 0.9, 0.05, 0.40, ''),
         ('/person_tracker', 'process_hz', '사람 추적 주기 (추종 중, 새 스택)', 5.0, 30.0, 1.0, 30.0, 'Hz'),
-        ('/person_tracker', 'idle_hz', '사람 추적 주기 (추종 꺼짐, 새 스택)', 0.5, 10.0, 0.5, 2.0, 'Hz'),
+        ('/person_tracker', 'idle_hz', '사람 추적 주기 (추종 꺼짐, 새 스택)', 0.5, 10.0, 0.5, 6.0, 'Hz'),
         ('/person_detector', 'score_min', '사람 검출 최소 확신도', 0.1, 0.9, 0.05, 0.40, ''),
         ('/person_detector', 'process_hz', '사람 검출 주기 (추종 중)', 5.0, 30.0, 1.0, 30.0, 'Hz'),
         ('/person_detector', 'idle_hz', '사람 검출 주기 (추종 꺼짐)', 0.5, 10.0, 0.5, 2.0, 'Hz'),
@@ -138,7 +142,7 @@ KNOWN_LIVE = {
     PF: {'follow_dist_m', 'vx_max', 'wz_max', 'occluded_s', 'search_wz', 'appearance_min', 'use_nav', 'nav_replan_s',
          'reacquire_min', 'grace_s', 'legs_only_s', 'max_gate_m', 'predict_s', 'corridor_margin_m', 'nav_hold_s',
          'bearing_tol_deg', 'camera_only', 'cam_fx', 'cam_tilt_deg', 'cam_x_m', 'cam_h_off_m', 'cam_max_dist_m',
-         'cam_confirm_s', 'cam_fov_deg', 'cam_only_score'},
+         'cam_confirm_s', 'cam_fov_deg', 'cam_only_score', 'follow_accel', 'follow_decel', 'follow_wz_accel'},
     RPP: {'FollowPath.desired_linear_vel', 'FollowPath.rotate_to_heading_angular_vel',
           'FollowPath.regulated_linear_scaling_min_speed', 'FollowPath.min_approach_linear_velocity'},
     LCM: {'inflation_layer.inflation_radius'},
