@@ -353,11 +353,20 @@ def render(s, fast=True, slow=True):
     if not slow:
         clock = clock.replace(':', ' ')  # colon ticks once a second: the display is alive
     cx = W - 6 - d.textlength(clock, font=F_S)
-    if s.get('step_mode'):   # step-detect mode on (pad D-pad up): steady inverted tag after the mode badge
-        sx, sw = x + tw + 12, d.textlength('STEP', font=F_SB)
-        if sx + sw + 8 < cx - 4:
+    # tags after the mode badge: STEP (step-detect mode on, inverted), tune overlay name e.g. OPT1 (outlined)
+    sx = x + tw + 12
+    for tag, inv in (('STEP' if s.get('step_mode') else '', True), ((s.get('tune') or '').upper(), False)):
+        if not tag:
+            continue
+        sw = d.textlength(tag, font=F_SB)
+        if sx + sw + 8 >= cx - 4:
+            break
+        if inv:
             d.rectangle([sx, 3, sx + sw + 8, 17], fill=FG)
-            d.text((sx + 4, 5), 'STEP', font=F_SB, fill=BG)
+        else:
+            d.rectangle([sx, 3, sx + sw + 8, 17], outline=FG)
+        d.text((sx + 4, 5), tag, font=F_SB, fill=BG if inv else FG)
+        sx += sw + 12
     _txt(d, (cx, 5), clock, F_S, DIM)
 
     L, M, R = 2, 160, 318
