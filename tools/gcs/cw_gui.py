@@ -103,6 +103,12 @@ GROUPS = [
         (PF, 'cam_h_off_m', '카메라 높이 − 다리 높이', 0.0, 0.2, 0.005, 0.081, 'm'),
         (PF, 'cam_max_dist_m', '카메라 거리 최대 (넘으면 버림)', 1.0, 10.0, 0.5, 5.0, 'm'),
     ]),
+    ('자동 턱 (카메라, 추종 중)', '켜기/끄기는 첫 탭. 아래 거리·속도는 노드가 시작 때만 읽음 (추종 스택 재시작 필요, 데스크톱 2026-10-27)', [
+        (PF, 'auto_slow_dist_m', '턱이 이만큼 앞이면 감속 시작', 0.5, 3.0, 0.1, 1.5, 'm'),
+        (PF, 'auto_slow_v', '감속 구간 속도', 0.1, 0.5, 0.05, 0.3, 'm/s'),
+        (PF, 'auto_arm_dist_m', '턱이 이만큼 앞이면 턱 감지 모드 켬', 0.2, 1.0, 0.05, 0.5, 'm'),
+        (PF, 'auto_done_travel_m', '마지막 착지 뒤 이만큼 막힘 없으면 모드 끔', 0.5, 3.0, 0.1, 1.3, 'm'),
+    ]),
     ('사람 인식', '카메라 (YOLO) · 라이다 다리 검출 — 로봇이 live_params 로 열면 실시간', [
         ('/person_tracker', 'score_min', '사람 표시 최소 확신도 (새 스택)', 0.1, 0.9, 0.05, 0.40, ''),
         ('/person_tracker', 'process_hz', '사람 추적 주기 (추종 중, 새 스택)', 5.0, 30.0, 1.0, 30.0, 'Hz'),
@@ -635,6 +641,7 @@ class Gui(QtWidgets.QMainWindow):
         self.pending = {}              # 노드 → {이름: 값}
         self.att_win = None            # 자세 창
         self.step_on, self.step_phase = False, 0     # 턱 감지 모드 (balance/step_mode_active, step_phase)
+        self.auto_on, self.auto_txt = False, ''       # 자동 턱 (person_follow auto_step, follow/status [AUTO …])
 
         w = QtWidgets.QWidget()
         self.setCentralWidget(w)
@@ -790,6 +797,10 @@ class Gui(QtWidgets.QMainWindow):
                 self._btn('켜기', lambda: self.ros.set_params(PF, {'camera_only': True}), '켜기/끄기는 균형 중에도 됨'),
                 self._btn('끄기', lambda: self.ros.set_params(PF, {'camera_only': False}))]),
             ('jump', '점프 (패드 Y) — 읽기 전용', []),
+            ('autostep', '자동 턱 (카메라, 추종 중)', [
+                self._btn('켜기', lambda: self.ros.set_params(PF, {'auto_step': True}),
+                          '추종 중 카메라로 턱을 보면: 1.5 m 앞 0.3 m/s 감속 → 0.5 m 앞 턱 감지 모드 → 점프 → 1.3 m 뒤 해제. 균형 중에도 켜고 끔'),
+                self._btn('끄기', lambda: self.ros.set_params(PF, {'auto_step': False}))]),
             ('step', '턱 감지 모드 (평지 전용, 패드 십자키 ↑/↓)', [
                 self._btn('켜기', lambda: self.ros.set_bool('/balance/step_mode', True, '턱 감지 모드 켜기'),
                           '앞으로 밀면: 0.14 m/s 접근 → 턱에 막히면 0.3 m 후진 → 0.3 m/s 재주행 → 자동 점프. 스틱 놓으면 취소'),
@@ -1143,9 +1154,9 @@ class Gui(QtWidgets.QMainWindow):
         if not any('balance' in n for n in names):
             self.l_ros.set('off')
         if stack:
-            self.ros.get_params(PF, ['use_nav', 'camera_only'])
+            self.ros.get_params(PF, ['use_nav', 'camera_only', 'auto_step'])
         else:
-            for k in ('follow', 'hold', 'nav', 'camonly'):
+            for k in ('follow', 'hold', 'nav', 'camonly', 'autostep'):
                 self.lamp[k].set('off')
                 self.note[k].setText('추종 스택 꺼짐')
         if '/balance' in names:
@@ -1182,6 +1193,12 @@ class Gui(QtWidgets.QMainWindow):
         if node == PF and vals.get('use_nav') is not None:
             self.lamp['nav'].set('on' if vals['use_nav'] else 'warn')
             self.note['nav'].setText('켜짐 — 막히면 돌아감' if vals['use_nav'] else '꺼짐 — 직진만')
+        if node == PF and 'auto_step' in vals:
+            a = vals['auto_step']
+            self.lamp['autostep'].set('off' if a is None else 'warn' if a else 'off')
+            self.note['autostep'].setText('추종 노드에 없음 (새 버전 설치 전)' if a is None else
+                                          ('켜짐' + (f' — {self.auto_txt}' if self.auto_txt else '')) if a else '꺼짐 (기본)')
+            self.auto_on = bool(a)
         if node == PF and vals.get('camera_only') is not None:
             self.lamp['camonly'].set('on' if vals['camera_only'] else 'off')
             self.note['camonly'].setText('켜짐 — 라이다가 없어도 카메라로 거리 추정' if vals['camera_only'] else '꺼짐 — 다리 (라이다) 있어야 추종')
@@ -1225,6 +1242,13 @@ class Gui(QtWidgets.QMainWindow):
     def _on_topic(self, t, s):
         if t == 'follow/status':
             st = s.split()[0] if s else ''
+            # 끝의 ' [AUTO <상태> <거리>]' = 자동 턱 (데스크톱 2026-10-27) → 기능 탭 줄에 따로
+            m = re.search(r'\s*\[AUTO ([^\]]*)\]\s*$', s)
+            self.auto_txt = m.group(1) if m else ''
+            if m:
+                s = s[:m.start()]
+            if self.auto_on:
+                self.note['autostep'].setText('켜짐' + (f' — {self.auto_txt}' if self.auto_txt else ''))
             # 끝의 [camera] / [legs] = 추적 출처 (로봇 2026-10-15). camera = 발목 화면 높이로 거리 추정 → 회색 표시
             m = re.match(r'(.*?)\s*\[(camera|legs)\]\s*$', s)
             if m:
