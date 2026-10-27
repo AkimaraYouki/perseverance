@@ -247,6 +247,10 @@ class PersonFollowCam(PersonFollow):
             if self.auto_on and self.auto.state == 'STEP' and state not in ('FOLLOW', 'OCCLUDED'):
                 t.linear.x = self.auto.step_v                     # lost the person while jumping: finish the step first
             self._auto(t, time.monotonic())
+        cap = t.linear.x if self.auto_on and self.auto.state in ('SLOW', 'STEP') else None
+        t = self._smooth(t, now)                           # accel / decel limits (PR #8) ...
+        if cap is not None and t.linear.x > cap:           # ... never above the auto-step speed (SLOW 0.3 / STEP)
+            t.linear.x = self.sm_v = float(cap)
         self.pub.publish(t)
         self._status(state, pb)
 

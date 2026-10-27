@@ -157,7 +157,11 @@ class StatusDisplay(Node):
         if state is None and self._cs is not None and now - self._cs_t < 2.0:
             m = self._cs.mode
             state = f'FAULT {self._cs.fault[:18]}' if m == 'fault' else m.upper()
-        return dict(robot_state=state, step_mode=self.step_mode, wall_time=time.time(), sys=sy,
+        try:   # balance tune overlay selected with gen2_tune.sh (e.g. opt1); empty = balance.yaml
+            tune = open(os.path.expanduser('~/.ros/gen2_tune')).read().strip()
+        except OSError:
+            tune = ''
+        return dict(robot_state=state, step_mode=self.step_mode, tune=tune, wall_time=time.time(), sys=sy,
                     compute=self._battery('sensor_hub: power compute'),
                     motor=self._battery('sensor_hub: power motor'),
                     motors=motors, hub=hub, gps=gps, mag=mag,
