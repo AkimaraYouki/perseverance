@@ -40,7 +40,7 @@ balance:
       x_leak_moving: 0.5      # 1/s, driving: x_err leaks (steady speed error fixed, big catch-up forgotten in 2 s)
       jerk_max: 6.0           # m/s^3 S-curve [3]: releasing while accelerating unwinds the accel in 0.4 s (was 0.53 s, the target kept rising)
       bal_adapt_wz_max: 0.1   # 2026-10-14: no balance-point learning while turning (th_bias went +2.8 deg in a turn -> crept 1 m after)
-      x_turn_wz: 0.0          # [0.3] 2026-10-14 user B: hold position DURING in-place turns (the reversing wheel stalls -> pivot on it,
+      x_turn_wz: 0.3   # [0.0] 2026-10-28 GCS (사용자 OK): 빠른 제자리 회전 뒤 되돌아감 — x_err 회전 중 리셋. 이전 0 = 10-14 사용자 B | [0.3] 2026-10-14 user B: hold position DURING in-place turns (the reversing wheel stalls -> pivot on it,
                               # body drifted 0.1-0.7 m forward in 19 turns). 0.3 = turning counts as moving (no creep back after long turns)
       v_ki: 0.8               # 2026-10-14 slope compensation: uphill the robot stalled (02:41: cmd 0.70, v 0.0, lean 17 deg, x_err at
                               # its 0.3 limit). Raises the tracked speed by 0.8 x integral(cmd - v) while the command is steady
@@ -55,10 +55,10 @@ balance:
       db_comp: 2              # 0 off, 1 boost, 2 sigma
       db_comp_nm: 0.65
       wheel_lpf_hz: 20.0
-      bal_adapt: 0.3          # user 2026-10-08 (0.1 / 0 tried: 0 stops the bias walk but parks ~0.17 m off)
+      bal_adapt: 0.15  # [0.3] 2026-10-28 GCS (사용자 OK): bias walk 재발 (100704: th_bias 0 -> -3 in 170 s) — 학습 속도 절반 | user 2026-10-08 (0.1 / 0 tried: 0 stops the bias walk but parks ~0.17 m off)
       bal_adapt_x_max: 0.15   # [0.05 blocked all learning: x_err left 5 cm at once, robot crept 0.3 m forward] 2026-10-14: learn only within 5 cm of the hold point. With gains x1.2 th_bias walked to -8 deg (limit) while
                               # standing, pitch -5..-8 deg, a lurch back of 0.3-0.7 m every 30-60 s (it learned the position hold's lean)
-      bal_adapt_max_deg: 3.0  # [8] real balance point ~ -1..-2 deg (th_trim -1.2 already); a walk cannot go far
+      bal_adapt_max_deg: 1.5   # [3.0] 2026-10-28 GCS (사용자 OK): 조용히 선 구간 th_bias -0.8..+0.6 deg -> 1.5 로 걸어갈 범위 제한 | [8] real balance point ~ -1..-2 deg (th_trim -1.2 already); a walk cannot go far
       contact_tau_min: 0.8
       roll_kp: 1.0            # 2026-10-12 retest with hip_mode mit_pos (legs -29 deg at 2.8 Hz instead of -150): step 2 of the desktop plan
       roll_ki: 8.0            # 10-09 with mit (host kp) this rocked at 2.8 Hz; 10-12 with mit_pos: quiet (roll sd 0.35 deg, no 2.8 Hz), pushes/ramp OK. fallback 0.5 / 3
