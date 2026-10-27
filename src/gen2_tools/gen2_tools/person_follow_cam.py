@@ -35,8 +35,9 @@ from std_srvs.srv import SetBool
 
 
 class PersonFollowCam(PersonFollow):
-    _LIVE = dict(PersonFollow._LIVE, auto_step='auto_on')
-    _ALWAYS = PersonFollow._ALWAYS + ('auto_step',)      # 자동 턱 켜기/끄기는 균형 중에도 (GUI)
+    _LIVE = dict(PersonFollow._LIVE, auto_step='auto_on', explore='ex_on', explore_s='ex_s', explore_ahead_m='ex_ahead',
+                 explore_side_m='ex_side', explore_v='ex_v', explore_scan_deg='ex_scan_deg')
+    _ALWAYS = PersonFollow._ALWAYS + ('auto_step', 'explore')     # 켜기/끄기는 균형 중에도 (GUI)
     def __init__(self):
         super().__init__()
         self.cmd = self.create_publisher(String, 'people/target_cmd', 10)
@@ -66,6 +67,17 @@ class PersonFollowCam(PersonFollow):
         self.step_d, self.step_on_sent, self.odom_s, self.odom_prev = None, False, 0.0, None
         self.rt_phase, self.t_fire = 0, -1e9
         self.v_meas = 0.0
+        # 가려짐 탐색 (GCS 2026-10-28, 사용자 "장애물에 가려지면 자동으로 탐사해서 다시 붙기"): occluded_s 를 넘게 놓치면
+        # 제자리 회전 (SEARCH) 전에 EXPLORE — 사람이 사라진 곳 + 가던 방향 explore_ahead_m 앞 (그다음 사라진 쪽 옆
+        # explore_side_m) 으로 가서 (막히면 Nav2) 좌우를 훑는다. 재식별 (person_tracker REACQUIRED) 되면 바로 FOLLOW.
+        self.ex_on = p('explore', True)
+        self.ex_s = p('explore_s', 12.0)                     # occluded_s 뒤 이 시간까지 탐색, 그다음 SEARCH
+        self.ex_ahead = p('explore_ahead_m', 1.0)            # 사라진 곳에서 가던 방향으로 더 갈 거리
+        self.ex_side = p('explore_side_m', 0.6)              # 두 번째 지점: 사라진 쪽 (side) 으로 비킨 거리
+        self.ex_v = p('explore_v', 0.4)                      # 탐색 중 최고 속도 [m/s]
+        self.ex_scan_deg = p('explore_scan_deg', 70.0)       # 지점에 닿으면 좌우로 이만큼 훑기
+        self.ex = None                                       # 탐색 계획 (사람을 놓친 순간마다 새로)
+        self.dist_gate = p('dist_gate_m', 0.35)               # 같은 사람인데 거리가 예측에서 이만큼 튀면 그 거리 버림
 
     # ------------------------------------------------------------------ inputs
     def _tg(self, m):
@@ -111,8 +123,9 @@ class PersonFollowCam(PersonFollow):
         return res
 
     # ------------------------------------------------------------------ geometry
-    def _lidar_dist(self, span):
-        """Nearest LiDAR cluster inside the person's bearing span (from the camera) [m], or None."""
+    def _lidar_dist(self, span, expect=None):
+        """Nearest LiDAR cluster inside the person's bearing span (from the camera) [m], or None. With expect (the
+        predicted camera distance) only returns near it (±dist_gate_m): an occluder's edge in the span is not the person."""
         if not len(self.scan_b):
             return None
         rel = self.scan_b - np.array([self.cam_x, 0.0])
@@ -123,6 +136,10 @@ class PersonFollowCam(PersonFollow):
         if int(m.sum()) < 3:
             return None
         rs = np.sort(r[m])
+        if expect is not None:
+            rs = rs[np.abs(rs - expect) < self.dist_gate]
+            if len(rs) < 3:
+                return None
         near = rs[rs <= rs[min(len(rs) - 1, max(2, len(rs) // 5))] + 0.25]      # the front cluster (legs / body)
         return float(np.median(near)) if len(near) >= 3 else None
 
@@ -165,10 +182,20 @@ class PersonFollowCam(PersonFollow):
         self.tg_new = False
         if j is not None and j.get('box') is not None and j.get('state') in ('LOCK', 'REACQUIRED'):
             b = math.radians(j['bearing_deg'])
-            d = self._lidar_dist([math.radians(a) for a in j['span_deg']])
+            # 같은 사람을 계속 볼 때 거리가 예측에서 dist_gate_m 넘게 튀면 버린다: 사람이 기둥·상자 모서리 뒤로 들어갈 때
+            # 라이다가 모서리를 사람 거리로 잡는다 (GCS 2026-10-28 시험) → 발 위치 → 예측 거리 순. 방위는 카메라 그대로
+            pc_of = lambda d_: np.array([self.cam_x + d_ * math.cos(b), d_ * math.sin(b)])  # noqa: E731
+            same = tgt is not None and j.get('state') == 'LOCK' and j.get('id') == tgt.get('id')
+            pred = self._predict(tgt, now) if same else None
+            fits = lambda d_: d_ is not None and (pred is None or float(np.linalg.norm(self._to_w(pose, pc_of(d_)) - pred)) < self.dist_gate)  # noqa: E731,E501
+            pp = self._to_b(pose, pred) if pred is not None else None
+            d = self._lidar_dist([math.radians(a) for a in j['span_deg']],
+                                 None if pp is None else float(math.hypot(pp[0] - self.cam_x, pp[1])))
             self.dist_src = 'lidar'
-            if d is None:
+            if not fits(d):
                 d, self.dist_src = self._ground_dist(j['feet_row'], 0.5 * (j['box'][0] + j['box'][2])), 'feet'
+            if not fits(d) and pred is not None:
+                d, self.dist_src = float(math.hypot(pp[0] - self.cam_x, pp[1])), 'pred'
             if d is not None:
                 pc = np.array([self.cam_x + d * math.cos(b), d * math.sin(b)])
                 w = self._to_w(pose, pc)
@@ -176,7 +203,7 @@ class PersonFollowCam(PersonFollow):
                     if tgt is None:
                         self.get_logger().info(f'locked person id {j.get("id")} at {d:.2f} m, {math.degrees(b):+.0f} deg ({self.dist_src})')
                     self.target = tgt = {'w': w, 'v': np.zeros(2), 't': now, 'side': 1.0, 'src': 'camera', 'cam_t': now,
-                                         'hist': np.zeros(1), 'id': j.get('id')}
+                                         'hist': np.zeros(1), 'id': j.get('id'), 'trail': []}
                 else:
                     dt = now - tgt['t']
                     if dt > 1e-3:
@@ -187,6 +214,10 @@ class PersonFollowCam(PersonFollow):
                             tgt['v'] *= 1.8 / n
                     tgt['w'] = 0.6 * w + 0.4 * self._predict(tgt, now)    # light smoothing (box jitter on waves)
                     tgt['t'], tgt['cam_t'], tgt['src'] = now, now, f'camera+{self.dist_src}'
+                    tr = tgt.setdefault('trail', [])               # 지나온 자리 (탐색 때 가던 방향)
+                    tr.append((now, tgt['w'].copy()))
+                    while tr and now - tr[0][0] > 2.0:
+                        tr.pop(0)
         self._travel(pose)
         self._control(pose, tgt, now)
 
@@ -220,9 +251,19 @@ class PersonFollowCam(PersonFollow):
             state = 'FOLLOW'
         elif lost < self.occl_s:
             state = 'OCCLUDED'
+        elif self.ex_on and lost < self.occl_s + self.ex_s and (self.ex is None or self.ex['phase'] != 'DONE'
+                                                              or self.ex['tgt_t'] != tgt['t']):
+            state = 'EXPLORE'
         else:
             state = 'SEARCH'
             t.angular.z = math.copysign(self.search_wz, tgt['side'])
+        if state != 'EXPLORE' and (state != 'SEARCH' or tgt is None):
+            self.ex = None
+        if state == 'EXPLORE':
+            if self._explore(pose, tgt, now, t):
+                return                                       # Nav2 drives (cmd_vel/auto from its controller)
+            self.pub.publish(self._smooth(t, now))
+            return
         pb = None
         if state in ('FOLLOW', 'OCCLUDED'):
             pw = self._predict(tgt, now)
@@ -254,13 +295,91 @@ class PersonFollowCam(PersonFollow):
         self.pub.publish(t)
         self._status(state, pb)
 
-    def _status(self, state, pb=None):
+    def _explore(self, pose, tgt, now, t):
+        """EXPLORE: go to the waypoints behind the occluder, then sweep left / right. Fills t (direct) or returns True
+        when Nav2 drives. A plan is made once per loss (tgt['t'] = last time the person was seen)."""
+        rob = np.array(pose[:2])
+        if self.ex is None or self.ex['tgt_t'] != tgt['t']:
+            last, v = np.array(tgt['w'], float), np.array(tgt['v'], float)
+            tr = [(t_, w_) for t_, w_ in tgt.get('trail', []) if tgt['t'] - t_ <= 1.0]
+            if len(tr) >= 3 and tr[-1][0] - tr[0][0] > 0.3:     # 마지막 1 s 궤적으로 가던 방향 (EMA 속도보다 덜 튐)
+                v = (tr[-1][1] - tr[0][1]) / (tr[-1][0] - tr[0][0])
+            spd = float(np.linalg.norm(v))
+            u = v / spd if spd > 0.15 else (last - rob) / max(1e-3, float(np.linalg.norm(last - rob)))
+            n = np.array([-u[1], u[0]]) * tgt['side']        # 사라진 쪽 (side: + = 로봇 왼쪽에서 마지막으로 봄)
+            w1 = last + u * self.ex_ahead
+            # 사라진 자리 (사람이 지나간 길이라 대체로 뚫림) → 가던 방향 앞 → 사라진 쪽 옆
+            self.ex = {'tgt_t': tgt['t'], 'wps': [last, w1, w1 + n * self.ex_side], 'i': 0, 'phase': 'GO', 't0': now,
+                       'scan_t': None, 'stuck_t': None}
+            self.get_logger().info(f'explore: lost {now - tgt["t"]:.1f} s, last ({last[0]:.2f}, {last[1]:.2f}) v ({v[0]:+.2f}, {v[1]:+.2f}) -> go ({w1[0]:.2f}, {w1[1]:.2f}) then sweep')
+        ex = self.ex
+        if ex['phase'] == 'DONE':
+            return False
+        if ex['phase'] == 'GO':
+            gw = ex['wps'][ex['i']]
+            pb = self._to_b(pose, gw)
+            d = float(np.hypot(*pb))
+            if d < 0.35 and ex['i'] + 1 < len(ex['wps']) and ex['i'] == 0:   # 사라진 자리는 지나가는 점 (훑지 않음)
+                ex['i'], ex['t0'] = 1, now
+                return self._explore(pose, tgt, now, t)
+            if d < 0.3 or now - ex['t0'] > 10.0:                # 닿음 / 너무 오래: 훑기
+                ex['phase'], ex['scan_t'] = 'SCAN', now
+                self._nav_cancel()
+            else:
+                blocked = self._blocked(pb) if d > 0.6 else False
+                if blocked:
+                    self.blocked_t = now
+                if now - self.blocked_t < self.nav_hold and self._nav(pose, gw, pb, now, stand_off=0.0):
+                    self._status('EXPLORE', pb, f'GO {ex["i"] + 1}/{len(ex["wps"])} nav')
+                    return True
+                self._nav_cancel()
+                b = math.atan2(pb[1], pb[0])
+                if blocked:                                     # Nav2 없음 / 실패: 15° 씩 비켜 뚫린 방향 (0.8 m 통로) 으로 돌아감
+                    free = [b + k * math.radians(15) * sg for k in range(1, 7) for sg in (tgt['side'], -tgt['side'])
+                            if not self._blocked(np.array([math.cos(b + k * math.radians(15) * sg),
+                                                           math.sin(b + k * math.radians(15) * sg)]) * 1.25)]
+                    if free:
+                        b, blocked = free[0], False
+                t.angular.z = float(np.clip(self.k_yaw * b, -self.wz_max, self.wz_max))
+                t.linear.x = 0.0 if blocked else float(min(self.ex_v, 0.8 * d) * max(0.0, math.cos(b)))
+                if blocked:                                     # 어느 쪽도 막힘: 2 s 뒤 훑기
+                    ex['stuck_t'] = ex['stuck_t'] or now
+                    if now - ex['stuck_t'] > 2.0:
+                        ex['phase'], ex['scan_t'] = 'SCAN', now
+                else:
+                    ex['stuck_t'] = None
+                self._status('EXPLORE', pb, f'GO {ex["i"] + 1}/{len(ex["wps"])}')
+                return False
+        # SCAN: 사라진 쪽으로 explore_scan_deg, 반대쪽으로 2 배, 가운데로 — search_wz 로
+        wz = max(0.2, self.search_wz)
+        t1 = math.radians(self.ex_scan_deg) / wz
+        dt = now - ex['scan_t']
+        side = tgt['side']
+        t.linear.x = 0.0
+        if dt < t1:
+            t.angular.z = side * wz
+        elif dt < 3 * t1:
+            t.angular.z = -side * wz
+        elif dt < 4 * t1:
+            t.angular.z = side * wz
+        else:
+            t.angular.z = 0.0
+            if ex['i'] + 1 < len(ex['wps']):
+                ex['i'], ex['phase'], ex['t0'], ex['stuck_t'] = ex['i'] + 1, 'GO', now, None
+            else:
+                ex['phase'] = 'DONE'                           # 다 훑음: SEARCH (제자리 회전) 로
+        self._status('EXPLORE', None, f'SCAN {ex["i"] + 1}/{len(ex["wps"])}')
+        return False
+
+    def _status(self, state, pb=None, ex_txt=None):
         """As person_follow (HUD reads 'target d m @ b deg'), + ' [AUTO <state> <step d>]' when the auto step is on."""
         if state != self.state:
             self.get_logger().info(f'{self.state} -> {state}')
             self.state = state
         s = state
-        if pb is not None:
+        if ex_txt is not None:                               # EXPLORE: 'EXPLORE GO 1/2 to 1.20 m @ +30 deg' (pb = waypoint, not the person)
+            s += f' {ex_txt}' + (f' to {math.hypot(*pb):.2f} m @ {math.degrees(math.atan2(pb[1], pb[0])):+.0f} deg' if pb is not None else '')
+        elif pb is not None:
             s += f' target {math.hypot(*pb):.2f} m @ {math.degrees(math.atan2(pb[1], pb[0])):+.0f} deg'
             if self.target is not None:
                 s += f" [{self.target.get('src', 'camera')}]"

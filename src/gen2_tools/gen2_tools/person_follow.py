@@ -432,14 +432,16 @@ class PersonFollow(Node):
             tgt['cam_t'] = now
 
     # ------------------------------------------------------------------ Nav2
-    def _nav(self, pose, pw, pb, now):
-        """Plan to 'follow_dist in front of the person' (odom frame) every nav_replan_s; False = drive directly."""
+    def _nav(self, pose, pw, pb, now, stand_off=None):
+        """Plan to 'stand_off (default follow_dist) in front of pw' (odom frame) every nav_replan_s; False = drive directly.
+        stand_off 0 = to the point itself (occlusion explore waypoints)."""
+        so = self.d_ref if stand_off is None else stand_off
         if not self.use_nav or not self.ac_plan.server_is_ready() or not self.ac_follow.server_is_ready():
             return False
         if now - self.nav_fail_t < 1.0:
             return False
         d = float(np.hypot(*pb))
-        if d < self.d_ref + 0.15:                          # close enough: just face the person (direct)
+        if d < so + 0.15:                                  # close enough: just face the person (direct)
             return False
         if self.nav_busy or now - self.nav_t < self.nav_period:
             return self.nav_goal_h is not None
@@ -447,7 +449,7 @@ class PersonFollow(Node):
         g = PoseStamped()
         g.header.frame_id = 'odom'
         g.header.stamp = self.get_clock().now().to_msg()
-        g.pose.position.x, g.pose.position.y = float(pw[0] - self.d_ref * u[0]), float(pw[1] - self.d_ref * u[1])
+        g.pose.position.x, g.pose.position.y = float(pw[0] - so * u[0]), float(pw[1] - so * u[1])
         yaw = math.atan2(u[1], u[0])
         g.pose.orientation.z, g.pose.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
         req = ComputePathToPose.Goal(goal=g, planner_id='GridBased', use_start=False)
