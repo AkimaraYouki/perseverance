@@ -102,6 +102,8 @@ class Hud(Node):
         self.gesture, self.action, self.action_t = "", "", 0.0
         self.create_subscription(CompressedImage, "camera/image_raw/compressed", self._img, qos_profile_sensor_data)
         self.create_subscription(String, "people/camera", self._people, 10)
+        self.step_rays, self.step_rays_t = [], 0.0       # 카메라 턱 후보 (person_tracker step/rays, 2026-10-28 GCS)
+        self.create_subscription(String, "step/rays", self._rays, 10)
         self.create_subscription(PoseArray, "people/legs", self._legs, 10)
         self.create_subscription(String, "follow/status", lambda m: self._set("status", m.data), 10)
         self.create_subscription(String, "gesture", lambda m: setattr(self, "gesture", m.data), 10)
@@ -121,6 +123,12 @@ class Hud(Node):
         if a is not None:
             self.img, self.img_t = a, time.monotonic()
             self.img_n += 1
+
+    def _rays(self, m):
+        try:
+            self.step_rays, self.step_rays_t = json.loads(m.data).get("rays", []), time.monotonic()
+        except json.JSONDecodeError:
+            pass
 
     def _people(self, m):
         try:
@@ -194,6 +202,17 @@ def draw(n: Hud, rect=None):
         if u is not None and 0 <= u < W:
             cv2.drawMarker(img, (u, H - 30), (255, 200, 0), cv2.MARKER_TRIANGLE_UP, 14, 2)
             cv2.putText(img, f"{math.hypot(xl, yl):.1f}m", (u - 16, H - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 200, 0), 1)
+    # 카메라 턱 후보 선 (주황): 원본 영상 픽셀 -> 보정 화면이면 같은 변환. 거리는 카메라 높이 0.27 m, 몸 기울기 0 으로 어림 (~)
+    for r in (n.step_rays if now - n.step_rays_t < 0.6 else []):
+        if len(r) < 4 or not r[3]:
+            continue
+        q = rect.pts(r[3]) if rect is not None else np.asarray(r[3], float)
+        pts = np.asarray(q, np.int32).reshape(-1, 1, 2)
+        cv2.polylines(img, [pts], False, (0, 165, 255), 3, cv2.LINE_AA)
+        d = 0.27 / math.tan(r[0]) if r[0] > math.radians(2) else None
+        x0, y0 = int(pts[0, 0, 0]), int(pts[0, 0, 1])
+        cv2.putText(img, f"step ~{d:.1f}m" if d and d < 5 else "step", (max(2, x0), max(14, y0 - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
     if tb is not None:
         u = u_of(tb)
         if u is not None and 0 <= u < W:

@@ -252,8 +252,9 @@ class PersonTracker(Node):
             if self.sw is None:
                 self.sw = sw.StepWatch(self.bm)
             rays = self.sw.rays(img)
-            self.pub_s.publish(String(data=json.dumps({'stamp': st, 'rays': [[round(d, 4), round(sp[0], 4), round(sp[1], 4)]
-                                                                               for d, sp, _ in rays]})))
+            # [depression, bearing left, bearing right, line as raw-image pixels (HUD)] — consumers read the first three
+            self.pub_s.publish(String(data=json.dumps({'stamp': st, 'rays': [[round(d, 4), round(sp[0], 4), round(sp[1], 4), px]
+                                                                               for d, sp, px in rays]})))
 
     def _bearing(self, t):
         """Bearing of a track: ankles / knees / hips middle when seen (the ground point), else the box centre."""
