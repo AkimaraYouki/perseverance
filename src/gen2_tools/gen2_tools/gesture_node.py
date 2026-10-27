@@ -110,11 +110,17 @@ class GestureNode(Node):
         cx, sy = 0.5 * (ls[0] + rs[0]), 0.5 * (ls[1] + rs[1])
         torso = float(0.5 * (K[11, 1] + K[12, 1]) - sy) if ok(11, 12) else 1.6 * sw
         torso = max(torso, sw)
-        if ok(7, 8, 9, 10):                          # both arms out to the sides at shoulder height, elbows straight
-            wl, wr, el, er = K[9, :2], K[10, :2], K[7, :2], K[8, :2]
-            out = [abs(w[0] - cx) >= 1.5 * sw and abs(w[1] - sy) < 0.5 * torso for w in (wl, wr)]
-            straight = [abs(e[0] - cx) > 0.75 * sw and abs(e[0] - cx) < abs(w[0] - cx) for e, w in ((el, wl), (er, wr))]
-            if all(out) and all(straight) and (wl[0] - cx) * (wr[0] - cx) < 0:
+        if ok(7, 8, 9, 10):                          # both arms out to the sides at shoulder height
+            # 실기 (2026-10-28 T 자세, 316 프레임): 사람 상자가 몸통 폭만 잡아 YOLO 손목이 상자 끝에 붙는다 (어깨 중심에서
+            # 0.6–2.1 sw, 대부분 1.1–1.25). 거리 대신 '어깨 높이' 를 주로 본다: 팔마다 손목·팔꿈치가 어깨 높이 ±0.45 torso,
+            # 팔꿈치나 손목이 0.75 sw 이상 바깥, 두 팔이 반대쪽. 팔 내림 = 손목 +0.7–0.9 torso 아래, 쭈그림 = 팔꿈치 0.45–0.6 sw.
+            arms = []
+            for e, w in ((7, 9), (8, 10)):
+                dxe, dxw = K[e, 0] - cx, K[w, 0] - cx
+                level = abs(K[e, 1] - sy) < 0.45 * torso and abs(K[w, 1] - sy) < 0.45 * torso
+                out = max(abs(dxe), abs(dxw)) >= 0.75 * sw and dxe * dxw > 0
+                arms.append(np.sign(dxw) if level and out else 0.0)
+            if arms[0] * arms[1] < 0:
                 return 'Thumb_Up'
         for e, w in ((7, 9), (8, 10)):               # one arm straight up: wrist well above the head, elbow above the shoulder
             if ok(e, w) and K[w, 1] < sy - 0.9 * torso and K[e, 1] < sy - 0.3 * torso and abs(K[w, 0] - cx) < 1.5 * sw:
