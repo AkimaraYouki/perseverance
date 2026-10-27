@@ -120,8 +120,10 @@ class PersonFollow(Node):
         live['bearing_tol_deg'] = lambda v: setattr(self, 'tol', math.radians(v))
         live['cam_tilt_deg'] = lambda v: setattr(self, 'cam_tilt', math.radians(v))
         live['cam_fov_deg'] = lambda v: setattr(self, 'cam_fov', math.radians(v))
-        Live(self, live, always=('use_nav', 'camera_only'))
+        Live(self, live, always=self._ALWAYS)
         self.create_timer(0.05, self._step)
+
+    _ALWAYS = ('use_nav', 'camera_only')     # on/off switches accepted while balancing (gen2_tools.live)
 
     def _declare_extra(self, p):
         pass

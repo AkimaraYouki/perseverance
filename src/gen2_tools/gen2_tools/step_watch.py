@@ -28,8 +28,8 @@ class StepWatch:
         self.hist = []                 # per frame: list of world x of candidate step feet
         self.last = []                 # this frame's candidates (d, bearing span, (u0, v0, u1, v1)) for drawing
 
-    def detect(self, bgr, cam_h, pitch):
-        """Candidate step feet this frame -> [(d [m], (b_left, b_right) [rad], line px)]. pitch: + nose down [rad]."""
+    def rays(self, bgr):
+        """Candidate step feet this frame -> [(depression below the camera axis [rad], (b_left, b_right) [rad], line px)]."""
         H, W = bgr.shape[:2]
         g = cv2.GaussianBlur(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY), (5, 5), 0)
         e = cv2.Canny(g, *self.canny)
@@ -48,12 +48,19 @@ class StepWatch:
             if self._contrast(bgr, u0, v0, u1, v1) < self.contrast_min:
                 continue
             _, dep = self.bm.ray(0.5 * (u0 + u1), 0.5 * (v0 + v1))
+            out.append((dep, (hi, lo), (u0, v0, u1, v1)))
+        return out
+
+    def to_dist(self, rays, cam_h, pitch):
+        """Rays (depression below the camera axis) -> ground distances with the camera height and body pitch (+ nose down)."""
+        out = []
+        for dep, span, ln in rays:
             dep += pitch
             if dep < math.radians(2.0):
                 continue
             d = cam_h / math.tan(dep)
             if 0.15 < d < self.max_dist:
-                out.append((d, (hi, lo), (u0, v0, u1, v1)))
+                out.append((d, span, ln))
         return out
 
     def _contrast(self, bgr, u0, v0, u1, v1):
@@ -73,9 +80,13 @@ class StepWatch:
 
     def update(self, bgr, cam_h, pitch, odom_x):
         """Feed one frame. Returns the distance [m] to the nearest confirmed step foot ahead, or None."""
-        c = self.detect(bgr, cam_h, pitch)
+        c = self.to_dist(self.rays(bgr), cam_h, pitch)
         self.last = c
-        self.hist.append([odom_x + d for d, _, _ in c])
+        return self.feed([d for d, _, _ in c], odom_x)
+
+    def feed(self, dists, odom_x):
+        """Temporal check of one frame's distances (robot: person_tracker publishes the rays, person_follow_cam the rest)."""
+        self.hist.append([odom_x + d for d in dists])
         self.hist = self.hist[-self.window:]
         pts = np.array([x for fr in self.hist for x in fr])
         if len(pts) == 0:

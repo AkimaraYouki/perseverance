@@ -25,6 +25,7 @@ import cv2
 import numpy as np
 import rclpy
 import rclpy.executors
+from gen2_tools import step_watch as sw
 from gen2_tools import tracking_core as tc
 from gen2_tools.live import Live
 from gen2_tools.person_detector import TrtYolo, ck
@@ -133,6 +134,10 @@ class PersonTracker(Node):
         self.tm_n, self.tms = 0, np.zeros(4)
         self.pub = self.create_publisher(String, 'people/camera', 10)
         self.pub_t = self.create_publisher(String, 'people/target', 10)
+        # 카메라 턱 감시 (2026-10-27): 바닥 위 긴 가로 모서리 (위아래 색이 다른 = 턱 발치) 를 광선으로 -> person_follow_cam 이
+        # 다리 높이·몸 기울기·주행 거리로 거리와 확인 (auto_step). step_every 프레임마다 (CPU ~3-5 ms)
+        self.step_on, self.step_every, self.sw = p('step_watch', True), int(p('step_every', 2)), None
+        self.pub_s = self.create_publisher(String, 'step/rays', 10)
         self.create_subscription(String, 'follow/status', self._follow_status, 10)
         self.create_subscription(String, 'people/target_cmd', self._cmd, 10)
         self.create_subscription(CompressedImage, 'camera/image_raw/compressed', self._img, qos_profile_sensor_data)
@@ -243,6 +248,12 @@ class PersonTracker(Node):
                      feet_row=round(float(self._feet_row(tg)), 1), score=round(float(tg.score), 3),
                      sim=None if tg.id not in emb else round(float(self.tm.similarity(emb[tg.id]) or 0.0), 3))
         self.pub_t.publish(String(data=json.dumps(j)))
+        if self.step_on and fr % max(1, self.step_every) == 0:
+            if self.sw is None:
+                self.sw = sw.StepWatch(self.bm)
+            rays = self.sw.rays(img)
+            self.pub_s.publish(String(data=json.dumps({'stamp': st, 'rays': [[round(d, 4), round(sp[0], 4), round(sp[1], 4)]
+                                                                               for d, sp, _ in rays]})))
 
     def _bearing(self, t):
         """Bearing of a track: ankles / knees / hips middle when seen (the ground point), else the box centre."""
