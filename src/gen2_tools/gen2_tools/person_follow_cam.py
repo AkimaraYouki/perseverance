@@ -40,6 +40,7 @@ class PersonFollowCam(PersonFollow):
         self.cam_model = p('camera_model', 'pinhole')     # pinhole (cam_fx) | equidistant (hfov_deg) | opencv_fisheye (K, D)
         self.hfov = math.radians(p('hfov_deg', 160.0))
         self.cam_K, self.cam_D = p('K', [0.0]), p('D', [0.0])  # checkerboard calibration (camera_cal.yaml, 2026-10-26)
+        self.cam_roll = p('cam_roll_deg', 0.0)                 # mount roll (cw HUD, 2026-10-27)
         self.bm = None
         self.lidar_margin = math.radians(p('lidar_span_margin_deg', 2.0))
         self.lidar_max = p('lidar_max_m', 6.0)
@@ -83,7 +84,8 @@ class PersonFollowCam(PersonFollow):
             from gen2_tools.tracking_core import BearingModel
             K = self.cam_K if len(self.cam_K) == 9 else None
             D = self.cam_D if len(self.cam_D) == 4 else None
-            self.bm = BearingModel(self.cam_model, self.cam_w, self.cam_h, fx=self.cam_fx, hfov_deg=math.degrees(self.hfov), K=K, D=D)
+            self.bm = BearingModel(self.cam_model, self.cam_w, self.cam_h, fx=self.cam_fx, hfov_deg=math.degrees(self.hfov), K=K, D=D,
+                                   roll_deg=self.cam_roll)
         _, ray = self.bm.ray(self.cam_w / 2.0 if u is None else u, feet_row)
         dep = ray + self.body_pitch + self.cam_tilt
         if dep < math.radians(1.5):

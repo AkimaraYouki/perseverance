@@ -12,7 +12,7 @@
 실행: source ~/gen2_desk/env.sh; python3 ~/gen2_desk/hud.py    (q / Esc 끝, s 화면 저장)
 렌즈 왜곡 보정 (2026-10-27): camera_cal.yaml (체커보드 fisheye K, D) 이 있으면 펴서 보여 준다 (~/gen2_desk/camera_cal.yaml,
   없으면 저장소 tools/robot/camera_cal.yaml). 사람 상자·관절도 같은 식으로 옮겨 그린다.
-  u = 보정 켜기/끄기, [ ] = 좌우 기울기 (roll) -/+0.5°, , . = 앞뒤 숙임 (pitch) -/+0.5°, 0 = 기울기 0, w = 기울기 저장
+  u/Tab = 보정 켜기/끄기, [ ] = 좌우 기울기 (roll) -/+0.5°, , . = 앞뒤 숙임 (pitch) -/+0.5°, 0 = 기울기 0, w/Enter = 저장
   (~/.config/cw/camera_mount.json — 로봇 cam_tilt_deg 에 옮길 값도 화면에 표시). 수평선·세로선으로 맞춘다.
 """
 import json
@@ -203,7 +203,7 @@ def draw(n: Hud, rect=None):
         cv2.line(img, (0, cy_), (W, cy_), (255, 0, 255), 1, cv2.LINE_AA)
         for xx in (cx_ - 160, cx_, cx_ + 160):
             cv2.line(img, (xx, 40), (xx, H - 40), (255, 0, 255), 1, cv2.LINE_AA)
-        cv2.putText(img, f"rectified  roll {rect.roll:+.1f}  pitch {rect.pitch:+.1f} deg  ([ ] , . 0 w u)", (8, 70),
+        cv2.putText(img, f"rectified  roll {rect.roll:+.1f}  pitch {rect.pitch:+.1f} deg  ([ ] , . 0  Enter=save  Tab=raw)", (8, 70),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 0, 255), 1)
     # 상단 띠: 상태 + 수신호
     cv2.rectangle(img, (0, 0), (W, 34), (25, 25, 25), -1)
@@ -267,14 +267,14 @@ def main():
                 p = os.path.expanduser(f"~/Desktop/hud_{time.strftime('%H%M%S')}.png")
                 cv2.imwrite(p, frame); n.get_logger().info(f"saved {p}")
             if rect is not None:
-                if k == ord("u"):
+                if k in (ord("u"), 9):                         # u 또는 Tab (한글 입력이면 u 가 안 들어옴)
                     on = not on
                 d = {ord("["): (-0.5, 0), ord("]"): (0.5, 0), ord(","): (0, -0.5), ord("."): (0, 0.5)}.get(k)
                 if d:
                     rect.roll += d[0]; rect.pitch += d[1]; rect.build()  # noqa: E702
                 if k == ord("0"):
                     rect.roll = rect.pitch = 0.0; rect.build()  # noqa: E702
-                if k == ord("w"):
+                if k in (ord("w"), 13, 10):                    # w 또는 Enter (한글 입력이면 w 가 ㅈ)
                     rect.save()
                     n.get_logger().info(f"saved {MOUNT_FILE}: roll {rect.roll:+.1f} pitch {rect.pitch:+.1f} deg "
                                         f"(robot person_follow cam_tilt_deg = {rect.pitch:+.1f})")

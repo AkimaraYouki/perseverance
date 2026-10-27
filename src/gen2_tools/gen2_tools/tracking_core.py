@@ -58,19 +58,21 @@ class BearingModel:
     e.g. 160 deg lenses): theta = (cx - u) / f, f = (W / 2) / (hfov / 2). 'opencv_fisheye': cv2.fisheye with K, D
     (calibrated). Wide lenses with the pinhole formula put people at the edges 10-30 deg off -> LiDAR/camera mismatch."""
 
-    def __init__(self, model='pinhole', width=640, height=480, fx=530.0, cx=None, hfov_deg=160.0, K=None, D=None):
+    def __init__(self, model='pinhole', width=640, height=480, fx=530.0, cx=None, hfov_deg=160.0, K=None, D=None, roll_deg=0.0):
         self.model, self.W, self.H = model, width, height
         self.cx = width / 2.0 if cx is None else cx
         self.fx = fx
         self.f_eq = (width / 2.0) / (math.radians(hfov_deg) / 2.0)
         self.K = None if K is None else np.asarray(K, float).reshape(3, 3)
         self.D = None if D is None else np.asarray(D, float).reshape(4, 1)
+        r = math.radians(roll_deg)                       # 카메라가 광축 둘레로 기운 만큼 되돌림 (cw HUD 로 맞춘 값, 2026-10-27)
+        self.R = np.array([[math.cos(r), -math.sin(r), 0.0], [math.sin(r), math.cos(r), 0.0], [0.0, 0.0, 1.0]])
 
     def ray(self, u, v):
         """(bearing + left, depression + down) [rad] of pixel (u, v)."""
         if self.model == 'opencv_fisheye' and self.K is not None:
             import cv2
-            p = cv2.fisheye.undistortPoints(np.array([[[u, v]]], np.float64), self.K, self.D)[0, 0]
+            p = cv2.fisheye.undistortPoints(np.array([[[u, v]]], np.float64), self.K, self.D, R=self.R)[0, 0]
             return -math.atan(float(p[0])), math.atan2(float(p[1]), math.hypot(1.0, float(p[0])))
         if self.model == 'equidistant':
             return (self.cx - u) / self.f_eq, (v - self.H / 2.0) / self.f_eq
@@ -81,7 +83,7 @@ class BearingModel:
             return (self.cx - u) / self.f_eq
         if self.model == 'opencv_fisheye' and self.K is not None:
             import cv2
-            p = cv2.fisheye.undistortPoints(np.array([[[u, self.H / 2.0 if v is None else v]]], np.float64), self.K, self.D)
+            p = cv2.fisheye.undistortPoints(np.array([[[u, self.H / 2.0 if v is None else v]]], np.float64), self.K, self.D, R=self.R)
             return -math.atan(float(p[0, 0, 0]))
         return math.atan2(self.cx - u, self.fx)
 

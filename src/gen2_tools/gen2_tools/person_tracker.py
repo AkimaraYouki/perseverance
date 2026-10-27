@@ -127,7 +127,7 @@ class PersonTracker(Node):
                                    sim_margin=p('reid_margin', 0.08), gate_deg=p('reacq_gate_deg', 12.0),
                                    gate_rate_deg_s=p('reacq_gate_rate_deg_s', 40.0))
         self.cam_model = dict(model=p('camera_model', 'pinhole'), fx=p('fx', 530.0), cx=p('cx', 320.0),
-                              hfov_deg=p('hfov_deg', 160.0), K=p('K', [0.0]), D=p('D', [0.0]))
+                              hfov_deg=p('hfov_deg', 160.0), K=p('K', [0.0]), D=p('D', [0.0]), roll=p('cam_roll_deg', 0.0))
         self.bm = None
         self.active_t, self.last_t = -1e9, 0.0
         self.tm_n, self.tms = 0, np.zeros(4)
@@ -175,7 +175,7 @@ class PersonTracker(Node):
             c = self.cam_model
             K = c['K'] if len(c['K']) == 9 else None
             D = c['D'] if len(c['D']) == 4 else None
-            self.bm = tc.BearingModel(c['model'], W, H, fx=c['fx'], cx=c['cx'], hfov_deg=c['hfov_deg'], K=K, D=D)
+            self.bm = tc.BearingModel(c['model'], W, H, fx=c['fx'], cx=c['cx'], hfov_deg=c['hfov_deg'], K=K, D=D, roll_deg=c['roll'])
         t1 = time.monotonic()
         S = self.yolo.size
         r = min(S / W, S / H)
