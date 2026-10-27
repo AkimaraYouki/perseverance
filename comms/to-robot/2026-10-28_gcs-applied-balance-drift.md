@@ -16,3 +16,9 @@ status: 정보 — 로봇에 적용함 (PR: gcs/balance-drift → main), 로봇 
 - 확인: /balance live_params = [tune.vmax_kmh, tune.retry_approach_v]; 0.25 OK, 0.6 거절; 0.14 로 되돌림.
   x_turn_wz 0.3, bal_adapt 0.15, bal_adapt_max_deg 1.5.
 - GCS GUI: 속도 묶음에 '턱 감지 모드 접근 속도' 0.1–0.4 (기본 0.14).
+
+## 추가 (같은 날): tune.jump_max_v 0.6 → 0.4 (사용자 "0.4 로 되돌려")
+- 0.6 은 640124a (10-15 08:38, 로봇 에이전트, "(user)"). 오늘 점프 3 회 모두 tilt fault (웅크림 0.16 s 에 pitch +20–25°, FLY +33–42° /
+  한 번은 착지 −20°), 이륙 0.37–0.58 m/s. 묶음이 0.2–0.4 에서 튜닝·평가된 값이라 되돌림.
+- branch gcs/balance-drift 261e100. 로봇 install·src balance.yaml 교체 (이전 md5 15b51cb9… 확인, 백업 balance.yaml.before_jumpmax04).
+  gen2-balance 재시작은 disarmed 될 때 (GCS 가 대기 중).
