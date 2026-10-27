@@ -65,7 +65,7 @@ balance:
       roll_kd: 0.1            # 2026-10-12 desktop step 3 (sim 80/80); user: "너무 잘됨". push recovery 0.13-0.26 s; hip current 10-100 Hz 0.24 A (0.05 with kd 0)
       roll_rate_lpf_hz: 4.0   # roll-rate LPF for the kd term (wb_core default 8)
       turn_lean: 0.0          # needs the roll loop
-      jump_max_v: 0.6         # 2026-10-15 user: up to 0.6 m/s [0.4; sim CMA-11 was tuned/evaluated at 0.2-0.4]. 0 = off
+      jump_max_v: 0.4         # 2026-10-28 user: back to 0.4 [0.6 since 10-15 user]; sim CMA-11 tuned/evaluated at 0.2-0.4. 0 = off
                               # (landed with legs tucked, wheels spinning backwards -> broke a wheel, 2026-10-13).
       # jump state machine 2026-10-23 (user ok): desktop CMA-11 hip 15 N·m + 2026-10-21 2-tier stairs overlay
       # (config/balance_tune_jump_stairs2_hip15.yaml; sim manual Y 8 cm 60 %, 10 cm 53 %).
