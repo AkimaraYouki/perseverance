@@ -77,7 +77,8 @@ class PersonFollowCam(PersonFollow):
         self.ex_v = p('explore_v', 0.4)                      # 탐색 중 최고 속도 [m/s]
         self.ex_scan_deg = p('explore_scan_deg', 70.0)       # 지점에 닿으면 좌우로 이만큼 훑기
         self.ex = None                                       # 탐색 계획 (사람을 놓친 순간마다 새로)
-        self.dist_gate = p('dist_gate_m', 0.35)               # 같은 사람인데 거리가 예측에서 이만큼 튀면 그 거리 버림
+        self.dist_gate = p('dist_gate_m', 0.35)
+        self.disagree_t = None                               # since when the predicted and the feet LiDAR clusters disagree               # 같은 사람인데 거리가 예측에서 이만큼 튀면 그 거리 버림
 
     # ------------------------------------------------------------------ inputs
     def _tg(self, m):
@@ -123,25 +124,36 @@ class PersonFollowCam(PersonFollow):
         return res
 
     # ------------------------------------------------------------------ geometry
-    def _lidar_dist(self, span, expect=None):
-        """Nearest LiDAR cluster inside the person's bearing span (from the camera) [m], or None. With expect (the
-        predicted camera distance) only returns near it (±dist_gate_m): an occluder's edge in the span is not the person."""
+    def _lidar_clusters(self, span):
+        """LiDAR points inside the person's bearing span (from the camera), grouped by range (gap > 0.25 m) ->
+        [(median range, points)] nearest first, groups of >= 2 points. 2026-10-28 GCS: legs often give only 2-4 points
+        and the old 'front cluster' then merged them with the wall behind (person at 1.05 m read as 3.0 m)."""
         if not len(self.scan_b):
-            return None
+            return []
         rel = self.scan_b - np.array([self.cam_x, 0.0])
         ang = np.arctan2(rel[:, 1], rel[:, 0])
         lo, hi = min(span) - self.lidar_margin, max(span) + self.lidar_margin
         r = np.hypot(rel[:, 0], rel[:, 1])
-        m = (ang >= lo) & (ang <= hi) & (r < self.lidar_max) & (r > 0.15)
-        if int(m.sum()) < 3:
+        rs = np.sort(r[(ang >= lo) & (ang <= hi) & (r < self.lidar_max) & (r > 0.15)])
+        out, start = [], 0
+        for k in range(1, len(rs) + 1):
+            if k == len(rs) or rs[k] - rs[k - 1] > 0.25:
+                if k - start >= 2:
+                    out.append((float(np.median(rs[start:k])), k - start))
+                start = k
+        return out
+
+    def _lidar_dist(self, span, expect=None, tol=None):
+        """Range of the LiDAR cluster in the span closest to expect (within tol, default dist_gate_m); without expect
+        the nearest cluster. None if nothing fits."""
+        cl = self._lidar_clusters(span)
+        if not cl:
             return None
-        rs = np.sort(r[m])
-        if expect is not None:
-            rs = rs[np.abs(rs - expect) < self.dist_gate]
-            if len(rs) < 3:
-                return None
-        near = rs[rs <= rs[min(len(rs) - 1, max(2, len(rs) // 5))] + 0.25]      # the front cluster (legs / body)
-        return float(np.median(near)) if len(near) >= 3 else None
+        if expect is None:
+            return cl[0][0]
+        tol = self.dist_gate if tol is None else tol
+        best = min(cl, key=lambda c: abs(c[0] - expect))
+        return best[0] if abs(best[0] - expect) < tol else None
 
     def _ground_dist(self, feet_row, u=None):
         """Camera -> feet distance on the ground plane from the feet pixel (lens model from camera_cal / parameters)."""
@@ -189,11 +201,32 @@ class PersonFollowCam(PersonFollow):
             pred = self._predict(tgt, now) if same else None
             fits = lambda d_: d_ is not None and (pred is None or float(np.linalg.norm(self._to_w(pose, pc_of(d_)) - pred)) < self.dist_gate)  # noqa: E731,E501
             pp = self._to_b(pose, pred) if pred is not None else None
-            d = self._lidar_dist([math.radians(a) for a in j['span_deg']],
-                                 None if pp is None else float(math.hypot(pp[0] - self.cam_x, pp[1])))
+            span = [math.radians(a) for a in j['span_deg']]
+            d_feet = self._ground_dist(j['feet_row'], 0.5 * (j['box'][0] + j['box'][2]))
+            # LiDAR cluster: near the prediction (same person) -> else near the camera's feet distance (also at the lock,
+            # so the wall behind is not taken) -> else the feet distance -> else the prediction
+            d = self._lidar_dist(span, None if pp is None else float(math.hypot(pp[0] - self.cam_x, pp[1])))
             self.dist_src = 'lidar'
+            # a wrong lock (e.g. on the wall behind) would keep matching its own prediction: if the feet distance has its
+            # own LiDAR cluster far from the predicted one for > 0.7 s, trust the feet one (a quick occluder edge is shorter)
+            if d is not None and d_feet is not None and abs(d - d_feet) > max(0.6, 0.4 * d_feet):
+                df = self._lidar_dist(span, d_feet, tol=max(self.dist_gate, 0.3 * d_feet))
+                if df is not None:
+                    self.disagree_t = self.disagree_t if self.disagree_t is not None else now
+                    if now - self.disagree_t > 0.7:
+                        self.get_logger().warn(f'distance re-anchored: LiDAR {d:.2f} m (prediction) -> {df:.2f} m (feet {d_feet:.2f} m)')
+                        d, pred = df, None                      # accept the jump (fits() with pred None)
+                        self.disagree_t = None
+                else:
+                    self.disagree_t = None
+            else:
+                self.disagree_t = None
+            if not fits(d) and d_feet is not None:
+                d = self._lidar_dist(span, d_feet, tol=max(self.dist_gate, 0.3 * d_feet))
+            if not fits(d) and d_feet is not None and pred is None:
+                d = None                                        # lock: no LiDAR cluster near the feet -> feet below
             if not fits(d):
-                d, self.dist_src = self._ground_dist(j['feet_row'], 0.5 * (j['box'][0] + j['box'][2])), 'feet'
+                d, self.dist_src = d_feet, 'feet'
             if not fits(d) and pred is not None:
                 d, self.dist_src = float(math.hypot(pp[0] - self.cam_x, pp[1])), 'pred'
             if d is not None:
