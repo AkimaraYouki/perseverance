@@ -103,6 +103,14 @@ GROUPS = [
         (PF, 'cam_h_off_m', '카메라 높이 − 다리 높이', 0.0, 0.2, 0.005, 0.081, 'm'),
         (PF, 'cam_max_dist_m', '카메라 거리 최대 (넘으면 버림)', 1.0, 10.0, 0.5, 5.0, 'm'),
     ]),
+    ('가려짐 탐색 (추종 중)', '놓친 지 occluded_s 뒤 explore_s 동안: 사라진 자리 → 가던 방향 앞 → 옆, 지점마다 좌우 훑기 (켜기/끄기는 첫 탭, PR #9)', [
+        (PF, 'explore_s', '탐색 시간 (넘으면 제자리 회전)', 3.0, 30.0, 1.0, 12.0, 's'),
+        (PF, 'explore_ahead_m', '사라진 곳에서 가던 방향으로 더 갈 거리', 0.3, 3.0, 0.1, 1.0, 'm'),
+        (PF, 'explore_side_m', '두 번째 지점: 사라진 쪽 옆 거리', 0.0, 1.5, 0.1, 0.6, 'm'),
+        (PF, 'explore_v', '탐색 중 최고 속도', 0.1, 0.7, 0.05, 0.4, 'm/s'),
+        (PF, 'explore_scan_deg', '지점에서 좌우로 훑는 각도', 20.0, 120.0, 5.0, 70.0, '°'),
+        (PF, 'dist_gate_m', '사람 거리 허용 튐 (모서리를 사람으로 오인 방지)', 0.15, 1.0, 0.05, 0.35, 'm'),
+    ]),
     ('자동 턱 (카메라, 추종 중)', '켜기/끄기는 첫 탭. 아래 거리·속도는 노드가 시작 때만 읽음 (추종 스택 재시작 필요, 데스크톱 2026-10-27)', [
         (PF, 'auto_slow_dist_m', '턱이 이만큼 앞이면 감속 시작', 0.5, 3.0, 0.1, 1.5, 'm'),
         (PF, 'auto_slow_v', '감속 구간 속도', 0.1, 0.5, 0.05, 0.3, 'm/s'),
@@ -148,7 +156,8 @@ KNOWN_LIVE = {
     PF: {'follow_dist_m', 'vx_max', 'wz_max', 'occluded_s', 'search_wz', 'appearance_min', 'use_nav', 'nav_replan_s',
          'reacquire_min', 'grace_s', 'legs_only_s', 'max_gate_m', 'predict_s', 'corridor_margin_m', 'nav_hold_s',
          'bearing_tol_deg', 'camera_only', 'cam_fx', 'cam_tilt_deg', 'cam_x_m', 'cam_h_off_m', 'cam_max_dist_m',
-         'cam_confirm_s', 'cam_fov_deg', 'cam_only_score', 'follow_accel', 'follow_decel', 'follow_wz_accel'},
+         'cam_confirm_s', 'cam_fov_deg', 'cam_only_score', 'follow_accel', 'follow_decel', 'follow_wz_accel',
+         'explore', 'explore_s', 'explore_ahead_m', 'explore_side_m', 'explore_v', 'explore_scan_deg', 'dist_gate_m'},
     RPP: {'FollowPath.desired_linear_vel', 'FollowPath.rotate_to_heading_angular_vel',
           'FollowPath.regulated_linear_scaling_min_speed', 'FollowPath.min_approach_linear_velocity'},
     LCM: {'inflation_layer.inflation_radius'},
@@ -797,6 +806,10 @@ class Gui(QtWidgets.QMainWindow):
                 self._btn('켜기', lambda: self.ros.set_params(PF, {'camera_only': True}), '켜기/끄기는 균형 중에도 됨'),
                 self._btn('끄기', lambda: self.ros.set_params(PF, {'camera_only': False}))]),
             ('jump', '점프 (패드 Y) — 읽기 전용', []),
+            ('explore', '가려지면 탐색 (사라진 곳으로 가서 다시 찾기)', [
+                self._btn('켜기', lambda: self.ros.set_params(PF, {'explore': True}),
+                          '놓친 지 occluded_s 뒤: 사라진 자리 → 가던 방향 1 m 앞 → 옆으로 가며 좌우를 훑음. 다시 보이면 추종 (PR #9)'),
+                self._btn('끄기', lambda: self.ros.set_params(PF, {'explore': False}), '예전처럼 제자리 회전만')]),
             ('autostep', '자동 턱 (카메라, 추종 중)', [
                 self._btn('켜기', lambda: self.ros.set_params(PF, {'auto_step': True}),
                           '추종 중 카메라로 턱을 보면: 1.5 m 앞 0.3 m/s 감속 → 0.5 m 앞 턱 감지 모드 → 점프 → 1.3 m 뒤 해제. 균형 중에도 켜고 끔'),
@@ -1154,9 +1167,9 @@ class Gui(QtWidgets.QMainWindow):
         if not any('balance' in n for n in names):
             self.l_ros.set('off')
         if stack:
-            self.ros.get_params(PF, ['use_nav', 'camera_only', 'auto_step'])
+            self.ros.get_params(PF, ['use_nav', 'camera_only', 'auto_step', 'explore'])
         else:
-            for k in ('follow', 'hold', 'nav', 'camonly', 'autostep'):
+            for k in ('follow', 'hold', 'nav', 'camonly', 'autostep', 'explore'):
                 self.lamp[k].set('off')
                 self.note[k].setText('추종 스택 꺼짐')
         if '/balance' in names:
@@ -1193,6 +1206,10 @@ class Gui(QtWidgets.QMainWindow):
         if node == PF and vals.get('use_nav') is not None:
             self.lamp['nav'].set('on' if vals['use_nav'] else 'warn')
             self.note['nav'].setText('켜짐 — 막히면 돌아감' if vals['use_nav'] else '꺼짐 — 직진만')
+        if node == PF and 'explore' in vals:
+            e = vals['explore']
+            self.lamp['explore'].set('off' if not e else 'on')
+            self.note['explore'].setText('추종 노드에 없음 (새 버전 설치 전)' if e is None else '켜짐' if e else '꺼짐 — 제자리 회전만')
         if node == PF and 'auto_step' in vals:
             a = vals['auto_step']
             self.lamp['autostep'].set('off' if a is None else 'warn' if a else 'off')
