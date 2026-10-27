@@ -57,7 +57,7 @@ class GestureNode(Node):
         self.crop = p('crop_fallback', True)
         self.side = 0                              # crop side (0 left, 1 right) that last found a hand
         self.use_pose = p('pose_gestures', True)   # far signals from body keypoints (people/camera)
-        self.pose_any = p('pose_any_person', False)   # False: only the locked person (target); none locked -> no pose
+        self.pose_any = p('pose_any_person', True)    # locked person (target) only while following; nobody locked -> largest person (False: none)
         self.ppl, self.ppl_t = None, -1e9
         acts = p('actions', ['Open_Palm:stop', 'Thumb_Up:restart'])   # rules: only stop / restart hand signals
         self.actions = dict(a.split(':', 1) for a in acts)
