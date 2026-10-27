@@ -131,6 +131,7 @@ public:
   int phase() const {return phase_;}
   const Params & params() const {return P_;}
   void set_vmax_kmh(double v) {P_.vmax_kmh = v;}     // runtime speed cap (balance_node live param, disarmed only)
+  void set_retry_approach_v(double v) {P_.retry_approach_v = v;}   // step-detect approach speed (live, disarmed only)
   // step-detect mode on / off at run time (operator, balance/step_mode); switching clears its state
   void set_jump_retry(bool on) {P_.jump_retry = on; reset_retry();}
   bool jump_retry() const {return P_.jump_retry;}
