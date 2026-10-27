@@ -79,7 +79,8 @@ GROUPS = [
         (RPP, 'FollowPath.rotate_to_heading_angular_vel', '우회 제자리 회전 속도', 0.1, 2.5, 0.1, 2.0, 'rad/s'),
         (RPP, 'FollowPath.regulated_linear_scaling_min_speed', '우회 곡선 최소 속도', 0.05, 0.7, 0.05, 0.25, 'm/s'),
         (RPP, 'FollowPath.min_approach_linear_velocity', '우회 목표 근처 최소 속도', 0.0, 0.5, 0.05, 0.1, 'm/s'),
-        ('/balance', 'tune.vmax_kmh', '균형 노드 최고 속도 (전체 상한)', 0.5, 3.5, 0.1, 3.0, 'km/h'),   # 로봇이 0.5–3.5 밖은 거절
+        ('/balance', 'tune.vmax_kmh', '균형 노드 최고 속도 (전체 상한)', 0.5, 3.5, 0.1, 3.0, 'km/h'),
+        ('/balance', 'tune.retry_approach_v', '턱 감지 모드 접근 속도 (턱에 부딪히는 속도)', 0.1, 0.4, 0.01, 0.14, 'm/s'),   # 로봇 live, 해제 때만   # 로봇이 0.5–3.5 밖은 거절
     ]),
     ('사람 추종', '누구를 얼마나 떨어져서 따라가는지, 놓쳤을 때 어떻게 하는지', [
         (PF, 'follow_dist_m', '따라갈 거리', 0.3, 2.0, 0.05, 0.8, 'm'),
