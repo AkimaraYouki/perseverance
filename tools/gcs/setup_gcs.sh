@@ -5,7 +5,8 @@
 # 끝나면: 새 터미널 → cw check → cw up      (자세한 건 ~/perseverance/tools/gcs/README.md)
 set -e
 ROBOT_IP=192.168.50.124
-ROBOT_IP_HOTSPOT=10.75.26.250   # 핫스팟 "robot" (2026-10-22). ssh 는 ~/.ssh/config 가 .124 → 이 주소로 돌린다
+ROBOT_IP_HOTSPOT=10.75.26.250
+ROBOT_IP_HOTSPOT2=10.252.49.250  # 같은 핫스팟 "robot" 이 10.252.49.x 를 줄 때 (2026-10-27)   # 핫스팟 "robot" (2026-10-22). ssh 는 ~/.ssh/config 가 .124 → 이 주소로 돌린다
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 
 say "1/7 기본 도구"
@@ -49,7 +50,7 @@ cat > ~/gen2_desk/cyclonedds.xml <<XML
     <Discovery>
       <ParticipantIndex>auto</ParticipantIndex>
       <MaxAutoParticipantIndex>60</MaxAutoParticipantIndex>
-      <Peers><Peer address="$ROBOT_IP"/><Peer address="$ROBOT_IP_HOTSPOT"/></Peers>
+      <Peers><Peer address="$ROBOT_IP"/><Peer address="$ROBOT_IP_HOTSPOT"/><Peer address="$ROBOT_IP_HOTSPOT2"/></Peers>
     </Discovery>
   </Domain>
 </CycloneDDS>
@@ -60,6 +61,9 @@ if ! grep -q 'originalhost 192.168.50.124' ~/.ssh/config 2>/dev/null; then
 # C-WANG 로봇: 핫스팟 "robot" (10.75.26.x) 에 있으면 .124 로의 접속을 그 망의 로봇 주소로 (호스트 키는 .124 것으로 검사)
 Match originalhost $ROBOT_IP exec "ip -4 -o addr show | grep -q ' 10\\.75\\.26\\.'"
     HostName $ROBOT_IP_HOTSPOT
+    HostKeyAlias $ROBOT_IP
+Match originalhost $ROBOT_IP exec "ip -4 -o addr show | grep -q ' 10\\.252\\.49\\.'"
+    HostName $ROBOT_IP_HOTSPOT2
     HostKeyAlias $ROBOT_IP
 SSHCFG
   chmod 600 ~/.ssh/config
