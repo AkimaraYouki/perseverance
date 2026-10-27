@@ -10,6 +10,10 @@
   /gesture, /gesture/action String
   /balance/step_mode_active Bool, /balance/step_phase Int8 (latched)  턱 감지 모드 배지 (우상단)
 실행: source ~/gen2_desk/env.sh; python3 ~/gen2_desk/hud.py    (q / Esc 끝, s 화면 저장)
+렌즈 왜곡 보정 (2026-10-27): camera_cal.yaml (체커보드 fisheye K, D) 이 있으면 펴서 보여 준다 (~/gen2_desk/camera_cal.yaml,
+  없으면 저장소 tools/robot/camera_cal.yaml). 사람 상자·관절도 같은 식으로 옮겨 그린다.
+  u = 보정 켜기/끄기, [ ] = 좌우 기울기 (roll) -/+0.5°, , . = 앞뒤 숙임 (pitch) -/+0.5°, 0 = 기울기 0, w = 기울기 저장
+  (~/.config/cw/camera_mount.json — 로봇 cam_tilt_deg 에 옮길 값도 화면에 표시). 수평선·세로선으로 맞춘다.
 """
 import json
 import math
@@ -26,7 +30,61 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profi
 from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import Bool, Int8, String
 
-FX, CX = 530.0, 320.0                  # person_detector 기본값 (보정 전 추정)
+FX, CX = 530.0, 320.0                  # person_detector 기본값 (보정 전 추정) — 보정 켜면 Rectifier 의 새 카메라 행렬로 바뀜
+MOUNT_FILE = os.path.expanduser("~/.config/cw/camera_mount.json")
+
+
+def load_cal():
+    """camera_cal.yaml 의 person_tracker K, D (fisheye) -> (K 3x3, D 4) 또는 None."""
+    import yaml
+    for f in (os.path.expanduser("~/gen2_desk/camera_cal.yaml"),
+              os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "robot", "camera_cal.yaml")):
+        try:
+            c = yaml.safe_load(open(f))["person_tracker"]["ros__parameters"]
+            return np.array(c["K"], float).reshape(3, 3), np.array(c["D"], float).reshape(4, 1), f
+        except (OSError, KeyError, TypeError, ValueError):
+            continue
+    return None
+
+
+class Rectifier:
+    """fisheye 왜곡 펴기 + 장착 기울기 (roll, pitch) 되돌리기. 점도 같은 변환 (상자·관절)."""
+
+    def __init__(self, K, D, size=(640, 480), balance=0.5):
+        self.K, self.D, self.size, self.balance = K, D, size, balance
+        self.roll = self.pitch = 0.0
+        try:
+            m = json.load(open(MOUNT_FILE))
+            self.roll, self.pitch = float(m.get("roll_deg", 0.0)), float(m.get("pitch_deg", 0.0))
+        except (OSError, ValueError):
+            pass
+        self.build()
+
+    def build(self):
+        r, p = math.radians(self.roll), math.radians(self.pitch)
+        Rz = np.array([[math.cos(r), -math.sin(r), 0], [math.sin(r), math.cos(r), 0], [0, 0, 1]])   # 광축 둘레 (roll)
+        Rx = np.array([[1, 0, 0], [0, math.cos(p), -math.sin(p)], [0, math.sin(p), math.cos(p)]])   # 좌우 축 둘레 (pitch)
+        self.R = Rx @ Rz
+        self.P = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(self.K, self.D, self.size, self.R, balance=self.balance)
+        self.m1, self.m2 = cv2.fisheye.initUndistortRectifyMap(self.K, self.D, self.R, self.P, self.size, cv2.CV_16SC2)
+
+    def image(self, img):
+        return cv2.remap(img, self.m1, self.m2, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+
+    def pts(self, uv):
+        a = np.asarray(uv, np.float64).reshape(-1, 1, 2)
+        return cv2.fisheye.undistortPoints(a, self.K, self.D, R=self.R, P=self.P).reshape(-1, 2)
+
+    def box(self, b):
+        x0, y0, x1, y1 = b
+        e = [(x, y) for x in np.linspace(x0, x1, 5) for y in (y0, y1)] + [(x, y) for y in np.linspace(y0, y1, 5) for x in (x0, x1)]
+        q = self.pts(e)
+        return [int(q[:, 0].min()), int(q[:, 1].min()), int(q[:, 0].max()), int(q[:, 1].max())]
+
+    def save(self):
+        os.makedirs(os.path.dirname(MOUNT_FILE), exist_ok=True)
+        json.dump(dict(roll_deg=round(self.roll, 2), pitch_deg=round(self.pitch, 2), note="cw HUD 2026-10-27; 로봇 cam_tilt_deg = pitch_deg"),
+                  open(MOUNT_FILE, "w"), indent=1)
 LASER_X, CAM_X = -0.0774, 0.1080       # base_link 기준 x [m] (footprint.yaml)
 HITBOX = (-0.221, 0.162, -0.164, 0.164)
 SKEL = [(5, 6), (5, 7), (7, 9), (6, 8), (8, 10), (5, 11), (6, 12), (11, 12), (11, 13), (13, 15), (12, 14), (14, 16)]   # COCO 팔·몸통·다리
@@ -86,10 +144,14 @@ def u_of(b):
     return int(round(CX - FX * math.tan(b))) if abs(b) < math.radians(80) else None
 
 
-def draw(n: Hud):
+def draw(n: Hud, rect=None):
+    global FX, CX
     now = time.monotonic()
     H, W = 480, 640
     img = n.img.copy() if n.img is not None and now - n.img_t < 1.0 else np.full((H, W, 3), 40, np.uint8)
+    if rect is not None and n.img is not None and now - n.img_t < 1.0:
+        img = rect.image(img)
+        FX, CX = float(rect.P[0, 0]), float(rect.P[0, 2])     # 방위 -> 열 (라이다 표시·추종 대상 선)
     if n.img is None or now - n.img_t >= 1.0:
         cv2.putText(img, "NO CAMERA", (W // 2 - 90, H // 2), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
     H, W = img.shape[:2]
@@ -105,13 +167,16 @@ def draw(n: Hud):
     # 사람 상자
     fresh = now - n.people_t < 1.0
     for p in (n.people if fresh else []):
-        x0, y0, x1, y1 = p["box"]
+        x0, y0, x1, y1 = rect.box(p["box"]) if rect is not None else p["box"]
         b = math.radians(p.get("bearing_deg", 0.0))
         # 새 스택 (person_tracker): 잠긴 사람이 데이터에 표시됨 (id·target). 옛 스택: follow/status 방위 근처 상자
         is_t = bool(p["target"]) if "target" in p else (tb is not None and abs(b - tb) < math.radians(8))
         col, th = ((60, 220, 60), 3) if is_t else ((200, 200, 200), 1)
         cv2.rectangle(img, (x0, y0), (x1, y1), col, th)
         kp = p.get("kps")
+        if kp and rect is not None:
+            q = rect.pts([(a[0], a[1]) for a in kp])
+            kp = [[float(q[i, 0]), float(q[i, 1]), kp[i][2]] for i in range(len(kp))]
         if kp:   # COCO 17 점: 하반신 (11–16 엉덩이·무릎·발목) 은 방위 계산에 쓰여 굵게
             for i, j in SKEL:
                 if kp[i][2] > 0.3 and kp[j][2] > 0.3:
@@ -133,6 +198,13 @@ def draw(n: Hud):
         u = u_of(tb)
         if u is not None and 0 <= u < W:
             cv2.line(img, (u, 40), (u, H - 45), (60, 220, 60), 1, cv2.LINE_AA)
+    if rect is not None:                                   # 기울기 맞추기: 수평선 (가운데 행) + 세로선 + 값
+        cy_, cx_ = int(rect.P[1, 2]), int(rect.P[0, 2])
+        cv2.line(img, (0, cy_), (W, cy_), (255, 0, 255), 1, cv2.LINE_AA)
+        for xx in (cx_ - 160, cx_, cx_ + 160):
+            cv2.line(img, (xx, 40), (xx, H - 40), (255, 0, 255), 1, cv2.LINE_AA)
+        cv2.putText(img, f"rectified  roll {rect.roll:+.1f}  pitch {rect.pitch:+.1f} deg  ([ ] , . 0 w u)", (8, 70),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 0, 255), 1)
     # 상단 띠: 상태 + 수신호
     cv2.rectangle(img, (0, 0), (W, 34), (25, 25, 25), -1)
     cv2.putText(img, st if st else "no follow/status (person_follow not running)", (8, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
@@ -176,12 +248,17 @@ def draw(n: Hud):
 def main():
     rclpy.init()
     n = Hud()
+    cal = load_cal()
+    rect = Rectifier(cal[0], cal[1]) if cal else None
+    on = rect is not None
+    if cal:
+        n.get_logger().info(f"lens calibration {cal[2]} — u toggles the rectified view")
     cv2.namedWindow("C-WANG HUD", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("C-WANG HUD", 960, 720)
     try:
         while rclpy.ok():
             rclpy.spin_once(n, timeout_sec=0.02)
-            frame = draw(n)
+            frame = draw(n, rect if on else None)
             cv2.imshow("C-WANG HUD", frame)
             k = cv2.waitKey(30) & 0xFF
             if k in (ord("q"), 27):
@@ -189,6 +266,18 @@ def main():
             if k == ord("s"):
                 p = os.path.expanduser(f"~/Desktop/hud_{time.strftime('%H%M%S')}.png")
                 cv2.imwrite(p, frame); n.get_logger().info(f"saved {p}")
+            if rect is not None:
+                if k == ord("u"):
+                    on = not on
+                d = {ord("["): (-0.5, 0), ord("]"): (0.5, 0), ord(","): (0, -0.5), ord("."): (0, 0.5)}.get(k)
+                if d:
+                    rect.roll += d[0]; rect.pitch += d[1]; rect.build()  # noqa: E702
+                if k == ord("0"):
+                    rect.roll = rect.pitch = 0.0; rect.build()  # noqa: E702
+                if k == ord("w"):
+                    rect.save()
+                    n.get_logger().info(f"saved {MOUNT_FILE}: roll {rect.roll:+.1f} pitch {rect.pitch:+.1f} deg "
+                                        f"(robot person_follow cam_tilt_deg = {rect.pitch:+.1f})")
     except KeyboardInterrupt:
         pass
     cv2.destroyAllWindows()
