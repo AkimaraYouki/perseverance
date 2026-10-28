@@ -57,7 +57,8 @@ class GestureNode(Node):
         self.crop = p('crop_fallback', True)
         self.side = 0                              # crop side (0 left, 1 right) that last found a hand
         self.use_pose = p('pose_gestures', True)   # far signals from body keypoints (people/camera)
-        self.pose_any = p('pose_any_person', True)    # locked person (target) only while following; nobody locked -> largest person (False: none)
+        self.pose_any = p('pose_any_person', True)
+        self.kp_conf = p('pose_kp_conf', 0.3)       # keypoint confidence for the body-pose signals (was 0.4: far T poses lost arms)    # locked person (target) only while following; nobody locked -> largest person (False: none)
         self.ppl, self.ppl_t = None, -1e9
         acts = p('actions', ['Open_Palm:stop', 'Thumb_Up:restart'])   # rules: only stop / restart hand signals
         self.actions = dict(a.split(':', 1) for a in acts)
@@ -76,7 +77,7 @@ class GestureNode(Node):
         self.get_logger().info(f'gesture recognizer ready at {self.hz} Hz, actions {self.actions}')
         Live(self, {'process_hz': 'hz', 'min_score': 'min_score', 'hold_s': 'hold_s', 'gap_s': 'gap_s',
                     'shape_rule': 'use_rule', 'crop_fallback': 'crop', 'pose_gestures': 'use_pose',
-                    'pose_any_person': 'pose_any'})
+                    'pose_any_person': 'pose_any', 'pose_kp_conf': 'kp_conf'})
 
     def _recognize(self, rgb):
         """(name, score, landmarks or None) from one image."""
@@ -94,13 +95,13 @@ class GestureNode(Node):
             pass
 
     @staticmethod
-    def pose(kps):
+    def pose(kps, conf=0.3):
         """Thumb_Up (both arms spread) / Open_Palm (one arm straight up) / None from 17 COCO keypoints [u, v, conf].
         Image y grows downwards; sizes relative to the shoulder width so any distance works."""
         K = np.asarray(kps, float)
         if K.shape[0] < 13:
             return None
-        ok = lambda *i: all(K[j, 2] > 0.4 for j in i)  # noqa: E731
+        ok = lambda *i: all(K[j, 2] > conf for j in i)  # noqa: E731   (far people: arm keypoints 0.3-0.4, user 2026-10-29)
         if not ok(5, 6):
             return None
         ls, rs = K[5, :2], K[6, :2]
@@ -137,7 +138,7 @@ class GestureNode(Node):
         elif not self.pose_any:
             return None
         for q in sorted(ppl, key=lambda q: -(q['box'][2] - q['box'][0]) * (q['box'][3] - q['box'][1])):
-            g = self.pose(q['kps'])
+            g = self.pose(q['kps'], self.kp_conf)
             if g:
                 return g
         return None
