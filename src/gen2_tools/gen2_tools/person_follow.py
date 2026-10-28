@@ -68,6 +68,8 @@ class PersonFollow(Node):
         # camera-only people (no LiDAR legs at that bearing, or LiDAR down): distance from the ankles' (else the box
         # bottom's) image row on the ground plane: camera height = leg h + cam_h_off, depression = ray + body pitch + tilt
         self.cam_only = p('camera_only', True)
+        self.person_r = p('person_radius_m', 0.4)          # LiDAR points this close to the person are the person
+        self.nav_max_b = math.radians(p('nav_max_bearing_deg', 30.0))   # person further to the side: no Nav2, turn first
         # smooth starts / stops while following (GCS 2026-10-26, user "추종시 가감속 부드럽게"): rate limits on the
         # direct-steering command (Nav2's own output is not touched). Braking stays quicker than speeding up.
         self.acc = p('follow_accel', 0.4)              # m/s^2 speeding up (forward or backward)
@@ -124,6 +126,7 @@ class PersonFollow(Node):
         self._declare_extra(p)          # subclasses (person_follow_cam) declare theirs before Live locks the parameters
         live = dict(self._LIVE)
         live['bearing_tol_deg'] = lambda v: setattr(self, 'tol', math.radians(v))
+        live['nav_max_bearing_deg'] = lambda v: setattr(self, 'nav_max_b', math.radians(v))
         live['cam_tilt_deg'] = lambda v: setattr(self, 'cam_tilt', math.radians(v))
         live['cam_fov_deg'] = lambda v: setattr(self, 'cam_fov', math.radians(v))
         Live(self, live, always=self._ALWAYS)
@@ -151,7 +154,7 @@ class PersonFollow(Node):
 
     # runtime-changeable (robot disarmed only, gen2_tools.live): limits / tracking / avoidance — no gains (k_dist, k_yaw)
     _LIVE = {'follow_dist_m': 'd_ref', 'vx_max': 'vx_max', 'wz_max': 'wz_max',
-             'follow_accel': 'acc', 'follow_decel': 'dec', 'follow_wz_accel': 'wacc',
+             'follow_accel': 'acc', 'follow_decel': 'dec', 'follow_wz_accel': 'wacc', 'person_radius_m': 'person_r',
              'occluded_s': 'occl_s', 'search_wz': 'search_wz', 'appearance_min': 'app_min', 'use_nav': 'use_nav',
              'nav_replan_s': 'nav_period', 'reacquire_min': 'app_reacq', 'grace_s': 'grace',
              'legs_only_s': 'legs_only', 'max_gate_m': 'max_gate', 'predict_s': 'pred_s',
@@ -176,8 +179,10 @@ class PersonFollow(Node):
         ok = np.isfinite(r) & (r > m.range_min) & (r < 4.0)
         self.scan_b = np.stack([r[ok] * np.cos(a[ok]) + LASER_X, r[ok] * np.sin(a[ok])], 1)
 
-    def _blocked(self, pb):
-        """Obstacle in the straight corridor robot -> person (stopping 0.45 m before the person's legs)?"""
+    def _blocked(self, pb, person=True):
+        """Obstacle in the straight corridor robot -> person (stopping 0.45 m before the person's legs)?
+        person: pb is the person -> LiDAR points within person_radius_m of it are the person, not an obstacle
+        (2026-10-28 GCS: a distance estimate a little long put the person's own legs in the corridor -> Nav2 on and off)."""
         d = float(np.hypot(*pb))
         if d < 0.6 or not len(self.scan_b):
             return False
@@ -185,6 +190,8 @@ class PersonFollow(Node):
         along = self.scan_b @ u
         lat = np.abs(self.scan_b[:, 0] * u[1] - self.scan_b[:, 1] * u[0])
         hit = (along > 0.05) & (along < d - 0.45) & (lat < 0.164 + self.margin)
+        if person:
+            hit &= np.hypot(self.scan_b[:, 0] - pb[0], self.scan_b[:, 1] - pb[1]) > self.person_r
         return int(hit.sum()) >= 3
 
     def _enable(self, req, res):

@@ -59,6 +59,9 @@ class StatusDisplay(Node):
         self.state, self.state_t = None, 0.0
         self.create_subscription(DiagnosticArray, 'diagnostics', self._on_diag, 20)
         self.create_subscription(String, 'robot/state', self._on_state, 10)
+        # follow HOLD / GO banner (person_follow follow/status: 'HOLD ...' while the palm signal holds it)
+        self.hold, self.go_until = False, 0.0
+        self.create_subscription(String, 'follow/status', self._on_follow, 10)
         # step-detect mode (balance_node, latched): 'STEP' tag in the header
         from rclpy.qos import QoSProfile as _Q, DurabilityPolicy as _D
         self.step_mode = False
@@ -89,6 +92,15 @@ class StatusDisplay(Node):
         now = time.monotonic()
         for s in msg.status:
             self.diag[s.name] = (now, s.level, s.message, {kv.key: kv.value for kv in s.values})
+
+    def _on_follow(self, msg):
+        hold = msg.data.startswith('HOLD')
+        if self.hold and not hold and not msg.data.startswith('IDLE'):
+            self.go_until = time.monotonic() + 1.0          # resumed -> GO for 1 s
+        self.hold = hold
+
+    def _banner(self, now):
+        return 'HOLD' if self.hold else ('GO' if now < self.go_until else None)
 
     def _on_state(self, msg):
         self.state, self.state_t = msg.data, time.monotonic()
@@ -250,11 +262,12 @@ class StatusDisplay(Node):
         # Redraw only when a phase the screen actually uses has changed, or data is new.
         q = int(now * 4)
         fast, slow = q % 2 == 0, (q // 2) % 2 == 0
-        key = (fast if self._used_fast else None, slow)
+        banner = self._banner(now)
+        key = (fast if self._used_fast or banner else None, slow, banner)
         if key == self._phase and not fresh:
             return
         self._phase = key
-        img = render(self._last_status, fast=fast, slow=slow)
+        img = render(dict(self._last_status, banner=banner), fast=fast, slow=slow)
         self._used_fast = USED['fast']
         self._push(img, snapshot=fresh)
 

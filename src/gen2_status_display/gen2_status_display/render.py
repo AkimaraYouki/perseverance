@@ -74,6 +74,7 @@ F_S = _font(_M, 10)       # rows
 F_SB = _font(_MB, 10)
 F_BIG = _font(_MB, 15)
 F_H = _font(_FB, 12)
+F_BANNER = _font(_FB, 92)   # HOLD / GO for the person giving hand signals (2026-10-28 GCS, user)
 
 ROW = 13
 
@@ -375,4 +376,17 @@ def render(s, fast=True, slow=True):
     _sensors(d, (M + 2, T, R, C - 2), s)
     _motors(d, (L, C + 2, M - 2, B), s)
     _netpower(d, (M + 2, C + 2, R, B), s)
+    # HOLD (follow stopped by the palm signal) blinks while it lasts; GO blinks for 1 s when following resumes
+    b = s.get('banner')
+    if b:
+        USED['fast'] = True
+        col = BAD if b == 'HOLD' else OK
+        tw = d.textlength(b, font=F_BANNER)
+        x0, y0, x1, y1 = (W - tw) / 2 - 14, 62, (W + tw) / 2 + 14, 182
+        if fast:
+            d.rectangle([x0, y0, x1, y1], fill=col)
+            d.text(((W - tw) / 2, 70), b, font=F_BANNER, fill=BG)
+        else:
+            d.rectangle([x0, y0, x1, y1], fill=BG, outline=col, width=4)
+            d.text(((W - tw) / 2, 70), b, font=F_BANNER, fill=col)
     return img

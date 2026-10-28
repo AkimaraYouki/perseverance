@@ -267,7 +267,7 @@ class PersonFollowCam(PersonFollow):
             return
         v_meas = self.v_meas
         jumping = now - self.t_fire < 1.2
-        clear = not self._blocked(np.array([1.0, 0.0]))       # LiDAR corridor 1 m ahead (a box is seen, a 6-8 cm step is not)
+        clear = not self._blocked(np.array([1.0, 0.0]), person=False)       # LiDAR corridor 1 m ahead (a box is seen, a 6-8 cm step is not)
         vx, mode, state = self.auto.update(now, t.linear.x, self.step_d, v_meas, jumping, clear, self.odom_s)
         self._step_mode(mode)
         if state == 'STEP':
@@ -314,7 +314,10 @@ class PersonFollowCam(PersonFollow):
             if self._blocked(pb):
                 self.blocked_t = now
             stepping = self.auto_on and self.auto.state in ('SLOW', 'STEP')   # the LiDAR 'obstacle' is the step itself
-            if not stepping and now - self.blocked_t < self.nav_hold and self._nav(pose, pw, pb, now):
+            # person far to the side (> nav_max_bearing_deg): no Nav2 — turn to them first or they leave the 124 deg view
+            # (2026-10-28 GCS diag: under Nav2 the bearing ran 0 -> -58 deg, lost 7 s; +43..+53 deg in another run)
+            side = abs(math.atan2(pb[1], pb[0])) > self.nav_max_b
+            if not stepping and not side and now - self.blocked_t < self.nav_hold and self._nav(pose, pw, pb, now):
                 self._status(state + '+nav', pb)
                 return
         self._nav_cancel()
@@ -326,6 +329,8 @@ class PersonFollowCam(PersonFollow):
                 k = 0.0
             t.angular.z = float(np.clip(self.k_yaw * b, -self.wz_max, self.wz_max))
             t.linear.x = float(np.clip(k * self.k_d * (d - self.d_ref) * max(0.0, math.cos(b)), -self.vx_max * 0.5, self.vx_max))
+            if abs(b) > self.nav_max_b and now - self.blocked_t < self.nav_hold:
+                t.linear.x = 0.0                                # blocked and the person far to the side: turn in place
         if state in ('FOLLOW', 'OCCLUDED') or (self.auto_on and self.auto.state == 'STEP'):
             if self.auto_on and self.auto.state == 'STEP' and state not in ('FOLLOW', 'OCCLUDED'):
                 t.linear.x = self.auto.step_v                     # lost the person while jumping: finish the step first
@@ -378,7 +383,7 @@ class PersonFollowCam(PersonFollow):
                 ex['phase'], ex['scan_t'] = 'SCAN', now
                 self._nav_cancel()
             else:
-                blocked = self._blocked(pb) if d > 0.6 else False
+                blocked = self._blocked(pb, person=False) if d > 0.6 else False
                 if blocked:
                     self.blocked_t = now
                 if now - self.blocked_t < self.nav_hold and self._nav(pose, gw, pb, now, stand_off=0.0):
@@ -389,7 +394,7 @@ class PersonFollowCam(PersonFollow):
                 if blocked:                                     # Nav2 없음 / 실패: 15° 씩 비켜 뚫린 방향 (0.8 m 통로) 으로 돌아감
                     free = [b + k * math.radians(15) * sg for k in range(1, 7) for sg in (tgt['side'], -tgt['side'])
                             if not self._blocked(np.array([math.cos(b + k * math.radians(15) * sg),
-                                                           math.sin(b + k * math.radians(15) * sg)]) * 1.25)]
+                                                           math.sin(b + k * math.radians(15) * sg)]) * 1.25, person=False)]
                     if free:
                         b, blocked = free[0], False
                 t.angular.z = float(np.clip(self.k_yaw * b, -self.wz_max, self.wz_max))
