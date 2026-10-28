@@ -11,6 +11,7 @@
 - 다른 컴퓨터 (데스크톱) 에서 패드·SLAM 이 이미 돌면 켜지 않는다 (heartbeat 2 개 / TF 충돌 방지).
 """
 import glob
+import json
 import math
 import os
 import re
@@ -119,6 +120,16 @@ GROUPS = [
         (PF, 'auto_arm_dist_m', '턱이 이만큼 앞이면 턱 감지 모드 켬', 0.2, 1.0, 0.05, 0.5, 'm'),
         (PF, 'auto_done_travel_m', '마지막 착지 뒤 이만큼 막힘 없으면 모드 끔', 0.5, 3.0, 0.1, 1.3, 'm'),
     ]),
+    ('사람 추적 — 교차 (추종 스택 켤 때 적용)', '두 사람이 겹친 뒤 다른 사람으로 붙는 것 줄이기 (person_tracker). 실시간 아님: '
+     '"추종 스택 켜기" 때 로봇 camera_cal.yaml 에 써 넣고 시작 — 켜져 있으면 끄고 켜기. 기준을 올리면 가려진 뒤 다시 붙기는 느려짐', [
+        ('/person_tracker', 'reid_margin', '외형 1 등이 2 등보다 이만큼 더 닮아야 바꿈', 0.02, 0.30, 0.01, 0.08, ''),
+        ('/person_tracker', 'reid_sim_min', '여러 명 보일 때 다시 붙는 최소 닮음', 0.40, 0.95, 0.01, 0.65, ''),
+        ('/person_tracker', 'reid_sim_single', '혼자 보일 때 다시 붙는 최소 닮음', 0.40, 0.95, 0.01, 0.75, ''),
+        ('/person_tracker', 'reacq_gate_deg', '마지막 방향에서 이 각도 안에서만 다시 찾음', 3.0, 40.0, 1.0, 12.0, '°'),
+        ('/person_tracker', 'reacq_gate_rate_deg_s', '놓친 동안 찾는 범위가 넓어지는 속도', 5.0, 90.0, 5.0, 40.0, '°/s'),
+        ('/person_tracker', 'track_keep_frames', '사라진 번호를 붙잡는 프레임 (30 = 1 초)', 5, 60, 1, 30, '프레임'),
+        ('/person_tracker', 'track_new', '새 번호를 만드는 최소 확신도', 0.30, 0.95, 0.05, 0.6, ''),
+    ]),
     ('사람 인식', '카메라 (YOLO) · 라이다 다리 검출 — 로봇이 live_params 로 열면 실시간', [
         ('/person_tracker', 'score_min', '사람 표시 최소 확신도 (새 스택)', 0.1, 0.9, 0.05, 0.40, ''),
         ('/person_tracker', 'process_hz', '사람 추적 주기 (추종 중, 새 스택)', 5.0, 30.0, 1.0, 30.0, 'Hz'),
@@ -175,6 +186,8 @@ BAL_INFO = [('tune.jump_min_v', '점프 최소 속도', 'm/s'), ('tune.jump_max_
 JUMP_SETS = [('default', '기본 (마찰 높음, 15 N·m)'), ('plywood', '합판 v3 (미끄러움, 8 cm)'), ('hip12', '12 N·m (10-15~22)')]
 TUNE_SH = '~/gen2_ws/install/gen2_bringup/lib/gen2_bringup/gen2_tune.sh'
 MARKERS = ['점프 평지', '점프 턱 5.6 cm']    # 시험 표시 버튼 (gcs/marker → 로봇 health_logger 'MARKER: …')
+TRACKER_START = ('reid_margin', 'reid_sim_min', 'reid_sim_single', 'reacq_gate_deg', 'reacq_gate_rate_deg_s',
+                 'track_keep_frames', 'track_new')     # person_tracker 가 시작 때만 읽음 -> 추종 스택 켤 때 camera_cal.yaml 에
 MIRROR = {LCM: [GCM]}                       # 로컬 코스트맵 값을 글로벌에도
 RESTART = {'/pad_teleop': 'pad', '/gesture': 'gesture', '/slam_toolbox': 'slam'}   # 노트북에서 띄우는 노드
 ASK_LIVE = ['/balance', '/pad_teleop', '/gesture', '/person_tracker', '/person_detector', '/leg_detector', PF]   # live_params 물어볼 노드
@@ -1014,8 +1027,16 @@ class Gui(QtWidgets.QMainWindow):
                 return
             k = follow_stack()
             s_ = 'run_follow.sh' if k == 'legacy' else 'run_follow_cam.sh'
-            self.ssh('추종 스택 켜기', f'S=~/gen2_ws/logs/{s_}; [ -x $S ] || S=~/gen2_ws/logs/run_follow.sh; '
+            # 교차 관련 person_tracker 값 (시작 때만 읽음) -> 로봇 camera_cal.yaml 의 person_tracker 칸에 (처음 한 번 백업)
+            tv = {r.name: r.value() for r in self.rows if r.node == '/person_tracker' and r.name in TRACKER_START}
+            tv = {n: (int(v) if n == 'track_keep_frames' else float(v)) for n, v in tv.items()}
+            put = ('F=~/gen2_ws/logs/camera_cal.yaml; [ -f $F.before_gcs ] || cp $F $F.before_gcs; '
+                   'python3 -c "import yaml,json,sys; f=sys.argv[1]; d=yaml.safe_load(open(f)) or {}; '
+                   "d.setdefault('person_tracker', {}).setdefault('ros__parameters', {}).update(json.loads(sys.argv[2])); "
+                   'yaml.safe_dump(d, open(f, \'w\'), allow_unicode=True, sort_keys=False)" $F ' + "'" + json.dumps(tv) + "'; ")
+            self.ssh('추종 스택 켜기', put + f'S=~/gen2_ws/logs/{s_}; [ -x $S ] || S=~/gen2_ws/logs/run_follow.sh; '
                      'setsid nohup $S > ~/gen2_ws/logs/run_follow.out 2>&1 < /dev/null & echo $S')
+            self.log('교차 설정 (person_tracker): ' + ', '.join(f'{n} {v}' for n, v in tv.items()))
             self.log(f'추종 스택 ({STACK_NAME[k]}) 켜는 중 — 10–20 초 뒤 "추종 활성화" 또는 패드 X'
                      + (' (첫 실행은 ReID 엔진 빌드 1–3 분)' if k == 'cam' else ''))
         elif k in ('cam', 'legacy'):
@@ -1285,6 +1306,8 @@ class Gui(QtWidgets.QMainWindow):
     def kind(self, node, name):
         """(실시간 | 재시작 때 | 잠김 | 노드 꺼짐, 이유)"""
         live = name in KNOWN_LIVE.get(node, ()) or name in self.live_params.get(node, ())
+        if node == '/person_tracker' and name in TRACKER_START:
+            return 'restart', '추종 스택을 켤 때 이 값으로 (켜져 있으면 끄고 켜기)'
         if node in RESTART and not (live and node in self.nodes):
             return 'restart', '노트북에서 다시 시작할 때 이 값으로 띄운다'
         if node not in self.nodes:
