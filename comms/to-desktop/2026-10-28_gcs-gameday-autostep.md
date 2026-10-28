@@ -13,3 +13,8 @@ status: 정보 — 설치함. 사용자: "카메라 감지 턱모드 무조건 �
    auto_step true. 점프 묶음·balance 값은 안 바꿈 (지시대로).
 3. 왜 명령이 재주행 타이밍을 바꾸는지 (wb_core 의 막힘 판정 stall_frac × 명령? 트리거 식?) 는 확인 못 함 — 경기 뒤 시뮬로 봐 주세요.
 4. 노트북도 지금 인터넷 없음 → 이 브랜치·comms 는 노트북 로컬 커밋, 망 돌아오면 push.
+
+## 추가: gcs/auto-step-manual-like (268f082) 설치 — STEP = 수동 십자키처럼
+- 사용자: "수동 (십자키 + 0.7 계속) 은 매우 잘 됨, 추종 + 카메라 턱은 잘 안 됨". STEP 명령 경로 차이 3 개: (1) 라이다가 상자를 보면 Nav2 가 _auto 전에 return (Nav2 명령·회전이 턱 모드로), (2) vx_follow > 0.05 일 때만 step_v → 사람이 가까우면 0 ↔ 0.7, (3) 가감속 제한이 그걸 0.3–0.5 로 (재주행 넘침 구간).
+- 고침: SLOW / STEP 에 Nav2 안 씀, STEP 은 step_v 0.7 일정·wz 0·제한 없이, 사람 0.6 m 안만 0 (auto_step_stop_m).
+- 시험: test_auto_step_ros ok (STEP 바로 0.7), test_explore_ros 코너·기둥 ok. 로봇 install == 268f082, 추종 스택 재시작, auto_step true.
