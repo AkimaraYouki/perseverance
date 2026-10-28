@@ -1,0 +1,25 @@
+# '12 N·m' jump bundle the robot used 2026-10-15 .. 10-22 (desktop CMA-11 with hip command cap 12 N·m, commit ca7fe64/640124a),
+# as an overlay on today's balance.yaml (2026-10-28 game day, user: "15 N·m 점프 파라미터 전에 쓰던 거로" -> chose 12 N·m).
+# Only the jump values (17). Kept from balance.yaml: imu_timeout_s 0.2 (IMU pauses), leg zero (motors.yaml 10-22),
+# step-detect retry_* (sim-tuned with the 15 N·m bundle — trigger may not match this bundle), drift fixes, jump_max_v 0.6.
+# On: gen2_tune.sh hip12   Off: gen2_tune.sh default   (disarmed only; restarts gen2-balance)
+balance:
+  ros__parameters:
+    hip_pd_tau_max: 12.0
+    tune:
+      air_kd: 0.71
+      air_kp: 8.0
+      air_pitch: -14.4
+      air_w_max: 15.0
+      extract_pitch: 10.0
+      h_land: 0.2007
+      land_kd: 1.83
+      land_kp: 37.1
+      land_pitch: 7.4
+      land_s: 0.621
+      leg_kd: 0.2
+      leg_kp: 72.5
+      retract_lean: 7.0
+      spin_match_k: 0.325
+      t_retract: 0.145
+      t_tuck: 0.118
