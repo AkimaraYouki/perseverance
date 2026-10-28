@@ -27,3 +27,8 @@ status: 정보 — 로봇에 적용함 (PR: gcs/balance-drift → main), 로봇 
 - 0.4 에서 턱 감지 재주행 10 회 중 2 회 거절 (트리거 때 v 0.56–0.57: 재주행 명령 0.3 이 0.50–0.57 까지 넘침) → 부딪힘·후진 반복.
 - 97265ac. 로봇 install·src 교체 (백업 balance.yaml.before_jumpmax06), gen2-balance 재시작 (disarmed). 점프 묶음 13 개·hip 15 N·m·오버레이 없음 = 10-23 기본 그대로.
 - 남은 과제 (데스크톱): 재주행 속도 넘침 (명령 0.3 → 실제 0.50–0.57).
+
+## 추가 (경기 당일): 점프 묶음 12 N·m 로 (사용자 "15 N·m 전에 쓰던 거로" → 12 N·m 선택)
+- 오버레이 balance_tune_hip12.yaml (10-15–10-22 묶음의 점프 값 17 개, hip_pd_tau_max 12). gen2_tune.sh hip12 (disarmed) → 확인: extract_pitch 10, land_kp 37.1 / kd 1.83, spin_match_k 0.325, air_pitch −14.4, hip 12.
+- 유지: imu_timeout 0.2, 다리 영점, 턱 감지 retry_* (15 N·m 묶음에서 시뮬 튜닝된 값 — 12 N·m 와 안 맞을 수 있음), 드리프트 수정, jump_max_v 0.6.
+- 되돌리기: gen2_tune.sh default.
