@@ -12,10 +12,13 @@ balance/* services. Only standard messages, so it also runs on ROS 2 Humble.
   A              stop (vx = wz = 0 while held)
   B              default height
   LB + RB 0.5 s  emergency DISARM (0 A — the robot drops)
+  LB / RB        follow HOLD (stop) / GO (resume) = follow/hold — 2026-10-28 user. Acts 0.15 s after the press only if the
+                 other bumper is not pressed too (so LB + RB stays the DISARM)
   X              person follow on / off (registers the person ahead) (sticks override; release = follow resumes)
   Y              jump (balance/jump: needs >= 0.2 m/s forward, not turning — robot wb_core 2026-10-12)
-  D-pad ↑ / ↓    step-detect mode on / off (balance/step_mode): then just push forward — it approaches, backs off
-                 from a step and jumps it by itself; release the stick to cancel
+  D-pad ↑        manual step-detect mode on / off (balance/step_mode, toggles): then just push forward — it approaches,
+                 backs off from a step and jumps it by itself; release the stick to cancel
+  D-pad ↓        camera auto step on / off while following (person_follow auto_step, toggles) — 2026-10-28 user
 If /joy stops (pad unplugged, joy_node dead) the heartbeat stops: the robot stops, sits and disarms.
 
 Index defaults = the user's pad (Xbox over Bluetooth, joy_node on Humble, measured 2026-10-09):
@@ -32,7 +35,9 @@ from gen2_tools.live import Live
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
-from std_msgs.msg import Empty, Float64
+from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+from rcl_interfaces.srv import SetParameters
+from std_msgs.msg import Bool, Empty, Float64, String
 from std_srvs.srv import SetBool, Trigger
 
 H_MIN, H_MAX, H_DEFAULT = 0.1325, 0.2325, 0.1825
@@ -58,6 +63,14 @@ class PadTeleop(Node):
         self.cli = {k: self.create_client(Trigger, f'balance/{k}') for k in ('start', 'sit', 'disarm', 'jump')}
         self.cli_follow = self.create_client(SetBool, 'follow/enable')    # person_follow
         self.cli_step = self.create_client(SetBool, 'balance/step_mode')  # step-detect mode
+        self.cli_hold = self.create_client(SetBool, 'follow/hold')        # HOLD / GO
+        self.cli_pf_param = self.create_client(SetParameters, 'person_follow/set_parameters')   # auto_step
+        self.step_on, self.auto_on, self.auto_t = False, False, 0.0
+        self.bump = None                                                  # (action, press time) waiting 0.15 s
+        from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+        latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.create_subscription(Bool, 'balance/step_mode_active', lambda m: setattr(self, 'step_on', bool(m.data)), latched)
+        self.create_subscription(String, 'follow/status', self._fstat, 10)
         self.dpad_up = p('dpad_up_sign', 1.0)   # value of dpad_y_axis when ↑ is pressed (+1 or -1, check /joy)
         self.dpad_prev = 0
         self.follow = False
@@ -65,7 +78,8 @@ class PadTeleop(Node):
         #                          so cmd_mux falls back to cmd_vel/auto (ArUco follow) when the sticks rest
         self.create_subscription(Joy, 'joy', self._joy, 10)
         self.create_timer(0.05, self._tick)
-        self.get_logger().info('pad_teleop ready: START = start, BACK = sit, LB+RB 0.5 s = disarm, D-pad ↑/↓ = step mode')
+        self.get_logger().info('pad_teleop ready: START = start, BACK = sit, LB+RB 0.5 s = disarm, LB = HOLD, RB = GO, '
+                               'D-pad ↑ = step mode on/off, D-pad ↓ = auto step on/off')
         Live(self, {'vx_max': 'vx_max', 'wz_max': 'wz_max', 'deadzone': 'dead', 'height_rate': 'h_rate'})
 
     def _joy(self, m):
@@ -92,6 +106,27 @@ class PadTeleop(Node):
         f = self.cli[k].call_async(Trigger.Request())
         f.add_done_callback(lambda fu: self.get_logger().info(f'{k}: {fu.result().message}' if fu.result() else f'{k}: no reply'))
 
+    def _fstat(self, m):
+        self.auto_on, self.auto_t = '[AUTO' in m.data, time.monotonic()
+
+    def _hold(self, on):
+        if not self.cli_hold.service_is_ready():
+            self.get_logger().warn('follow/hold: person_follow not running')
+            return
+        self.cli_hold.call_async(SetBool.Request(data=on))
+        self.get_logger().info('HOLD (LB)' if on else 'GO (RB)')
+
+    def _auto_step(self, on):
+        if not self.cli_pf_param.service_is_ready():
+            self.get_logger().warn('auto step: person_follow not running')
+            return
+        req = SetParameters.Request(parameters=[Parameter(name='auto_step', value=ParameterValue(
+            type=ParameterType.PARAMETER_BOOL, bool_value=on))])
+        f = self.cli_pf_param.call_async(req)
+        f.add_done_callback(lambda fu: self.get_logger().info(
+            f'auto step {"ON" if on else "OFF"}: ' + ('ok' if fu.result() and fu.result().results[0].successful else
+                                                       (fu.result().results[0].reason if fu.result() else 'no reply'))))
+
     def _step_mode(self, on):
         if not self.cli_step.service_is_ready():
             self.get_logger().warn('balance/step_mode: balance_node not reachable')
@@ -116,8 +151,20 @@ class PadTeleop(Node):
         d = self._axis('dpad_y') * self.dpad_up
         d = 1 if d > 0.5 else -1 if d < -0.5 else 0
         if d != 0 and d != self.dpad_prev:
-            self._step_mode(d > 0)
+            if d > 0:
+                self._step_mode(not self.step_on)               # ↑ manual step-detect mode (toggle)
+            else:
+                fresh = time.monotonic() - self.auto_t < 1.0      # follow/status seen recently
+                self._auto_step(not (self.auto_on and fresh))  # ↓ camera auto step (toggle)
         self.dpad_prev = d
+        now = time.monotonic()
+        for k, act in (('lb', 'hold'), ('rb', 'go')):            # LB = HOLD, RB = GO, after 0.15 s if the other is not pressed
+            if self._edge(k):
+                self.bump = (act, now)
+        if self.bump is not None and now - self.bump[1] >= 0.15:
+            if not (self._btn('lb') and self._btn('rb')):
+                self._hold(self.bump[0] == 'hold')
+            self.bump = None
         if self._btn('lb') and self._btn('rb'):
             self.estop_t = self.estop_t or time.monotonic()
             if time.monotonic() - self.estop_t > 0.5:
