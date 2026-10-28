@@ -7,6 +7,9 @@ FOLLOW (follow speed, up to 0.7 m/s)
        (the robot then does its own approach -> blocked -> back off -> run -> jump: balance/step_mode as on the pad)
   -> the jump has landed + hold_s, or max_step_s            -> step mode OFF -> FOLLOW (camera ignores steps nearer
                                                                than ignore_m for ignore_s: the one just climbed)
+  -> no block / jump within d0 + false_m (false alarm) or max_step_s without a jump -> step mode OFF -> SLOW, not FOLLOW
+       (real robot 2026-10-29, 3 falls: the step was farther than the camera said, the old d0 + 0.35 m exit gave the
+       robot the follow speed 0.65-0.7 m/s right in front of it, and the camera ignored it for ignore_s)
 Fallback without the camera: FOLLOW and blocked (commanded > 0.15 m/s, measured < 0.05 m/s for block_s) and the LiDAR
 corridor clear (a 6-8 cm step is below the LiDAR plane; a box is not) -> STEP.
 """
@@ -14,10 +17,12 @@ corridor clear (a 6-8 cm step is below the LiDAR plane; a box is not) -> STEP.
 
 class AutoStep:
     def __init__(self, slow_dist=1.5, arm_dist=0.9, slow_v=0.3, step_v=0.3, hold_s=1.0, max_step_s=12.0,
-                 block_s=0.3, lost_s=3.0, ignore_m=0.6, ignore_s=1.5, done_travel=1.3):
+                 block_s=0.3, lost_s=3.0, ignore_m=0.6, ignore_s=1.5, done_travel=1.3, false_m=0.8):
         self.slow_dist, self.arm_dist, self.slow_v, self.step_v = slow_dist, arm_dist, slow_v, step_v
         self.hold_s, self.max_step_s, self.block_s, self.lost_s = hold_s, max_step_s, block_s, lost_s
         self.ignore_m, self.ignore_s = ignore_m, ignore_s
+        self.false_m = false_m                                # STEP without a block this far past the step = false alarm
+        self.slow_after, self.x_slow_end = 1.0, None
         # 2-tier stairs (user 2026-10-27 "한 번 점프하고 2 단 점프니까 계속 턱 감지 켜 놓고 다 올라가면 해제"): after a jump
         # step mode stays ON; it is released once the robot has driven done_travel past the last landing without another
         # block / jump (the camera cannot see tier 2: plywood on plywood). Hitting tier 2 at follow speed fell in Isaac.
@@ -31,6 +36,14 @@ class AutoStep:
 
     def _go(self, s, t):
         self.state, self.t_state = s, t
+
+    def _give_up(self, t, odom_x, vx_follow):
+        """STEP ended without a jump: step mode OFF but stay SLOW for slow_after more metres (the step may still be
+        ahead: blocked at slow_v -> STEP again). No camera ignore window: nothing was climbed."""
+        self.t_block, self.x_land, self.t_seen, self.x_step = None, None, t, None
+        self.x_slow_end = None if odom_x is None else odom_x + self.slow_after
+        self._go('SLOW', t)
+        return min(vx_follow, self.slow_v), False, self.state
 
     def update(self, t, vx_follow, step_d, v_meas, jumping, lidar_clear=True, odom_x=None):
         """t [s], vx_follow: what following wants [m/s], step_d: camera step distance or None, v_meas [m/s],
@@ -59,19 +72,19 @@ class AutoStep:
         elif self.state == 'SLOW':
             if (step_d is not None and step_d < self.arm_dist) or blocked_long:
                 self._go('STEP', t)
-            elif t - self.t_seen > self.lost_s and step_d is None:
+            elif (t - self.t_seen > self.lost_s and step_d is None
+                  and (self.x_slow_end is None or odom_x is None or odom_x > self.x_slow_end)):
+                self.x_slow_end = None
                 self._go('FOLLOW', t)
         if self.state == 'STEP':
             if self.t_state == t:
                 self.jumped, self.t_land = False, None
-                self.x0, self.d0 = odom_x, (step_d if step_d is not None else 0.3)
+                self.x0, self.d0 = odom_x, max(step_d if step_d is not None else 0.3, 0.3)   # dead-reckoned d can be < 0
             # false alarm (floor seam, shadow): drove past where the step should be without being blocked / jumping
             if (odom_x is not None and self.x0 is not None and not self.jumped and not jumping
-                    and odom_x - self.x0 > self.d0 + 0.35):
-                self.t_done, self.t_block = t, None
+                    and odom_x - self.x0 > self.d0 + self.false_m):
                 self.false_alarms += 1
-                self._go('FOLLOW', t)
-                return vx_follow, False, self.state
+                return self._give_up(t, odom_x, vx_follow)
             if jumping:
                 self.jumped, self.t_land = True, None
             elif self.jumped and self.t_land is None:
@@ -87,7 +100,9 @@ class AutoStep:
             if jumping and self.x_land is not None:              # next tier: a new jump -> count its landing again
                 self.x_land, self.t_state = None, t
             if self.state == 'STEP' and t - self.t_state > self.max_step_s and not jumping:
-                self.n_steps += int(self.jumped and self.x_land is None)
+                if not self.jumped:
+                    return self._give_up(t, odom_x, vx_follow)
+                self.n_steps += int(self.x_land is None)
                 self.t_done, self.t_block, self.x_land = t, None, None
                 self._go('FOLLOW', t)
         if self.state == 'FOLLOW':

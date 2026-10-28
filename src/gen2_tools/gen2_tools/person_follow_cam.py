@@ -67,7 +67,8 @@ class PersonFollowCam(PersonFollow):
         self.step_stop_m = p('auto_step_stop_m', 0.6)       # STEP: no forward push when the person is this close
         self.auto_on = p('auto_step', False)                 # 기본 꺼짐 (GUI / 파라미터로 켬, 균형 중에도: Live always)
         self.auto = AutoStep(slow_dist=p('auto_slow_dist_m', 1.5), arm_dist=p('auto_arm_dist_m', 0.5),
-                             slow_v=p('auto_slow_v', 0.3), step_v=p('auto_step_v', 0.7), done_travel=p('auto_done_travel_m', 1.3))
+                             slow_v=p('auto_slow_v', 0.3), step_v=p('auto_step_v', 0.7), done_travel=p('auto_done_travel_m', 1.3),
+                             false_m=p('auto_false_m', 0.8))   # was 0.35: real step 0.3-0.4 m farther than the camera said (2026-10-29)
         self.auto_watch = StepWatch(None)
         self.step_d, self.step_on_sent, self.odom_s, self.odom_prev = None, False, 0.0, None
         self.rt_phase, self.t_fire = 0, -1e9
