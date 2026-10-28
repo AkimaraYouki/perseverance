@@ -58,7 +58,10 @@ class GestureNode(Node):
         self.side = 0                              # crop side (0 left, 1 right) that last found a hand
         self.use_pose = p('pose_gestures', True)   # far signals from body keypoints (people/camera)
         self.pose_any = p('pose_any_person', True)
-        self.kp_conf = p('pose_kp_conf', 0.3)       # keypoint confidence for the body-pose signals (was 0.4: far T poses lost arms)    # locked person (target) only while following; nobody locked -> largest person (False: none)
+        self.kp_conf = p('pose_kp_conf', 0.3)       # keypoint confidence for the body-pose signals (was 0.4: far T poses lost arms)
+        self.level = p('pose_level_torso', 0.45)    # T: elbow & wrist within this x torso of shoulder height
+        self.out = p('pose_out_sw', 0.75)           # T: elbow or wrist at least this x shoulder width out
+        self.up = p('pose_up_torso', 0.9)           # stop: wrist this x torso above the shoulders
         self.ppl, self.ppl_t = None, -1e9
         acts = p('actions', ['Open_Palm:stop', 'Thumb_Up:restart'])   # rules: only stop / restart hand signals
         self.actions = dict(a.split(':', 1) for a in acts)
@@ -77,7 +80,8 @@ class GestureNode(Node):
         self.get_logger().info(f'gesture recognizer ready at {self.hz} Hz, actions {self.actions}')
         Live(self, {'process_hz': 'hz', 'min_score': 'min_score', 'hold_s': 'hold_s', 'gap_s': 'gap_s',
                     'shape_rule': 'use_rule', 'crop_fallback': 'crop', 'pose_gestures': 'use_pose',
-                    'pose_any_person': 'pose_any', 'pose_kp_conf': 'kp_conf'})
+                    'pose_any_person': 'pose_any', 'pose_kp_conf': 'kp_conf', 'pose_level_torso': 'level',
+                    'pose_out_sw': 'out', 'pose_up_torso': 'up'})
 
     def _recognize(self, rgb):
         """(name, score, landmarks or None) from one image."""
@@ -95,7 +99,7 @@ class GestureNode(Node):
             pass
 
     @staticmethod
-    def pose(kps, conf=0.3):
+    def pose(kps, conf=0.3, level=0.45, out=0.75, up=0.9):
         """Thumb_Up (both arms spread) / Open_Palm (one arm straight up) / None from 17 COCO keypoints [u, v, conf].
         Image y grows downwards; sizes relative to the shoulder width so any distance works."""
         K = np.asarray(kps, float)
@@ -118,13 +122,13 @@ class GestureNode(Node):
             arms = []
             for e, w in ((7, 9), (8, 10)):
                 dxe, dxw = K[e, 0] - cx, K[w, 0] - cx
-                level = abs(K[e, 1] - sy) < 0.45 * torso and abs(K[w, 1] - sy) < 0.45 * torso
-                out = max(abs(dxe), abs(dxw)) >= 0.75 * sw and dxe * dxw > 0
-                arms.append(np.sign(dxw) if level and out else 0.0)
+                lv = abs(K[e, 1] - sy) < level * torso and abs(K[w, 1] - sy) < level * torso
+                ou = max(abs(dxe), abs(dxw)) >= out * sw and dxe * dxw > 0
+                arms.append(np.sign(dxw) if lv and ou else 0.0)
             if arms[0] * arms[1] < 0:
                 return 'Thumb_Up'
         for e, w in ((7, 9), (8, 10)):               # one arm straight up: wrist well above the head, elbow above the shoulder
-            if ok(e, w) and K[w, 1] < sy - 0.9 * torso and K[e, 1] < sy - 0.3 * torso and abs(K[w, 0] - cx) < 1.5 * sw:
+            if ok(e, w) and K[w, 1] < sy - up * torso and K[e, 1] < sy - 0.3 * torso and abs(K[w, 0] - cx) < 1.5 * sw:
                 return 'Open_Palm'
         return None
 
@@ -138,7 +142,7 @@ class GestureNode(Node):
         elif not self.pose_any:
             return None
         for q in sorted(ppl, key=lambda q: -(q['box'][2] - q['box'][0]) * (q['box'][3] - q['box'][1])):
-            g = self.pose(q['kps'], self.kp_conf)
+            g = self.pose(q['kps'], self.kp_conf, self.level, self.out, self.up)
             if g:
                 return g
         return None
