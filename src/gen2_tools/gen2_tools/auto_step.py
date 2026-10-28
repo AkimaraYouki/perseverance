@@ -17,12 +17,17 @@ corridor clear (a 6-8 cm step is below the LiDAR plane; a box is not) -> STEP.
 
 class AutoStep:
     def __init__(self, slow_dist=1.5, arm_dist=0.9, slow_v=0.3, step_v=0.3, hold_s=1.0, max_step_s=12.0,
-                 block_s=0.3, lost_s=3.0, ignore_m=0.6, ignore_s=1.5, done_travel=1.3, false_m=0.8):
+                 block_s=0.3, lost_s=3.0, ignore_m=0.6, ignore_s=1.5, done_travel=1.3, false_m=0.8, land_stop_s=0.8):
         self.slow_dist, self.arm_dist, self.slow_v, self.step_v = slow_dist, arm_dist, slow_v, step_v
         self.hold_s, self.max_step_s, self.block_s, self.lost_s = hold_s, max_step_s, block_s, lost_s
         self.ignore_m, self.ignore_s = ignore_m, ignore_s
         self.false_m = false_m                                # STEP without a block this far past the step = false alarm
         self.slow_after, self.x_slow_end = 1.0, None
+        # forward 0 for land_stop_s after each landing (real robot 2026-10-29 "한번 뛰고 뒤로 갈려고 함"): the landing overshoot
+        # (0.4 m/s > approach 0.14) wound the balance slope integrator negative (v_ki 0.8 -> v_ref 0.05-0.07), the robot
+        # crept below the stall line 0.5 x 0.14 and the core saw 'blocked' on flat ground -> back off / re-run / fall.
+        # A zero command resets that integrator and the core's 'moved' timer (wb_core: |vx| <= 0.02, want false).
+        self.land_stop_s = land_stop_s
         # 2-tier stairs (user 2026-10-27 "한 번 점프하고 2 단 점프니까 계속 턱 감지 켜 놓고 다 올라가면 해제"): after a jump
         # step mode stays ON; it is released once the robot has driven done_travel past the last landing without another
         # block / jump (the camera cannot see tier 2: plywood on plywood). Hitting tier 2 at follow speed fell in Isaac.
@@ -109,4 +114,6 @@ class AutoStep:
             return vx_follow, False, self.state
         if self.state == 'SLOW':
             return min(vx_follow, self.slow_v), False, self.state
+        if self.t_land is not None and t - self.t_land < self.land_stop_s:
+            return 0.0, True, self.state                       # settle after the landing (see land_stop_s)
         return self.step_v, True, self.state                  # constant push (person_follow_cam stops it next to the person)

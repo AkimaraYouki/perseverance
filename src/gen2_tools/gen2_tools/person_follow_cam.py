@@ -68,7 +68,7 @@ class PersonFollowCam(PersonFollow):
         self.auto_on = p('auto_step', False)                 # 기본 꺼짐 (GUI / 파라미터로 켬, 균형 중에도: Live always)
         self.auto = AutoStep(slow_dist=p('auto_slow_dist_m', 1.5), arm_dist=p('auto_arm_dist_m', 0.5),
                              slow_v=p('auto_slow_v', 0.3), step_v=p('auto_step_v', 0.7), done_travel=p('auto_done_travel_m', 1.3),
-                             false_m=p('auto_false_m', 0.8))   # was 0.35: real step 0.3-0.4 m farther than the camera said (2026-10-29)
+                             false_m=p('auto_false_m', 0.8), land_stop_s=p('auto_land_stop_s', 0.8))   # false_m was 0.35: real step 0.3-0.4 m farther than the camera said (2026-10-29)
         self.auto_watch = StepWatch(None)
         self.step_d, self.step_on_sent, self.odom_s, self.odom_prev = None, False, 0.0, None
         self.rt_phase, self.t_fire = 0, -1e9
@@ -341,7 +341,7 @@ class PersonFollowCam(PersonFollow):
             # a constant forward command, no turning, no rate limit (the smoother turned 0 <-> 0.7 chatter into 0.3-0.5 = the
             # range where the re-run triggers at its 0.56-0.58 m/s overshoot), no Nav2. 0 only right next to the person.
             close = pb is not None and math.hypot(*pb) < self.step_stop_m
-            t.linear.x, t.angular.z = (0.0 if close else float(self.auto.step_v)), 0.0
+            t.linear.x, t.angular.z = (0.0 if close else float(t.linear.x)), 0.0   # _auto: step_v, 0 just after a landing
             self.sm_v, self.sm_w, self.sm_t = t.linear.x, 0.0, now
             self.pub.publish(t)
             self._status(state, pb)
