@@ -64,6 +64,7 @@ class PersonFollowCam(PersonFollow):
         # the re-run reaches the trigger. Robot logs this boot: command 0.3 -> trigger at the overshoot peak 0.56-0.58 m/s in
         # 12/18 runs (falls), 0.5 -> 9/20, 0.7 (= pad D-pad + full stick, the manual mode that works) -> 0/10 (0.32-0.37 m/s).
         # The robot sets the real speeds itself (approach 0.14, re-run 0.3); this only pushes forward.
+        self.step_stop_m = p('auto_step_stop_m', 0.6)       # STEP: no forward push when the person is this close
         self.auto_on = p('auto_step', False)                 # 기본 꺼짐 (GUI / 파라미터로 켬, 균형 중에도: Live always)
         self.auto = AutoStep(slow_dist=p('auto_slow_dist_m', 1.5), arm_dist=p('auto_arm_dist_m', 0.5),
                              slow_v=p('auto_slow_v', 0.3), step_v=p('auto_step_v', 0.7), done_travel=p('auto_done_travel_m', 1.3))
@@ -312,7 +313,8 @@ class PersonFollowCam(PersonFollow):
                 tgt['side'] = math.copysign(1.0, pb[1])
             if self._blocked(pb):
                 self.blocked_t = now
-            if now - self.blocked_t < self.nav_hold and self._nav(pose, pw, pb, now):
+            stepping = self.auto_on and self.auto.state in ('SLOW', 'STEP')   # the LiDAR 'obstacle' is the step itself
+            if not stepping and now - self.blocked_t < self.nav_hold and self._nav(pose, pw, pb, now):
                 self._status(state + '+nav', pb)
                 return
         self._nav_cancel()
@@ -328,9 +330,19 @@ class PersonFollowCam(PersonFollow):
             if self.auto_on and self.auto.state == 'STEP' and state not in ('FOLLOW', 'OCCLUDED'):
                 t.linear.x = self.auto.step_v                     # lost the person while jumping: finish the step first
             self._auto(t, time.monotonic())
-        cap = t.linear.x if self.auto_on and self.auto.state in ('SLOW', 'STEP') else None
+        if self.auto_on and self.auto.state == 'STEP':
+            # game day 2026-10-28 (user: manual D-pad + constant 0.7 forward works, follow + camera step does not): like the pad,
+            # a constant forward command, no turning, no rate limit (the smoother turned 0 <-> 0.7 chatter into 0.3-0.5 = the
+            # range where the re-run triggers at its 0.56-0.58 m/s overshoot), no Nav2. 0 only right next to the person.
+            close = pb is not None and math.hypot(*pb) < self.step_stop_m
+            t.linear.x, t.angular.z = (0.0 if close else float(self.auto.step_v)), 0.0
+            self.sm_v, self.sm_w, self.sm_t = t.linear.x, 0.0, now
+            self.pub.publish(t)
+            self._status(state, pb)
+            return
+        cap = t.linear.x if self.auto_on and self.auto.state == 'SLOW' else None
         t = self._smooth(t, now)                           # accel / decel limits (PR #8) ...
-        if cap is not None and t.linear.x > cap:           # ... never above the auto-step speed (SLOW 0.3 / STEP)
+        if cap is not None and t.linear.x > cap:           # ... never above the auto-step speed (SLOW 0.3)
             t.linear.x = self.sm_v = float(cap)
         self.pub.publish(t)
         self._status(state, pb)

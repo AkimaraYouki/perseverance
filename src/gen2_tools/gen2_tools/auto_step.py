@@ -94,4 +94,4 @@ class AutoStep:
             return vx_follow, False, self.state
         if self.state == 'SLOW':
             return min(vx_follow, self.slow_v), False, self.state
-        return (self.step_v if vx_follow > 0.05 else 0.0), True, self.state
+        return self.step_v, True, self.state                  # constant push (person_follow_cam stops it next to the person)
