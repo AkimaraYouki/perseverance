@@ -60,9 +60,13 @@ class PersonFollowCam(PersonFollow):
         self.tg_msg, self.tg_new, self.tg_t = None, False, -1e9
         self.dist_src = '-'
         self.cam_w = 640
+        # auto_step_v 0.3 -> 0.7 (GCS 2026-10-28, game day): the forward command while the step-detect mode is on decides when
+        # the re-run reaches the trigger. Robot logs this boot: command 0.3 -> trigger at the overshoot peak 0.56-0.58 m/s in
+        # 12/18 runs (falls), 0.5 -> 9/20, 0.7 (= pad D-pad + full stick, the manual mode that works) -> 0/10 (0.32-0.37 m/s).
+        # The robot sets the real speeds itself (approach 0.14, re-run 0.3); this only pushes forward.
         self.auto_on = p('auto_step', False)                 # 기본 꺼짐 (GUI / 파라미터로 켬, 균형 중에도: Live always)
         self.auto = AutoStep(slow_dist=p('auto_slow_dist_m', 1.5), arm_dist=p('auto_arm_dist_m', 0.5),
-                             slow_v=p('auto_slow_v', 0.3), step_v=p('auto_step_v', 0.3), done_travel=p('auto_done_travel_m', 1.3))
+                             slow_v=p('auto_slow_v', 0.3), step_v=p('auto_step_v', 0.7), done_travel=p('auto_done_travel_m', 1.3))
         self.auto_watch = StepWatch(None)
         self.step_d, self.step_on_sent, self.odom_s, self.odom_prev = None, False, 0.0, None
         self.rt_phase, self.t_fire = 0, -1e9
