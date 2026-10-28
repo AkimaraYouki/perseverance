@@ -250,6 +250,7 @@ public:
     P.retry_stall_frac = declare_parameter("tune.retry_stall_frac", P.retry_stall_frac);
     P.retry_settle_s = declare_parameter("tune.retry_settle_s", P.retry_settle_s);
     P.retry_land_hold_s = declare_parameter("tune.retry_land_hold_s", P.retry_land_hold_s);
+    P.retry_land_settle_s = declare_parameter("tune.retry_land_settle_s", P.retry_land_settle_s);
     P.retry_trig_k = declare_parameter("tune.retry_trig_k", P.retry_trig_k);
     P.retry_fire_frac = declare_parameter("tune.retry_fire_frac", P.retry_fire_frac);
     P.retry_block_s = declare_parameter("tune.retry_block_s", P.retry_block_s);

@@ -111,4 +111,5 @@ balance:
       trigger: 0.27
       retry_fire_frac: 0.0      # desktop: tried, no gain -> off
       retry_land_hold_s: 0.0    # desktop: tried, no gain -> off
+      retry_land_settle_s: 1.0  # GCS 2026-10-29: no block test / position catch-up 1 s after a landing (false back off)
       retry_vmax: 0.0           # desktop: falls 14 -> 50 % -> off
