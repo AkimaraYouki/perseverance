@@ -284,8 +284,11 @@ class PersonFollowCam(PersonFollow):
             state = 'FOLLOW'
         elif lost < self.occl_s:
             state = 'OCCLUDED'
-        elif self.ex_on and lost < self.occl_s + self.ex_s and (self.ex is None or self.ex['phase'] != 'DONE'
-                                                              or self.ex['tgt_t'] != tgt['t']):
+        elif (self.ex_on and lost < self.occl_s + self.ex_s and not (self.auto_on and self.auto.state == 'STEP')
+              and (self.ex is None or self.ex['phase'] != 'DONE' or self.ex['tgt_t'] != tgt['t'])):
+            # (2026-10-28 desktop) never explore while the auto step holds step-detect mode ON: EXPLORE returned before
+            # _auto(), so the robot drove around at 0.4 m/s with step mode still on (back off / jump at any block).
+            # A step takes ~20 s and the person is often out of view during the jumps -> finish the step first.
             state = 'EXPLORE'
         else:
             state = 'SEARCH'
