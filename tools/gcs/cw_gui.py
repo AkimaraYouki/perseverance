@@ -75,6 +75,8 @@ GROUPS = [
         (PF, 'follow_accel', '추종 가속 (빨라질 때, 작을수록 부드럽게)', 0.1, 1.2, 0.05, 0.4, 'm/s²'),   # PR #8
         (PF, 'follow_decel', '추종 감속 (느려질 때)', 0.2, 1.5, 0.05, 0.8, 'm/s²'),
         (PF, 'follow_wz_accel', '추종 회전 변화 한계', 0.5, 6.0, 0.25, 2.0, 'rad/s²'),
+        # 실시간 아님: 추종 스택 켤 때 camera_cal.yaml person_follow 칸에 (사용자 2026-10-29: 조금만 틀어져도 놓침, 1.5 -> 2.0~2.5 추천)
+        (PF, 'k_yaw', '추종 회전 게인 (방향 오차 1 rad 당 rad/s, 스택 켤 때 적용)', 0.5, 4.0, 0.1, 1.5, ''),
         (PF, 'search_wz', '사람 찾을 때 회전 속도', 0.0, 1.5, 0.05, 1.0, 'rad/s'),
         (RPP, 'FollowPath.desired_linear_vel', '우회 주행 속도 (Nav2)', 0.1, 1.2, 0.05, 0.7, 'm/s'),
         (RPP, 'FollowPath.rotate_to_heading_angular_vel', '우회 제자리 회전 속도', 0.1, 2.5, 0.1, 2.0, 'rad/s'),
@@ -198,6 +200,7 @@ TUNE_SH = '~/gen2_ws/install/gen2_bringup/lib/gen2_bringup/gen2_tune.sh'
 MARKERS = ['점프 평지', '점프 턱 5.6 cm']    # 시험 표시 버튼 (gcs/marker → 로봇 health_logger 'MARKER: …')
 TRACKER_START = ('reid_margin', 'reid_sim_min', 'reid_sim_single', 'reacq_gate_deg', 'reacq_gate_rate_deg_s',
                  'track_keep_frames', 'track_new')     # person_tracker 가 시작 때만 읽음 -> 추종 스택 켤 때 camera_cal.yaml 에
+FOLLOW_START = ('k_yaw',)                              # person_follow 가 시작 때만 읽음 (게인) -> 같은 방식
 MIRROR = {LCM: [GCM]}                       # 로컬 코스트맵 값을 글로벌에도
 RESTART = {'/pad_teleop': 'pad', '/gesture': 'gesture', '/slam_toolbox': 'slam'}   # 노트북에서 띄우는 노드
 ASK_LIVE = ['/balance', '/pad_teleop', '/gesture', '/person_tracker', '/person_detector', '/leg_detector', PF]   # live_params 물어볼 노드
@@ -1040,13 +1043,16 @@ class Gui(QtWidgets.QMainWindow):
             # 교차 관련 person_tracker 값 (시작 때만 읽음) -> 로봇 camera_cal.yaml 의 person_tracker 칸에 (처음 한 번 백업)
             tv = {r.name: r.value() for r in self.rows if r.node == '/person_tracker' and r.name in TRACKER_START}
             tv = {n: (int(v) if n == 'track_keep_frames' else float(v)) for n, v in tv.items()}
+            fv = {r.name: float(r.value()) for r in self.rows if r.node == PF and r.name in FOLLOW_START}
             put = ('F=~/gen2_ws/logs/camera_cal.yaml; [ -f $F.before_gcs ] || cp $F $F.before_gcs; '
                    'python3 -c "import yaml,json,sys; f=sys.argv[1]; d=yaml.safe_load(open(f)) or {}; '
-                   "d.setdefault('person_tracker', {}).setdefault('ros__parameters', {}).update(json.loads(sys.argv[2])); "
-                   'yaml.safe_dump(d, open(f, \'w\'), allow_unicode=True, sort_keys=False)" $F ' + "'" + json.dumps(tv) + "'; ")
+                   "[d.setdefault(k, {}).setdefault('ros__parameters', {}).update(v) for k, v in json.loads(sys.argv[2]).items()]; "
+                   'yaml.safe_dump(d, open(f, \'w\'), allow_unicode=True, sort_keys=False)" $F '
+                   + "'" + json.dumps({'person_tracker': tv, 'person_follow': fv}) + "'; ")
             self.ssh('추종 스택 켜기', put + f'S=~/gen2_ws/logs/{s_}; [ -x $S ] || S=~/gen2_ws/logs/run_follow.sh; '
                      'setsid nohup $S > ~/gen2_ws/logs/run_follow.out 2>&1 < /dev/null & echo $S')
-            self.log('교차 설정 (person_tracker): ' + ', '.join(f'{n} {v}' for n, v in tv.items()))
+            self.log('교차 설정 (person_tracker): ' + ', '.join(f'{n} {v}' for n, v in tv.items())
+                     + ' · 추종 (person_follow): ' + ', '.join(f'{n} {v}' for n, v in fv.items()))
             self.log(f'추종 스택 ({STACK_NAME[k]}) 켜는 중 — 10–20 초 뒤 "추종 활성화" 또는 패드 X'
                      + (' (첫 실행은 ReID 엔진 빌드 1–3 분)' if k == 'cam' else ''))
         elif k in ('cam', 'legacy'):
@@ -1316,7 +1322,7 @@ class Gui(QtWidgets.QMainWindow):
     def kind(self, node, name):
         """(실시간 | 재시작 때 | 잠김 | 노드 꺼짐, 이유)"""
         live = name in KNOWN_LIVE.get(node, ()) or name in self.live_params.get(node, ())
-        if node == '/person_tracker' and name in TRACKER_START:
+        if (node == '/person_tracker' and name in TRACKER_START) or (node == PF and name in FOLLOW_START):
             return 'restart', '추종 스택을 켤 때 이 값으로 (켜져 있으면 끄고 켜기)'
         if node in RESTART and not (live and node in self.nodes):
             return 'restart', '노트북에서 다시 시작할 때 이 값으로 띄운다'
