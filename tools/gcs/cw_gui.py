@@ -170,6 +170,10 @@ BAL_INFO = [('tune.jump_min_v', '점프 최소 속도', 'm/s'), ('tune.jump_max_
             ('tune.accel_max', '가속 한계', 'm/s²'), ('tune.jerk_max', '저크 한계', 'm/s³'), ('th_trim_deg', '균형점 보정', '°'),
             ('tune.v_ki', '경사 보정 (속도 적분)', ''), ('tune.bal_adapt_x_max', '균형점 학습: 위치 오차 이내', 'm'),
             ('tune.bal_adapt_max_deg', '균형점 학습 한계', '°'), ('tune.x_turn_wz', '회전 중 위치 리셋 (0 = 유지)', 'rad/s')]
+# 점프 세트 (턱 재질별) = 로봇 gen2_tune.sh <이름> (config/balance_tune_<이름>.yaml 오버레이, balance 재시작, 해제 때만).
+# 데스크톱 2026-10-28/29: 합판 (마찰 ~0.7) 은 plywood v3 (시뮬 2 단 8 cm 35 -> 67 %), 잘 붙는 판은 기본.
+JUMP_SETS = [('default', '기본 (마찰 높음, 15 N·m)'), ('plywood', '합판 v3 (미끄러움, 8 cm)'), ('hip12', '12 N·m (10-15~22)')]
+TUNE_SH = '~/gen2_ws/install/gen2_bringup/lib/gen2_bringup/gen2_tune.sh'
 MARKERS = ['점프 평지', '점프 턱 5.6 cm']    # 시험 표시 버튼 (gcs/marker → 로봇 health_logger 'MARKER: …')
 MIRROR = {LCM: [GCM]}                       # 로컬 코스트맵 값을 글로벌에도
 RESTART = {'/pad_teleop': 'pad', '/gesture': 'gesture', '/slam_toolbox': 'slam'}   # 노트북에서 띄우는 노드
@@ -651,6 +655,7 @@ class Gui(QtWidgets.QMainWindow):
         self.bal_mode = ''
         self.pending = {}              # 노드 → {이름: 값}
         self.att_win = None            # 자세 창
+        self.jumpset_btns = {}         # 점프 세트 버튼 (키 -> 버튼)
         self.step_on, self.step_phase = False, 0     # 턱 감지 모드 (balance/step_mode_active, step_phase)
         self.auto_on, self.auto_txt = False, ''       # 자동 턱 (person_follow auto_step, follow/status [AUTO …])
 
@@ -816,6 +821,7 @@ class Gui(QtWidgets.QMainWindow):
                 self._btn('켜기', lambda: self.ros.set_params(PF, {'auto_step': True}),
                           '추종 중 카메라로 턱을 보면: 1.5 m 앞 0.3 m/s 감속 → 0.5 m 앞 턱 감지 모드 → 점프 → 1.3 m 뒤 해제. 균형 중에도 켜고 끔'),
                 self._btn('끄기', lambda: self.ros.set_params(PF, {'auto_step': False}))]),
+            ('jumpset', '점프 세트 (턱 재질)', [self._jumpset_btn(k, lab) for k, lab in JUMP_SETS]),
             ('step', '턱 감지 모드 (평지 전용, 패드 십자키 ↑/↓)', [
                 self._btn('켜기', lambda: self.ros.set_bool('/balance/step_mode', True, '턱 감지 모드 켜기'),
                           '앞으로 밀면: 0.14 m/s 접근 → 턱에 막히면 0.3 m 후진 → 0.3 m/s 재주행 → 자동 점프. 스틱 놓으면 취소'),
@@ -859,6 +865,35 @@ class Gui(QtWidgets.QMainWindow):
         v.addWidget(hint)
         v.addStretch()
         return _scroll(w)
+
+    def _jumpset_btn(self, key, label):
+        b = self._btn(label, lambda _=0, k=key, lab=label: self.set_jumpset(k, lab),
+                      '로봇 gen2_tune.sh — 균형 노드 재시작. 로봇 해제 (disarmed) 때만')
+        b.setEnabled(False)
+        self.jumpset_btns[key] = b
+        return b
+
+    def set_jumpset(self, key, label):
+        if self.bal_mode not in ('disarmed', 'fault', ''):
+            self.log(f'점프 세트: 로봇이 {self.bal_mode} — 앉혀서 해제한 뒤 바꾸기', err=True)
+            return
+        if QtWidgets.QMessageBox.question(self, '점프 세트', f'점프 세트를 "{label}" 로 바꿀까요?\n균형 노드가 다시 켜집니다 (약 10 초).') \
+                != QtWidgets.QMessageBox.Yes:
+            return
+        self.ssh(f'점프 세트 → {label}', f'{TUNE_SH} {key}')
+        QtCore.QTimer.singleShot(12000, self._poll_robot)
+
+    def _show_jumpset(self):
+        cur, have = self.robot_info.get('tune'), self.robot_info.get('tunes', set())
+        free = self.bal_mode in ('disarmed', 'fault')
+        for k, b in self.jumpset_btns.items():
+            ok = k == 'default' or k in have
+            b.setEnabled(free and ok and k != cur)
+            b.setToolTip(('지금 켜져 있음' if k == cur else '로봇에 세트 파일 없음 (설치 전)' if not ok else
+                          '균형 노드 재시작 — 해제 때만' if not free else '바꾸기 (균형 노드 재시작)'))
+        name = dict(JUMP_SETS).get(cur, cur) if cur else '?'
+        self.lamp['jumpset'].set('on' if cur == 'default' else 'warn' if cur else 'off')
+        self.note['jumpset'].setText(f'지금: {name}' + ('' if free else ' (바꾸려면 앉혀서 해제)'))
 
     def send_marker(self, text):
         self.ros.marker(text)
@@ -1001,14 +1036,19 @@ class Gui(QtWidgets.QMainWindow):
             self.local_off('hud')
 
     def _poll_robot(self):
-        self.ssh('_poll', 'printf "%s %s %s\\n" $(systemctl is-active gen2-bench) $(systemctl is-active gen2-balance) '
-                 '$(pgrep -f "[s]lam_toolbox" >/dev/null && echo slam || echo noslam)')
+        self.ssh('_poll', 'printf "%s %s %s %s %s\\n" $(systemctl is-active gen2-bench) $(systemctl is-active gen2-balance) '
+                 '$(pgrep -f "[s]lam_toolbox" >/dev/null && echo slam || echo noslam) '
+                 '$(t=$(cat ~/.ros/gen2_tune 2>/dev/null); echo ${t:-default}) '
+                 '$(cd ~/gen2_ws/install/gen2_control/share/gen2_control/config 2>/dev/null && ls balance_tune_*.yaml 2>/dev/null '
+                 '| sed "s/balance_tune_//; s/.yaml//" | paste -sd, - | grep . || echo -)')
 
     def _on_ssh(self, what, code, out):
         if what == '_poll':
             if code == 0:
-                p = (out.split() + ['?'] * 3)[:3]
-                self.robot_info = {'bench': p[0], 'balance': p[1], 'slam': p[2] == 'slam'}
+                p = (out.split() + ['?'] * 5)[:5]
+                self.robot_info = {'bench': p[0], 'balance': p[1], 'slam': p[2] == 'slam', 'tune': p[3],
+                                   'tunes': set(p[4].split(',')) if p[4] not in ('-', '?') else set()}
+                self._show_jumpset()
                 self.l_robot.set('on' if p[0] == 'active' and p[1] == 'active' else 'warn')
                 self.t_robot.setText(f'로봇 연결됨 · bench {p[0]} · balance {p[1]}'
                                      + (' · ⚠ 로봇에서 SLAM 이 돎' if self.robot_info['slam'] else ''))
@@ -1238,6 +1278,8 @@ class Gui(QtWidgets.QMainWindow):
     def _on_mode(self, m):
         if m != self.bal_mode:
             self.bal_mode = m
+            if self.jumpset_btns:
+                self._show_jumpset()
             self.update_kinds()
 
     def kind(self, node, name):
