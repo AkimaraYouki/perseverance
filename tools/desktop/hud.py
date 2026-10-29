@@ -14,6 +14,9 @@
   없으면 저장소 tools/robot/camera_cal.yaml). 사람 상자·관절도 같은 식으로 옮겨 그린다.
   u/Tab = 보정 켜기/끄기, [ ] = 좌우 기울기 (roll) -/+0.5°, , . = 앞뒤 숙임 (pitch) -/+0.5°, 0 = 기울기 0, w/Enter = 저장
   (~/.config/cw/camera_mount.json — 로봇 cam_tilt_deg 에 옮길 값도 화면에 표시). 수평선·세로선으로 맞춘다.
+모든 정보 (사용자 2026-10-29): /follow/debug (추종 노드 JSON) -> 로봇 수평선 (하늘색), 발 목표선 (수평선 + feet_px, 초록 점선),
+  지금 발 위치와 '수평선 아래 몇 px', 왼쪽 정보판 (상태·거리 출처·발 px·앞 정지·Nav2·자동 턱·명령·로봇 상태),
+  미니맵에 라이다 (scan_level) 점과 앞 정지 구역 (빨강 = 서는 중). /cmd_vel, /controller/state 도 읽는다. i = 정보판 켜기/끄기
 """
 import json
 import math
@@ -27,8 +30,13 @@ import rclpy
 from geometry_msgs.msg import PoseArray
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
-from sensor_msgs.msg import CompressedImage
+from geometry_msgs.msg import Twist
+from sensor_msgs.msg import CompressedImage, LaserScan
 from std_msgs.msg import Bool, Int8, String
+try:
+    from gen2_msgs.msg import ControllerState
+except ImportError:                                       # gen2_msgs 없이 띄우면 로봇 상태 줄만 빠짐
+    ControllerState = None
 
 FX, CX = 530.0, 320.0                  # person_detector 기본값 (보정 전 추정) — 보정 켜면 Rectifier 의 새 카메라 행렬로 바뀜
 MOUNT_FILE = os.path.expanduser("~/.config/cw/camera_mount.json")
@@ -114,6 +122,34 @@ class Hud(Node):
         self.create_subscription(Bool, "balance/step_mode_active", lambda m: setattr(self, "step_on", bool(m.data)), latched)
         self.create_subscription(Int8, "balance/step_phase", lambda m: setattr(self, "step_phase", int(m.data)), latched)
         self.fps_t, self.fps = time.monotonic(), 0.0
+        self.dbg, self.dbg_t = {}, 0.0
+        self.create_subscription(String, "follow/debug", self._dbg, 10)
+        self.cmd, self.cmd_t = (0.0, 0.0), 0.0
+        self.create_subscription(Twist, "cmd_vel", self._cmd, 10)
+        self.scan, self.scan_t = np.zeros((0, 2)), 0.0
+        self.create_subscription(LaserScan, "scan_level", self._scan, qos_profile_sensor_data)
+        self.cs, self.cs_t = None, 0.0
+        if ControllerState is not None:
+            self.create_subscription(ControllerState, "controller/state", self._cs, 10)
+
+    def _dbg(self, m):
+        try:
+            self.dbg, self.dbg_t = json.loads(m.data), time.monotonic()
+        except json.JSONDecodeError:
+            pass
+
+    def _cmd(self, m):
+        self.cmd, self.cmd_t = (m.linear.x, m.angular.z), time.monotonic()
+
+    def _scan(self, m):
+        r = np.asarray(m.ranges, float)
+        a = m.angle_min + m.angle_increment * np.arange(len(r))
+        ok = np.isfinite(r) & (r > m.range_min) & (r < min(m.range_max, 6.0))
+        self.scan, self.scan_t = np.stack([r[ok] * np.cos(a[ok]) + LASER_X, r[ok] * np.sin(a[ok])], 1), time.monotonic()
+
+    def _cs(self, m):
+        if self.cs is None or time.monotonic() - self.cs_t > 0.1:      # 100 Hz -> 10 Hz 로만 저장
+            self.cs, self.cs_t = m, time.monotonic()
 
     def _set(self, k, v):
         setattr(self, k, v); setattr(self, k + "_t", time.monotonic())
@@ -152,7 +188,62 @@ def u_of(b):
     return int(round(CX - FX * math.tan(b))) if abs(b) < math.radians(80) else None
 
 
-def draw(n: Hud, rect=None):
+def _px(rect, pts):
+    """Raw-image points -> drawing points (rectified view: same lens transform as the boxes)."""
+    q = rect.pts(pts) if rect is not None else np.asarray(pts, float)
+    return [(int(round(a)), int(round(b))) for a, b in q]
+
+
+def _dashed(img, pts, col, on=8, off=6):
+    for (x0, y0), (x1, y1) in zip(pts[:-1], pts[1:]):
+        L = max(1, int(math.hypot(x1 - x0, y1 - y0)))
+        for s_ in range(0, L, on + off):
+            e_ = min(L, s_ + on)
+            cv2.line(img, (x0 + (x1 - x0) * s_ // L, y0 + (y1 - y0) * s_ // L), (x0 + (x1 - x0) * e_ // L, y0 + (y1 - y0) * e_ // L),
+                     col, 2, cv2.LINE_AA)
+
+
+def _info_lines(n: Hud, now):
+    """(text, colour) lines for the info panel from follow/debug, cmd_vel and controller/state."""
+    out = []
+    dd = n.dbg if now - n.dbg_t < 1.0 else {}
+    if dd:
+        st = dd.get("state", "?")
+        out.append((f"{st}{'  NAV2' if dd.get('nav') else ''}{'  HOLD' if dd.get('hold') else ''}{'  blocked' if dd.get('blocked') else ''}",
+                    STATE_COL.get(st.split("+")[0], (230, 230, 230))))
+        if dd.get("dist") is not None:
+            out.append((f"target {dd['dist']:.2f} m @ {dd.get('bearing_deg', 0):+.0f} deg  [{dd.get('src')}]  keep {dd.get('d_ref', 0):.2f} m",
+                        (230, 230, 230)))
+        f = dd.get("feet") or {}
+        if f.get("dv") is not None or f.get("on"):
+            dv = f.get("dv")
+            out.append((f"feet {'ON ' if f.get('on') else 'off'}  {('%.0f' % dv) if dv is not None else '-'} / {f.get('px', 0):.0f} px below horizon"
+                        f"  (k {f.get('k', 0):.3f})", (60, 220, 60) if f.get("on") else (170, 170, 170)))
+        fr = dd.get("front") or {}
+        if fr.get("stop_m", 0) > 0:
+            mm = fr.get("min_m")
+            out.append((f"front lidar {('%.2f m' % mm) if mm is not None else '-'} / stop {fr['stop_m']:.2f} m" + ("  STOP" if fr.get("hit") else ""),
+                        (60, 60, 255) if fr.get("hit") else (230, 230, 230)))
+        a = dd.get("auto") or {}
+        if a.get("on"):
+            sd = a.get("step_d")
+            out.append((f"auto step {a.get('state')}" + (f"  step {sd:.1f} m" if sd else ""), (0, 165, 255)))
+        out.append((f"explore {'on' if dd.get('explore') else 'off'}  leg {dd.get('leg_h', 0) * 1000:.0f} mm  cam pitch {dd.get('pitch_deg', 0):+.1f} deg",
+                    (170, 170, 170)))
+    else:
+        out.append(("no follow/debug (follow node old or off)", (150, 150, 150)))
+    if now - n.cmd_t < 1.0:
+        out.append((f"cmd vx {n.cmd[0]:+.2f} m/s  wz {n.cmd[1]:+.2f} rad/s", (230, 230, 230)))
+    cs = n.cs if n.cs is not None and now - n.cs_t < 1.0 else None
+    if cs is not None:
+        out.append((f"robot {cs.mode}  v {cs.v:+.2f}  pitch {math.degrees(cs.pitch):+.1f}  roll {math.degrees(cs.roll):+.1f}"
+                    f"  h {cs.h[0] * 1000:.0f}/{cs.h[1] * 1000:.0f}", (230, 230, 230) if cs.mode == "balance" else (0, 200, 255)))
+        if cs.fault:
+            out.append((f"fault: {cs.fault}", (60, 60, 255)))
+    return out
+
+
+def draw(n: Hud, rect=None, panel=True):
     global FX, CX
     now = time.monotonic()
     H, W = 480, 640
@@ -224,10 +315,43 @@ def draw(n: Hud, rect=None):
             cv2.line(img, (xx, 40), (xx, H - 40), (255, 0, 255), 1, cv2.LINE_AA)
         cv2.putText(img, f"rectified  roll {rect.roll:+.1f}  pitch {rect.pitch:+.1f} deg  ([ ] , . 0  Enter=save  Tab=raw)", (8, 70),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 0, 255), 1)
+    # 로봇 수평선 (하늘색) + 발 목표선 (수평선 + feet_px, 초록 점선) + 지금 발 (원본 영상 픽셀 -> 보정 화면이면 같은 변환)
+    dd = n.dbg if now - n.dbg_t < 1.0 else {}
+    hz = dd.get("horizon") or []
+    f = dd.get("feet") or {}
+    if len(hz) >= 2:
+        try:
+            line = _px(rect, [(u_, v_) for u_, v_ in hz])
+            cv2.polylines(img, [np.asarray(line, np.int32).reshape(-1, 1, 2)], False, (255, 200, 60), 1, cv2.LINE_AA)
+            cv2.putText(img, "horizon", (6, max(14, line[0][1] - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 200, 60), 1)
+            px = float(f.get("px", 0))
+            goal = _px(rect, [(u_, v_ + px) for u_, v_ in hz])
+            _dashed(img, goal, (60, 220, 60) if f.get("on") else (120, 160, 120))
+            cv2.putText(img, f"feet goal {px:.0f}px", (6, max(14, goal[0][1] - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                        (60, 220, 60) if f.get("on") else (120, 160, 120), 1)
+            if f.get("u") is not None and f.get("row") is not None:
+                (fu, fv), = _px(rect, [(f["u"], f["row"])])
+                (hu, hv), = _px(rect, [(f["u"], f["row"] - f["dv"])])
+                cv2.line(img, (fu, hv), (fu, fv), (60, 220, 60), 2, cv2.LINE_AA)
+                cv2.circle(img, (fu, fv), 6, (60, 220, 60), -1)
+                cv2.putText(img, f"{f['dv']:.0f}/{px:.0f}px", (fu + 8, fv - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (60, 220, 60), 2)
+        except (cv2.error, ValueError):
+            pass
+    # 정보판 (왼쪽, 반투명)
+    if panel:
+        lines = _info_lines(n, now)
+        y0 = 100 if rect is not None else 80              # 보정 화면: 기울기 안내 줄 (y 70) 아래
+        ov = img.copy()
+        cv2.rectangle(ov, (4, y0 - 16), (4 + 9 * max(len(t) for t, _ in lines) // 1 + 8, y0 + 18 * len(lines) - 6), (20, 20, 20), -1)
+        img[:] = cv2.addWeighted(ov, 0.55, img, 0.45, 0)
+        for i, (t, c) in enumerate(lines):
+            cv2.putText(img, t, (8, y0 + 18 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.45, c, 1, cv2.LINE_AA)
     # 상단 띠: 상태 + 수신호
     cv2.rectangle(img, (0, 0), (W, 34), (25, 25, 25), -1)
-    cv2.putText(img, st if st else "no follow/status (person_follow not running)", (8, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                STATE_COL.get(state, (200, 200, 200)), 2)
+    stt = st if st else "no follow/status (person_follow not running)"
+    tw_ = cv2.getTextSize(stt, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0][0]
+    sc_ = 0.6 if tw_ <= W - 150 else max(0.35, 0.6 * (W - 150) / tw_)   # 긴 상태줄은 작게 (오른쪽 손짓 칸 전까지)
+    cv2.putText(img, stt, (8, 23), cv2.FONT_HERSHEY_SIMPLEX, sc_, STATE_COL.get(state.split("+")[0], (200, 200, 200)), 1 if sc_ < 0.6 else 2)
     g = n.gesture.split()[0] if n.gesture else ""
     gtxt = f"hand: {g}" + (f"  [{n.action}]" if n.action and now - n.action_t < 3 else "")
     cv2.putText(img, gtxt, (W - 8 - 9 * len(gtxt), 23), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (230, 230, 230), 1)
@@ -251,6 +375,13 @@ def draw(n: Hud, rect=None):
     for r in (1, 2, 3):
         cv2.circle(mp, c, int(r * sc), (70, 70, 70), 1)
     cv2.rectangle(mp, to(HITBOX[1], HITBOX[3]), to(HITBOX[0], HITBOX[2]), (180, 120, 40), 1)
+    for (xs, ys) in (n.scan[::2] if now - n.scan_t < 1.0 else []):
+        if abs(xs) < R and abs(ys) < R:
+            cv2.circle(mp, to(xs, ys), 1, (170, 170, 170), -1)
+    fr = dd.get("front") or {}
+    if fr.get("stop_m", 0) > 0:
+        hw = fr.get("half_w", 0.2)
+        cv2.rectangle(mp, to(fr["stop_m"], hw), to(0.05, -hw), (60, 60, 255) if fr.get("hit") else (90, 90, 160), 2 if fr.get("hit") else 1)
     for (xl, yl) in (n.legs if now - n.legs_t < 1.0 else []):
         cv2.circle(mp, to(xl + LASER_X, yl), 3, (255, 200, 0), -1)
     if tgt:
@@ -270,6 +401,7 @@ def main():
     cal = load_cal()
     rect = Rectifier(cal[0], cal[1]) if cal else None
     on = rect is not None
+    panel = True
     if cal:
         n.get_logger().info(f"lens calibration {cal[2]} — u toggles the rectified view")
     cv2.namedWindow("C-WANG HUD", cv2.WINDOW_NORMAL)
@@ -277,11 +409,13 @@ def main():
     try:
         while rclpy.ok():
             rclpy.spin_once(n, timeout_sec=0.02)
-            frame = draw(n, rect if on else None)
+            frame = draw(n, rect if on else None, panel)
             cv2.imshow("C-WANG HUD", frame)
             k = cv2.waitKey(30) & 0xFF
             if k in (ord("q"), 27):
                 break
+            if k == ord("i"):
+                panel = not panel
             if k == ord("s"):
                 p = os.path.expanduser(f"~/Desktop/hud_{time.strftime('%H%M%S')}.png")
                 cv2.imwrite(p, frame); n.get_logger().info(f"saved {p}")
