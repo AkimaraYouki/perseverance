@@ -199,12 +199,17 @@ class TargetManager:
     while the target is seen alone (no other box overlapping). Re-ID when lost or after an overlap."""
 
     def __init__(self, sim_min=0.65, sim_margin=0.08, sim_single=0.75, n_gallery=12, gallery_every=10, overlap_iou=0.15,
-                 gate_deg=12.0, gate_rate_deg_s=40.0, gate_max_deg=70.0, fps=30.0):
+                 gate_deg=12.0, gate_rate_deg_s=40.0, gate_max_deg=70.0, fps=30.0, size_tol=1.35, size_rate=0.5):
         self.sim_min, self.sim_margin, self.sim_single = sim_min, sim_margin, sim_single   # single = only one person in view
         self.n_gallery, self.every, self.ov = n_gallery, gallery_every, overlap_iou
         # where it may reappear: within gate_deg + gate_rate x lost time of the bearing it was last seen at (same uniforms:
         # appearance alone cannot tell two soldiers apart, 2026-10-25 test sim 0.99 -> swapped to the other one)
         self.g0, self.grate, self.gmax, self.fps = math.radians(gate_deg), math.radians(gate_rate_deg_s), math.radians(gate_max_deg), fps
+        # 크기 (= 거리) 일관성 (사용자 2026-10-29 "사람이 교차해서 지나갈 때 한 사람만 봐야"): 먼 대상 앞을 가까운 사람이 지나가면
+        # 대상이 다 가려져 화면엔 그 사람만 남고, 옷이 비슷하면 ReID 가 그 사람을 고른다 (시뮬: 비슷한 옷 43-114 프레임 오추종).
+        # 상자 높이가 마지막 대상 높이의 size_tol (+ size_rate / s 놓친 시간) 배 밖이면 후보 아님, 같은 번호가 그만큼 튀면 번호
+        # 바뀜으로 봄. 대상을 가린 사람 (마지막에 겹친 번호) 은 대상 자리를 덮고 있는 동안 후보 아님.
+        self.size_tol, self.size_rate = size_tol, size_rate
         self.clear()
 
     def clear(self):
@@ -213,6 +218,8 @@ class TargetManager:
         self.lost_frames = 0
         self.want = False
         self.last_b = None
+        self.last_h = self.last_u = None
+        self.occluders = set()
 
     def register(self):
         self.clear()
@@ -235,9 +242,31 @@ class TargetManager:
             return [tg.id]
         return []
 
+    @staticmethod
+    def _iomin(a, b):
+        """Intersection over the smaller box: a far person inside a near person's box is an overlap (IoU would be small)."""
+        w = min(a[2], b[2]) - max(a[0], b[0])
+        h = min(a[3], b[3]) - max(a[1], b[1])
+        if w <= 0 or h <= 0:
+            return 0.0
+        return w * h / max(1e-6, min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1])))
+
+    def _overlapping(self, tg, tracks):
+        return {t.id for t in tracks if t.id != tg.id and t.last == tg.last and self._iomin(tg.box, t.box) > self.ov}
+
     def _overlapped(self, tg, tracks):
-        others = [t.box for t in tracks if t.id != tg.id and t.last == tg.last]
-        return bool(others) and float(iou_matrix([tg.box], others).max()) > self.ov
+        return bool(self._overlapping(tg, tracks))
+
+    def _fits(self, t, lost_s):
+        """Box height consistent with the target's last height (same distance, give or take lost time)?"""
+        if self.last_h is None:
+            return True
+        a = self.size_tol + self.size_rate * lost_s
+        r = (t.box[3] - t.box[1]) / max(1.0, self.last_h)
+        return 1.0 / a <= r <= a
+
+    def _covers_last(self, t):
+        return self.last_u is not None and t.id in self.occluders and t.box[0] <= self.last_u <= t.box[2]
 
     def update(self, tracks, frame, bearing_of, emb=None):
         """tracks: live tracks; bearing_of(track) -> rad; emb: {id: unit vector} for the ids asked for.
@@ -255,12 +284,15 @@ class TargetManager:
         if self.id is None:
             return None
         tg = next((t for t in seen if t.id == self.id), None)
-        if tg is not None and self._overlapped(tg, tracks):
+        swapped = tg is not None and not self._fits(tg, 0.0)     # same id, other size: ByteTrack gave it to someone else
+        if swapped or (tg is not None and self._overlapped(tg, tracks)):
             self.crossed = True
         # ReID decides when lost, or after a crossing (ids may have swapped)
         if (tg is None or self.crossed) and self.gallery and emb:
             gate = min(self.gmax, self.g0 + self.grate * self.lost_frames / self.fps)
-            near = {t.id for t in seen if self.last_b is None or abs(bearing_of(t) - self.last_b) <= gate}
+            lost_s = self.lost_frames / self.fps
+            near = {t.id for t in seen if (self.last_b is None or abs(bearing_of(t) - self.last_b) <= gate)
+                    and self._fits(t, lost_s) and not (tg is None and self._covers_last(t))}
             sims = sorted(((self.similarity(e), i) for i, e in emb.items() if e is not None and i in near), reverse=True)
             if sims:
                 best, bid = sims[0]
@@ -270,13 +302,19 @@ class TargetManager:
                 if tb is not None and best >= need and best - second >= self.sim_margin and not self._overlapped(tb, tracks):
                     if bid != self.id:
                         self.state = 'REACQUIRED'
-                    self.id, tg, self.crossed = bid, tb, False
+                    self.id, tg, self.crossed, swapped = bid, tb, False, False
+        if swapped:
+            tg = None                                        # not the target any more: lost until ReID / size agree
         if tg is None:
             self.lost_frames += 1
             self.state = 'LOST'
             return None
         self.lost_frames = 0
         self.last_b = bearing_of(tg)
+        h = tg.box[3] - tg.box[1]
+        self.last_h = h if self.last_h is None else 0.7 * self.last_h + 0.3 * h
+        self.last_u = 0.5 * (tg.box[0] + tg.box[2])
+        self.occluders = self._overlapping(tg, tracks) or (self.occluders if self.crossed else set())
         if self.state != 'REACQUIRED' or self.k % 15 == 0:
             self.state = 'LOCK'
         e = emb.get(tg.id)

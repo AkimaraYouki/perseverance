@@ -126,7 +126,8 @@ class PersonTracker(Node):
                                  max_lost=int(p('track_keep_frames', 30)))
         self.tm = tc.TargetManager(sim_min=p('reid_sim_min', 0.65), sim_single=p('reid_sim_single', 0.75),
                                    sim_margin=p('reid_margin', 0.08), gate_deg=p('reacq_gate_deg', 12.0),
-                                   gate_rate_deg_s=p('reacq_gate_rate_deg_s', 40.0))
+                                   gate_rate_deg_s=p('reacq_gate_rate_deg_s', 40.0),
+                                   size_tol=p('reid_size_tol', 1.35), size_rate=p('reid_size_rate', 0.5))   # 크기 (거리) 일관성
         self.cam_model = dict(model=p('camera_model', 'pinhole'), fx=p('fx', 530.0), cx=p('cx', 320.0),
                               hfov_deg=p('hfov_deg', 160.0), K=p('K', [0.0]), D=p('D', [0.0]), roll=p('cam_roll_deg', 0.0))
         self.bm = None
