@@ -25,6 +25,7 @@ import cv2
 import numpy as np
 import rclpy
 import rclpy.executors
+from gen2_tools import step_watch as sw
 from gen2_tools import tracking_core as tc
 from gen2_tools.live import Live
 from gen2_tools.person_detector import TrtYolo, ck
@@ -125,14 +126,19 @@ class PersonTracker(Node):
                                  max_lost=int(p('track_keep_frames', 30)))
         self.tm = tc.TargetManager(sim_min=p('reid_sim_min', 0.65), sim_single=p('reid_sim_single', 0.75),
                                    sim_margin=p('reid_margin', 0.08), gate_deg=p('reacq_gate_deg', 12.0),
-                                   gate_rate_deg_s=p('reacq_gate_rate_deg_s', 40.0))
+                                   gate_rate_deg_s=p('reacq_gate_rate_deg_s', 40.0),
+                                   size_tol=p('reid_size_tol', 1.35), size_rate=p('reid_size_rate', 0.5))   # 크기 (거리) 일관성
         self.cam_model = dict(model=p('camera_model', 'pinhole'), fx=p('fx', 530.0), cx=p('cx', 320.0),
-                              hfov_deg=p('hfov_deg', 160.0), K=p('K', [0.0]), D=p('D', [0.0]))
+                              hfov_deg=p('hfov_deg', 160.0), K=p('K', [0.0]), D=p('D', [0.0]), roll=p('cam_roll_deg', 0.0))
         self.bm = None
         self.active_t, self.last_t = -1e9, 0.0
         self.tm_n, self.tms = 0, np.zeros(4)
         self.pub = self.create_publisher(String, 'people/camera', 10)
         self.pub_t = self.create_publisher(String, 'people/target', 10)
+        # 카메라 턱 감시 (2026-10-27): 바닥 위 긴 가로 모서리 (위아래 색이 다른 = 턱 발치) 를 광선으로 -> person_follow_cam 이
+        # 다리 높이·몸 기울기·주행 거리로 거리와 확인 (auto_step). step_every 프레임마다 (CPU ~3-5 ms)
+        self.step_on, self.step_every, self.sw = p('step_watch', True), int(p('step_every', 2)), None
+        self.pub_s = self.create_publisher(String, 'step/rays', 10)
         self.create_subscription(String, 'follow/status', self._follow_status, 10)
         self.create_subscription(String, 'people/target_cmd', self._cmd, 10)
         self.create_subscription(CompressedImage, 'camera/image_raw/compressed', self._img, qos_profile_sensor_data)
@@ -175,7 +181,7 @@ class PersonTracker(Node):
             c = self.cam_model
             K = c['K'] if len(c['K']) == 9 else None
             D = c['D'] if len(c['D']) == 4 else None
-            self.bm = tc.BearingModel(c['model'], W, H, fx=c['fx'], cx=c['cx'], hfov_deg=c['hfov_deg'], K=K, D=D)
+            self.bm = tc.BearingModel(c['model'], W, H, fx=c['fx'], cx=c['cx'], hfov_deg=c['hfov_deg'], K=K, D=D, roll_deg=c['roll'])
         t1 = time.monotonic()
         S = self.yolo.size
         r = min(S / W, S / H)
@@ -243,6 +249,13 @@ class PersonTracker(Node):
                      feet_row=round(float(self._feet_row(tg)), 1), score=round(float(tg.score), 3),
                      sim=None if tg.id not in emb else round(float(self.tm.similarity(emb[tg.id]) or 0.0), 3))
         self.pub_t.publish(String(data=json.dumps(j)))
+        if self.step_on and fr % max(1, self.step_every) == 0:
+            if self.sw is None:
+                self.sw = sw.StepWatch(self.bm)
+            rays = self.sw.rays(img)
+            # [depression, bearing left, bearing right, line as raw-image pixels (HUD)] — consumers read the first three
+            self.pub_s.publish(String(data=json.dumps({'stamp': st, 'rays': [[round(d, 4), round(sp[0], 4), round(sp[1], 4), px]
+                                                                               for d, sp, px in rays]})))
 
     def _bearing(self, t):
         """Bearing of a track: ankles / knees / hips middle when seen (the ground point), else the box centre."""

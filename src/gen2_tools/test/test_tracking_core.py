@@ -50,9 +50,43 @@ def run(b_vec, label):
     assert lost < 45, 'lost too long'
 
 
+def scene_front(speed, T=200):
+    """A far near the centre (small box); B near walks across in front (big box) and hides A completely (2026-10-29)."""
+    for k in range(T):
+        xa, xb, dets = 320 + 0.5 * k, 620 - speed * k, []
+        if abs(xb - xa) >= 55:
+            dets.append(('A', [xa - 20, 200, xa + 20, 320], 0.8))
+        if -60 < xb < 700:
+            dets.append(('B', [xb - 60, 90, xb + 60, 470], 0.85))
+        yield k, dets
+
+
+def run_front(b_vec, label, speed):
+    emb = {'A': tc.l2n(np.r_[1.0, 0.2, np.zeros(14)]), 'B': tc.l2n(b_vec)}
+    rng = np.random.default_rng(1)
+    bt = tc.ByteTracker(max_lost=20, new=0.7)
+    tm = tc.TargetManager(sim_min=0.72, sim_single=0.80, sim_margin=0.12, gate_deg=10, gate_rate_deg_s=30)
+    bm = tc.BearingModel('equidistant', 640, 480, hfov_deg=124)
+    bad = ok = 0
+    for k, dets in scene_front(speed):
+        tracks = bt.update([d[1] for d in dets], [d[2] for d in dets], extras=[d[0] for d in dets])
+        if k == 2:
+            tm.register()
+        ids = tm.need_embeddings(tracks, bt.frame)
+        e = {t.id: tc.l2n(emb[t.extra] + 0.05 * rng.standard_normal(16)) for t in tracks if t.id in ids}
+        tg = tm.update(tracks, bt.frame, lambda t: bm.bearing((t.box[0] + t.box[2]) / 2), e)
+        if k > 3 and tg is not None and tm.state in ('LOCK', 'REACQUIRED'):
+            ok, bad = ok + (tg.extra == 'A'), bad + (tg.extra != 'A')
+    print(f"[{label}, passer {speed} px/frame in front] frames on target {ok}, on the passer {bad}")
+    assert bad == 0 and ok > 150, 'took the person who walked in front'
+
+
 def main():
     run(np.r_[0.3, 1.0, np.zeros(14)], 'different clothes')
     run(np.r_[1.0, 0.35, np.zeros(14)], 'same uniform (sim 0.99)')      # only motion / bearing can tell them apart
+    for sp in (4, 6, 10):                                                 # near passer hides a far target
+        run_front(np.r_[0.2, 1.0, np.zeros(14)], 'different clothes', sp)
+        run_front(np.r_[1.0, 0.25, np.zeros(14)], 'similar clothes', sp)
     bm = tc.BearingModel('equidistant', 640, 480, hfov_deg=160)
     # bearing models: 160 deg equidistant edge = 80 deg, pinhole fx 530 edge = 31 deg
     assert abs(np.degrees(bm.bearing(0)) - 80) < 1e-6

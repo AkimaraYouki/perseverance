@@ -68,6 +68,14 @@ class PersonFollow(Node):
         # camera-only people (no LiDAR legs at that bearing, or LiDAR down): distance from the ankles' (else the box
         # bottom's) image row on the ground plane: camera height = leg h + cam_h_off, depression = ray + body pitch + tilt
         self.cam_only = p('camera_only', True)
+        self.person_r = p('person_radius_m', 0.4)          # LiDAR points this close to the person are the person
+        self.nav_max_b = math.radians(p('nav_max_bearing_deg', 30.0))   # person further to the side: no Nav2, turn first
+        # smooth starts / stops while following (GCS 2026-10-26, user "추종시 가감속 부드럽게"): rate limits on the
+        # direct-steering command (Nav2's own output is not touched). Braking stays quicker than speeding up.
+        self.acc = p('follow_accel', 0.4)              # m/s^2 speeding up (forward or backward)
+        self.dec = p('follow_decel', 0.8)              # m/s^2 slowing down
+        self.wacc = p('follow_wz_accel', 2.0)          # rad/s^2 turn rate change
+        self.sm_v, self.sm_w, self.sm_t = 0.0, 0.0, None
         self.cam_fx = p('cam_fx', 530.0)
         self.cam_tilt = math.radians(p('cam_tilt_deg', 0.0))
         self.cam_x = p('cam_x_m', 0.108)          # camera_link in base_link
@@ -118,16 +126,35 @@ class PersonFollow(Node):
         self._declare_extra(p)          # subclasses (person_follow_cam) declare theirs before Live locks the parameters
         live = dict(self._LIVE)
         live['bearing_tol_deg'] = lambda v: setattr(self, 'tol', math.radians(v))
+        live['nav_max_bearing_deg'] = lambda v: setattr(self, 'nav_max_b', math.radians(v))
         live['cam_tilt_deg'] = lambda v: setattr(self, 'cam_tilt', math.radians(v))
         live['cam_fov_deg'] = lambda v: setattr(self, 'cam_fov', math.radians(v))
-        Live(self, live, always=('use_nav', 'camera_only'))
+        Live(self, live, always=self._ALWAYS)
         self.create_timer(0.05, self._step)
+
+    _ALWAYS = ('use_nav', 'camera_only')     # on/off switches accepted while balancing (gen2_tools.live)
 
     def _declare_extra(self, p):
         pass
 
+    def _smooth(self, t, now):
+        """Rate-limit the direct-steering Twist in place (accel / decel / turn-rate change). After a pause
+        (Nav2 drove, follow off) it restarts from 0 so the first command is limited too."""
+        dt = 0.05 if self.sm_t is None or now - self.sm_t > 0.3 else now - self.sm_t
+        if self.sm_t is None or now - self.sm_t > 0.3:
+            self.sm_v, self.sm_w = 0.0, 0.0
+        self.sm_t = now
+        v, dv = t.linear.x, t.linear.x - self.sm_v
+        lim = (self.acc if abs(v) > abs(self.sm_v) and v * self.sm_v >= 0 else self.dec) * dt
+        self.sm_v += max(-lim, min(lim, dv))
+        lw = self.wacc * dt
+        self.sm_w += max(-lw, min(lw, t.angular.z - self.sm_w))
+        t.linear.x, t.angular.z = float(self.sm_v), float(self.sm_w)
+        return t
+
     # runtime-changeable (robot disarmed only, gen2_tools.live): limits / tracking / avoidance — no gains (k_dist, k_yaw)
     _LIVE = {'follow_dist_m': 'd_ref', 'vx_max': 'vx_max', 'wz_max': 'wz_max',
+             'follow_accel': 'acc', 'follow_decel': 'dec', 'follow_wz_accel': 'wacc', 'person_radius_m': 'person_r',
              'occluded_s': 'occl_s', 'search_wz': 'search_wz', 'appearance_min': 'app_min', 'use_nav': 'use_nav',
              'nav_replan_s': 'nav_period', 'reacquire_min': 'app_reacq', 'grace_s': 'grace',
              'legs_only_s': 'legs_only', 'max_gate_m': 'max_gate', 'predict_s': 'pred_s',
@@ -152,8 +179,10 @@ class PersonFollow(Node):
         ok = np.isfinite(r) & (r > m.range_min) & (r < 4.0)
         self.scan_b = np.stack([r[ok] * np.cos(a[ok]) + LASER_X, r[ok] * np.sin(a[ok])], 1)
 
-    def _blocked(self, pb):
-        """Obstacle in the straight corridor robot -> person (stopping 0.45 m before the person's legs)?"""
+    def _blocked(self, pb, person=True):
+        """Obstacle in the straight corridor robot -> person (stopping 0.45 m before the person's legs)?
+        person: pb is the person -> LiDAR points within person_radius_m of it are the person, not an obstacle
+        (2026-10-28 GCS: a distance estimate a little long put the person's own legs in the corridor -> Nav2 on and off)."""
         d = float(np.hypot(*pb))
         if d < 0.6 or not len(self.scan_b):
             return False
@@ -161,6 +190,8 @@ class PersonFollow(Node):
         along = self.scan_b @ u
         lat = np.abs(self.scan_b[:, 0] * u[1] - self.scan_b[:, 1] * u[0])
         hit = (along > 0.05) & (along < d - 0.45) & (lat < 0.164 + self.margin)
+        if person:   # 사람 다리는 통로 끝 (사람 쪽 0.7 m) 에서만 뺀다: 미로 모서리 옆에 선 사람 (2026-10-29) 때 모서리까지 빠지면 안 막힘
+            hit &= (np.hypot(self.scan_b[:, 0] - pb[0], self.scan_b[:, 1] - pb[1]) > self.person_r) | (along < d - 0.7)
         return int(hit.sum()) >= 3
 
     def _enable(self, req, res):
@@ -360,7 +391,7 @@ class PersonFollow(Node):
                 k = 0.0                                       # controller just gave up (blocked): only turn
             t.angular.z = float(np.clip(self.k_yaw * b, -self.wz_max, self.wz_max))
             t.linear.x = float(np.clip(k * self.k_d * (d - self.d_ref) * max(0.0, math.cos(b)), -self.vx_max * 0.5, self.vx_max))
-        self.pub.publish(t)
+        self.pub.publish(self._smooth(t, now))
         self._status(state, pb)
 
     def _match(self, tgt, cands, now):
@@ -408,14 +439,16 @@ class PersonFollow(Node):
             tgt['cam_t'] = now
 
     # ------------------------------------------------------------------ Nav2
-    def _nav(self, pose, pw, pb, now):
-        """Plan to 'follow_dist in front of the person' (odom frame) every nav_replan_s; False = drive directly."""
+    def _nav(self, pose, pw, pb, now, stand_off=None):
+        """Plan to 'stand_off (default follow_dist) in front of pw' (odom frame) every nav_replan_s; False = drive directly.
+        stand_off 0 = to the point itself (occlusion explore waypoints)."""
+        so = self.d_ref if stand_off is None else stand_off
         if not self.use_nav or not self.ac_plan.server_is_ready() or not self.ac_follow.server_is_ready():
             return False
         if now - self.nav_fail_t < 1.0:
             return False
         d = float(np.hypot(*pb))
-        if d < self.d_ref + 0.15:                          # close enough: just face the person (direct)
+        if d < so + 0.15:                                  # close enough: just face the person (direct)
             return False
         if self.nav_busy or now - self.nav_t < self.nav_period:
             return self.nav_goal_h is not None
@@ -423,7 +456,7 @@ class PersonFollow(Node):
         g = PoseStamped()
         g.header.frame_id = 'odom'
         g.header.stamp = self.get_clock().now().to_msg()
-        g.pose.position.x, g.pose.position.y = float(pw[0] - self.d_ref * u[0]), float(pw[1] - self.d_ref * u[1])
+        g.pose.position.x, g.pose.position.y = float(pw[0] - so * u[0]), float(pw[1] - so * u[1])
         yaw = math.atan2(u[1], u[0])
         g.pose.orientation.z, g.pose.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
         req = ComputePathToPose.Goal(goal=g, planner_id='GridBased', use_start=False)
