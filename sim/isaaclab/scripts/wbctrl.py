@@ -21,7 +21,7 @@ import lqr_vmc
 
 H_MIN, H_MAX = 0.1225, 0.2425
 R_WHEEL = float(os.environ.get("WB_WHEEL_R", "0.070"))   # leg_map 과 같은 환경변수 (기본 140 mm)
-W_WHEEL_MAX = 18.85                    # 바퀴 모터 한계 (명목, 제어기가 믿는 값)
+W_WHEEL_MAX = float(__import__("os").environ.get("WB_WHEEL_NOLOAD_RAD_S", "18.85"))   # 바퀴 모터 한계 (명목, 제어기가 믿는 값). 2026-10-30 모터 비교용 환경 변수
 HALF_TRACK = 0.094
 DT = 0.005
 DRIVE, RETRACT, EXTRACT, FLY, DESCEND, LAND = range(6)

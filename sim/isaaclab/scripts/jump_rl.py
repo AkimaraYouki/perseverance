@@ -179,6 +179,10 @@ env.action_manager.get_term("wheels").cfg.torque_scale = P.wheel_tau_max
 env.action_manager.get_term("wheels")._alpha = 1.0
 leg_ids = robot.find_joints(cad.LEG_JOINTS, preserve_order=True)[0]
 wheel_ids = robot.find_joints(cad.WHEEL_JOINTS, preserve_order=True)[0]
+WS = None
+if os.environ.get("WB_WHEEL_STATS"):
+    import wheel_stats
+    WS = wheel_stats.WheelStats(os.environ["WB_WHEEL_STATS"], N, 0.005)
 wheel_bodies = robot.find_bodies(["l_wheel", "r_wheel"], preserve_order=True)[0]
 hip_sign = torch.tensor([cad.M_SIGN["L"], cad.M_SIGN["R"]], device=dev)
 wsign = torch.tensor(cad.WHEEL_SIGN, device=dev)
@@ -401,6 +405,8 @@ class JumpEnv:
         robot.set_joint_effort_target(ffj * hip_eff[:, None], joint_ids=leg_ids)
         cmd_term.set(torch.tensor(self.vcmd, device=dev, dtype=torch.float32), torch.zeros(N, device=dev),
                      torch.full((N,), P.idle_h, device=dev), mode=torch.ones(N, device=dev))
+        if WS is not None:                                                # 바퀴 모터 선정 통계 (WB_WHEEL_STATS)
+            WS.add(acts[:, 2:4] * P.wheel_tau_max, f.w_wheel_joint, np.arccos(np.clip(-f.g_b[:, 2], -1, 1)) < np.radians(45), CTRL.phase)
         env.step(torch.tensor(acts, device=dev, dtype=torch.float32))
         self.t += DT
         self.gt += DT
@@ -413,7 +419,7 @@ class JumpEnv:
         pitch_t = f.truth_th
         tilt = np.degrees(np.arccos(np.clip(-f.g_b[:, 2], -1, 1)))
         dx = f.wx - self.x_prev; self.x_prev = f.wx.copy()  # noqa: E702
-        wsat = np.maximum(0.0, np.abs(f.w_wheel_joint).max(1) / (18.85 * kv) - 0.85)
+        wsat = np.maximum(0.0, np.abs(f.w_wheel_joint).max(1) / (wbctrl.W_WHEEL_MAX * kv) - 0.85)
         dres = res - self.res; self.res = res  # noqa: E702
         on_top = f.wheel_z_min >= self.h - 0.015
         upright = tilt < 15.0
@@ -706,6 +712,8 @@ if args.eval:
             n_done += int(done.sum())
     tot = {k: sum(v) for k, v in venv.stats.items()}
     s = sum(tot.values())
+    if WS is not None:
+        WS.save()
     print(f"[점프 평가] {args.eval} | 턱 {args.h if args.h is not None else f'{args.h_min}-{args.h_max}'} | 에피소드 {s:.0f} | "
           + "  ".join(f"{k} {v / max(1, s):.1%}" for k, v in sorted(tot.items())) + f" | {time.time() - t0:.0f} s"
           + (f" | 바퀴 최고 {np.median(venv.clear) * 100:.1f} cm (중간값, 95 % {np.percentile(venv.clear, 95) * 100:.1f}, 최대 {np.max(venv.clear) * 100:.1f}), 1 cm 넘게 뜸 {np.mean(np.array(venv.clear) > 0.01):.0%}" if venv.clear else "")

@@ -87,11 +87,13 @@ WHEELED_BIPED_CFG = ArticulationCfg(
         #    그 속도에서 로봇이 15~17 deg 숙인 것도 이 제동을 이기려던 것으로 본다.
         #  * 대신 선형 토크-속도 곡선을 넣는다: 가용 토크 = 7 Nm x (1 - w / 18.85 rad/s).
         #    AK45-10 KV75 24 V 무부하 180 rpm = 18.85 rad/s, 피크 7 Nm. 3 km/h 에서 약 1.86 Nm.
+        # 2026-10-30 바퀴 모터 비교: 환경 변수 WB_WHEEL_PEAK_NM / WB_WHEEL_NOLOAD_RAD_S (없으면 AK45-10 그대로).
+        #   AK40-10 KV170 V3.0: 피크 4.1 N·m, 24 V 무부하 435 rpm = 45.55 rad/s (openelab / CubeMars 표).
         "wheels": DCMotorCfg(
             joint_names_expr=[".*_wheel_joint"],
-            saturation_effort=7.0,
-            effort_limit=7.0,
-            velocity_limit=18.85,
+            saturation_effort=float(os.environ.get("WB_WHEEL_PEAK_NM", "7.0")),
+            effort_limit=float(os.environ.get("WB_WHEEL_PEAK_NM", "7.0")),
+            velocity_limit=float(os.environ.get("WB_WHEEL_NOLOAD_RAD_S", "18.85")),
             stiffness=0.0,                         # 토크 제어
             damping=0.0,
             armature=1.5733e-3,                    # 회전자 157.33 g*cm^2 x 10^2

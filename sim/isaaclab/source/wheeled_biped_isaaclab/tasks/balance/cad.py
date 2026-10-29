@@ -323,8 +323,12 @@ CAD_ROBOT_CFG = ArticulationCfg(
                                    effort_limit=9.0, velocity_limit=24.4),
         "passive": ImplicitActuatorCfg(joint_names_expr=[".*_joint_[IK]"], stiffness=0.0, damping=0.02),
         # 바퀴: DC 모터 모델 (단순화 모델과 같은 값). 회전자 관성은 링크 izz 에 이미 있다 -> armature 0.
-        "wheels": DCMotorFricCfg(joint_names_expr=[".*_joint_W"], saturation_effort=7.0, effort_limit=7.0,
-                                 velocity_limit=18.85, stiffness=0.0, damping=0.0),   # 마찰 기본 0 (set_wheel_model 로)
+        # 2026-10-30 바퀴 모터 비교: WB_WHEEL_PEAK_NM / WB_WHEEL_NOLOAD_RAD_S (없으면 AK45-10: 7 N·m, 18.85 rad/s)
+        "wheels": DCMotorFricCfg(joint_names_expr=[".*_joint_W"], saturation_effort=float(os.environ.get("WB_WHEEL_PEAK_NM", "7.0")),
+                                 effort_limit=float(os.environ.get("WB_WHEEL_PEAK_NM", "7.0")),
+                                 velocity_limit=float(os.environ.get("WB_WHEEL_NOLOAD_RAD_S", "18.85")), stiffness=0.0, damping=0.0,   # 마찰 기본 0 (set_wheel_model 로)
+                                 # URDF 바퀴 관절 velocity 18.8 이 PhysX 관절 속도 한계로 들어가 있다 -> 다른 모터 비교 땐 그 모터 무부하로 올림
+                                 velocity_limit_sim=float(os.environ["WB_WHEEL_NOLOAD_RAD_S"]) if "WB_WHEEL_NOLOAD_RAD_S" in os.environ else None),
     },
     soft_joint_pos_limit_factor=1.0,
 )

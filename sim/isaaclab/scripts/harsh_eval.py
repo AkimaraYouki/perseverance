@@ -43,6 +43,7 @@ ap.add_argument("--vx_slow", type=float, default=0.4, help="불연속 지형 (--
 ap.add_argument("--slow", default="blocks,step_down", help="천천히 달릴 불연속 지형 (쉼표, 빈 문자열 = 없음)")
 ap.add_argument("--yaw0", action="store_true", help="모두 +x 로 출발 (삼각형 길을 정면으로). 없으면 방향 무작위 (비스듬히)")
 ap.add_argument("--no_push", action="store_true")
+ap.add_argument("--push_v", type=float, default=None, help="2026-10-30 외란 비교: 앞 방향 밀기 크기 고정 [m/s] (4~8 s 마다, 옆 0). 없으면 기존 ±0.3 x 배율 (앞·옆)")
 ap.add_argument("--tag", default="")
 ap.add_argument("--cands", default=None, help="게인 CMA: 후보 TUNE 값 목록 json, 로봇 i = 후보 i %% C (지형 칸은 연속 블록이라 후보마다 지형이 고르게)")
 ap.add_argument("--rows_out", default=None, help="로봇마다 결과 json (지형, 넘어짐, 진동 보호, 떨림)")
@@ -202,7 +203,8 @@ e.wheel_friction = _Ev(func=_mdp.randomize_rigid_body_material, mode="startup",
                        params={"asset_cfg": _Ent("robot", body_names=".*"), "static_friction_range": mu_r, "dynamic_friction_range": mu_r,
                                "restitution_range": (0.0, 0.0), "num_buckets": 64, "make_consistent": True})
 e.push = None if args.no_push else _Ev(func=_mdp.push_by_setting_velocity, mode="interval", interval_range_s=(4.0, 8.0),
-                                         params={"velocity_range": {"x": (-0.3 * H, 0.3 * H), "y": (-0.3 * H, 0.3 * H)}})
+                                         params={"velocity_range": {"x": (-0.3 * H, 0.3 * H), "y": (-0.3 * H, 0.3 * H)} if args.push_v is None
+                                                 else {"x": (args.push_v, args.push_v), "y": (0.0, 0.0)}})
 e.reset_base.params["pose_range"] = {"x": (-0.3, 0.3), "y": (-0.3, 0.3), "yaw": (0.0, 0.0) if args.yaw0 or args.suite == "slope" else (-3.14, 3.14)}
 if args.suite == "slope":
     e.reset_base.params["pose_range"]["x"] = (0.0, 0.0)
@@ -271,6 +273,10 @@ if getattr(P, "hip_fric_nm", 0.0) > 0:   # 2026-10-24 고관절 마찰 (실기 �
     robot.write_joint_friction_coefficient_to_sim(float(P.hip_fric_nm), float(min(P.hip_fric_dyn_nm, P.hip_fric_nm)), 0.0, joint_ids=leg_ids)
 mass_true = masses.to(dev)
 CTRL = wbctrl.WBController(P, lqr, m_pend, n=N, seed=args.seed + 1000)
+WS = None
+if os.environ.get("WB_WHEEL_STATS"):
+    import wheel_stats
+    WS = wheel_stats.WheelStats(os.environ["WB_WHEEL_STATS"], N, 0.005)
 
 # --- 지형 칸 ----------------------------------------------------------------------------------------------------
 t_ = env.scene.terrain
@@ -387,10 +393,12 @@ with torch.inference_mode():
             m_ = drv_ & alive & (tt_ > 1.0)
             CH2 += np.where(m_, (lr - LRF) ** 2, 0.0); CHN += m_  # noqa: E702
         here = to(torch.cdist(d.root_pos_w[:, :2], org).argmin(1) % nc)    # 지금 서 있는 칸의 종류 (열)
-        wfr = np.abs(f.w_wheel_joint).max(1) / (18.85 * kv)
+        wfr = np.abs(f.w_wheel_joint).max(1) / (wbctrl.W_WHEEL_MAX * kv)
         tilt = np.degrees(np.arccos(np.clip(-f.g_b[:, 2], -1, 1)))
         ring[:, k % RB] = np.stack([vx * np.ones(N), wz, wfr, CTRL.lift_on.astype(float), tilt], 1)
         yaw_dev = np.where(done, yaw_dev, np.maximum(yaw_dev, np.abs(f.yaw)))
+        if WS is not None:                                                # 바퀴 모터 선정 통계 (WB_WHEEL_STATS)
+            WS.add(acts[:, 2:4] * P.wheel_tau_max, f.w_wheel_joint, ~done, CTRL.phase, v=f.truth_v)
         obs, _, _, _, _ = env.step(torch.tensor(acts, device=dev, dtype=torch.float32))
         live = ~done
         expo += np.bincount(here[live], minlength=nc) * dt
@@ -411,6 +419,9 @@ with torch.inference_mode():
         done |= f_
         if k % 100 == 99 and bool(done.all()):
             break
+
+if WS is not None:
+    WS.save()
 
 
 def wilson(s, n, z=1.96):
