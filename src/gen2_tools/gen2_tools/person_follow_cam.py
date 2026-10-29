@@ -37,7 +37,7 @@ from std_srvs.srv import SetBool
 class PersonFollowCam(PersonFollow):
     _LIVE = dict(PersonFollow._LIVE, auto_step='auto_on', explore='ex_on', explore_s='ex_s', explore_ahead_m='ex_ahead',
                  explore_side_m='ex_side', explore_v='ex_v', explore_scan_deg='ex_scan_deg',
-                 feet_follow='feet_on', feet_px='feet_px', feet_k='feet_k')
+                 feet_follow='feet_on', feet_px='feet_px', feet_k='feet_k', front_stop_m='front_stop')
     _ALWAYS = PersonFollow._ALWAYS + ('auto_step', 'explore', 'feet_follow')     # 켜기/끄기는 균형 중에도 (GUI)
     def __init__(self):
         super().__init__()
@@ -63,6 +63,11 @@ class PersonFollowCam(PersonFollow):
         self.feet_px = p('feet_px', 80.0)                  # [px] 목표: 발이 수평선 아래 이만큼 (로봇 렌즈: 100 = 0.8 m, 80 = 1.0 m, 55 = 1.5 m)
         self.feet_k = p('feet_k', 0.01)                    # [m/s per px] 50 px 모자라면 0.5 m/s
         self.feet_dv, self.feet_t = None, -1e9
+        # 라이다 앞 정지 (사용자 2026-10-29: 미로를 사람 따라 통과, 사람이 너무 가깝거나 장애물이면 라이다로 멈추고 Nav2 로 피함):
+        # 몸 폭 (+ corridor_margin_m) 앞쪽 통로에 front_stop_m 안의 라이다 점 3 개 이상이면 전진 0 (회전 · 후진은 됨).
+        # 거리 추정 (라이다 묶음 · 발 · 예측 · 발 픽셀) 이 틀려도 사람 다리나 벽 앞에서 선다. 0 = 끔
+        self.front_stop = p('front_stop_m', 0.5)
+        self.front_hit = False
         self.lidar_margin = math.radians(p('lidar_span_margin_deg', 2.0))
         self.lidar_max = p('lidar_max_m', 6.0)
         self.tg_msg, self.tg_new, self.tg_t = None, False, -1e9
@@ -168,6 +173,21 @@ class PersonFollowCam(PersonFollow):
         tol = self.dist_gate if tol is None else tol
         best = min(cl, key=lambda c: abs(c[0] - expect))
         return best[0] if abs(best[0] - expect) < tol else None
+
+    def _front_blocked(self):
+        """LiDAR points straight ahead within front_stop_m (body width + corridor margin): no forward drive."""
+        if self.front_stop <= 0 or not len(self.scan_b):
+            return False
+        x, y = self.scan_b[:, 0], self.scan_b[:, 1]
+        return int(((x > 0.05) & (x < self.front_stop) & (np.abs(y) < 0.164 + self.margin)).sum()) >= 3
+
+    def _front_stop(self, t):
+        """Clamp a direct command (not Nav2) in place: forward -> 0 when the LiDAR sees something right ahead."""
+        self.front_hit = t.linear.x > 0.0 and self._front_blocked()
+        if self.front_hit:
+            t.linear.x = 0.0
+            self.sm_v = min(self.sm_v, 0.0)
+        return t
 
     def _horizon_row(self, u):
         """Image row of the horizon (depression 0 with body pitch + cam_tilt) at column u; may lie outside the image."""
@@ -326,7 +346,7 @@ class PersonFollowCam(PersonFollow):
         if state == 'EXPLORE':
             if self._explore(pose, tgt, now, t):
                 return                                       # Nav2 drives (cmd_vel/auto from its controller)
-            self.pub.publish(self._smooth(t, now))
+            self.pub.publish(self._front_stop(self._smooth(t, now)))
             return
         pb = None
         if state in ('FOLLOW', 'OCCLUDED'):
@@ -375,7 +395,7 @@ class PersonFollowCam(PersonFollow):
         t = self._smooth(t, now)                           # accel / decel limits (PR #8) ...
         if cap is not None and t.linear.x > cap:           # ... never above the auto-step speed (SLOW 0.3)
             t.linear.x = self.sm_v = float(cap)
-        self.pub.publish(t)
+        self.pub.publish(self._front_stop(t))
         self._status(state, pb)
 
     def _explore(self, pose, tgt, now, t):
@@ -466,6 +486,8 @@ class PersonFollowCam(PersonFollow):
             s += f' target {math.hypot(*pb):.2f} m @ {math.degrees(math.atan2(pb[1], pb[0])):+.0f} deg'
             if self.target is not None:
                 s += f" [{self.target.get('src', 'camera')}]"
+        if getattr(self, 'front_hit', False):
+            s += ' [STOP lidar]'
         if getattr(self, 'feet_dv', None) is not None and time.monotonic() - self.feet_t < 0.5:
             s += f' [feet {self.feet_dv:.0f}/{self.feet_px:.0f}px' + (' ON' if self.feet_on else '') + ']'
         if getattr(self, 'auto_on', False):
