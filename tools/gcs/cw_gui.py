@@ -207,6 +207,7 @@ MARKERS = ['점프 평지', '점프 턱 5.6 cm']    # 시험 표시 버튼 (gcs/
 TRACKER_START = ('reid_margin', 'reid_sim_min', 'reid_sim_single', 'reacq_gate_deg', 'reacq_gate_rate_deg_s',
                  'track_keep_frames', 'track_new')     # person_tracker 가 시작 때만 읽음 -> 추종 스택 켤 때 camera_cal.yaml 에
 FOLLOW_START = ('k_yaw',)                              # person_follow 가 시작 때만 읽음 (게인) -> 같은 방식
+ALWAYS = {PF: {'use_nav', 'camera_only', 'auto_step', 'explore', 'feet_follow'}}   # 노드가 균형 중에도 받는 켜기/끄기 (_ALWAYS)
 MIRROR = {LCM: [GCM]}                       # 로컬 코스트맵 값을 글로벌에도
 RESTART = {'/pad_teleop': 'pad', '/gesture': 'gesture', '/slam_toolbox': 'slam'}   # 노트북에서 띄우는 노드
 ASK_LIVE = ['/balance', '/pad_teleop', '/gesture', '/person_tracker', '/person_detector', '/leg_detector', PF]   # live_params 물어볼 노드
@@ -853,6 +854,10 @@ class Gui(QtWidgets.QMainWindow):
                 self._btn('켜기', lambda: self.ros.set_params(PF, {'auto_step': True}),
                           '추종 중 카메라로 턱을 보면: 1.5 m 앞 0.3 m/s 감속 → 0.5 m 앞 턱 감지 모드 → 점프 → 1.3 m 뒤 해제. 균형 중에도 켜고 끔'),
                 self._btn('끄기', lambda: self.ros.set_params(PF, {'auto_step': False}))]),
+            ('feet', '발 픽셀 추종 (거리 대신 발이 수평선 아래 px)', [
+                self._btn('켜기', lambda: self.ros.set_params(PF, {'feet_follow': True}),
+                          '추종 전진 속도를 발 위치 (수평선 아래 feet_px) 로. 목표 px · 속도는 파라미터 탭. 균형 중에도 켜고 끔'),
+                self._btn('끄기', lambda: self.ros.set_params(PF, {'feet_follow': False}), '예전처럼 거리 (라이다·발·예측) 로')]),
             ('jumpset', '점프 세트 (턱 재질)', [self._jumpset_btn(k, lab) for k, lab in JUMP_SETS]),
             ('step', '턱 감지 모드 (평지 전용, 패드 십자키 ↑/↓)', [
                 self._btn('켜기', lambda: self.ros.set_bool('/balance/step_mode', True, '턱 감지 모드 켜기'),
@@ -1252,7 +1257,7 @@ class Gui(QtWidgets.QMainWindow):
         if not any('balance' in n for n in names):
             self.l_ros.set('off')
         if stack:
-            self.ros.get_params(PF, ['use_nav', 'camera_only', 'auto_step', 'explore'])
+            self.ros.get_params(PF, ['use_nav', 'camera_only', 'auto_step', 'explore', 'feet_follow'])
         else:
             for k in ('follow', 'hold', 'nav', 'camonly', 'autostep', 'explore'):
                 self.lamp[k].set('off')
@@ -1301,6 +1306,11 @@ class Gui(QtWidgets.QMainWindow):
             self.note['autostep'].setText('추종 노드에 없음 (새 버전 설치 전)' if a is None else
                                           ('켜짐' + (f' — {self.auto_txt}' if self.auto_txt else '')) if a else '꺼짐 (기본)')
             self.auto_on = bool(a)
+        if node == PF and 'feet_follow' in vals:
+            fo = vals['feet_follow']
+            self.lamp['feet'].set('off' if not fo else 'on')
+            self.note['feet'].setText('추종 노드에 없음 (새 버전 설치 전)' if fo is None else
+                                      '켜짐 — 상태줄 [feet 지금/목표px]' if fo else '꺼짐 — 거리로 추종')
         if node == PF and vals.get('camera_only') is not None:
             self.lamp['camonly'].set('on' if vals['camera_only'] else 'off')
             self.note['camonly'].setText('켜짐 — 라이다가 없어도 카메라로 거리 추정' if vals['camera_only'] else '꺼짐 — 다리 (라이다) 있어야 추종')
@@ -1337,6 +1347,8 @@ class Gui(QtWidgets.QMainWindow):
                 ('locked', f'{node} 가 안 보임')
         if not live:
             return 'locked', f'{node} 가 이 값을 실시간으로 안 받음 (시작할 때만 읽음) — live_params 로 열어 달라고 요청함'
+        if self.bal_mode != 'disarmed' and name in ALWAYS.get(node, ()):
+            return 'live', '켜기/끄기는 균형 중에도 바로 반영'
         if self.bal_mode != 'disarmed':
             return 'locked', f'실시간 = 해제 (disarmed) 하고 변경 — 지금 {self.bal_mode or "상태 모름"}. 패드 BACK 으로 앉혀서 해제한 뒤'
         return 'live', '바꾸면 바로 반영'
