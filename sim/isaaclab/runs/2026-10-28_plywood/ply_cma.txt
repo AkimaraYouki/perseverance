@@ -1,0 +1,8 @@
+== best: --retract_lean 8.3918 --extract_pitch 12.0 --t_tuck 0.1564 --air_kp 12.3411 --air_kd 0.9222 --air_pitch -3.9827 --land_pitch -1.2711 --land_kp 41.1829 --land_kd 0.6298 --h_land 0.2289 --spin_match_k 0.2808 --air_w_max 14.463 --retry_trig_k 0.2593
+새값 mu 0.5 2단 0.06: fell 87.4%  short 1.0%  success 11.6%  timeout 0.0% | 100 s | 넘어짐 중 앞으로 75% | LAND 시작 pitch -9.09 착지뒤 최소 v -0.0199 
+새값 mu 0.5 2단 0.08: fell 82.1%  short 0.6%  success 17.3%  timeout 0.0% | 103 s | 넘어짐 중 앞으로 77% | LAND 시작 pitch -9.09 착지뒤 최소 v 0.00891 
+새값 mu 0.7 2단 0.06: fell 48.1%  short 0.3%  success 51.6%  timeout 0.0% | 116 s | 넘어짐 중 앞으로 49% | LAND 시작 pitch -8.83 착지뒤 최소 v -0.0137 
+새값 mu 0.7 2단 0.08: fell 41.4%  short 0.2%  success 58.4%  timeout 0.0% | 117 s | 넘어짐 중 앞으로 67% | LAND 시작 pitch -9.48 착지뒤 최소 v -0.00343 
+새값 mu 1.0 2단 0.06: fell 16.5%  short 0.3%  success 62.2%  timeout 21.0% | 121 s | 넘어짐 중 앞으로 74% | LAND 시작 pitch -9.88 착지뒤 최소 v -0.0383 
+새값 mu 1.0 2단 0.08: fell 18.1%  short 0.2%  success 58.4%  timeout 23.2% | 121 s | 넘어짐 중 앞으로 77% | LAND 시작 pitch -9.72 착지뒤 최소 v -0.0492 
+DONE

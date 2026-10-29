@@ -1,0 +1,7 @@
+mu 1.0 2단 0.06: fell 22.5%  short 1.1%  success 76.5%  timeout 0.0% | 106 s | 넘어짐 중 앞으로 87% | LAND 시작 pitch -15.5 착지뒤 최소 v -0.403 
+mu 1.0 2단 0.08: fell 25.9%  short 0.6%  success 73.5%  timeout 0.0% | 101 s | 넘어짐 중 앞으로 87% | LAND 시작 pitch -16.1 착지뒤 최소 v -0.437 
+mu 0.7 2단 0.06: fell 65.9%  short 0.8%  success 33.3%  timeout 0.0% | 93 s | 넘어짐 중 앞으로 79% | LAND 시작 pitch -15.2 착지뒤 최소 v -0.599 
+mu 0.7 2단 0.08: fell 64.1%  short 0.7%  success 35.2%  timeout 0.0% | 89 s | 넘어짐 중 앞으로 82% | LAND 시작 pitch -15.3 착지뒤 최소 v -0.461 
+mu 0.5 2단 0.06: fell 99.7%  short 0.0%  success 0.3%  timeout 0.0% | 59 s | 넘어짐 중 앞으로 65% | LAND 시작 pitch -15.3 착지뒤 최소 v -0.563 
+mu 0.5 2단 0.08: fell 99.2%  short 0.2%  success 0.5%  timeout 0.0% | 60 s | 넘어짐 중 앞으로 66% | LAND 시작 pitch -15.3 착지뒤 최소 v -0.555 
+DONE

@@ -13,7 +13,7 @@
 """
 import numpy as np
 
-KINDS = ("stones", "gravel", "bumps", "waves", "oneside", "oneside_stones", "lane_stones", "mix", "hill")
+KINDS = ("wave_lr", "drop_short", "half_block", "drop_one", "stones", "gravel", "bumps", "waves", "oneside", "oneside_stones", "lane_stones", "mix", "hill")
 # mix = 험지 코스: 출발 앞부터 끝까지를 같은 길이로 나눠 차례로 (종류, 높이 배율). 구간 사이는 0.4 m 에 걸쳐 섞는다
 MIX = (("stones", 1.0), ("waves", 1.3), ("lane_stones", 1.0), ("gravel", 0.5))   # bumps (네모 턱) 뺌 — 사용자 2026-10-03
 
@@ -65,6 +65,31 @@ def make_heights(kind: str, nx: int, ny: int, hs: float, h: float, i0: int, seed
             zk = make_heights(kd, nx, ny, hs, h * sc, i0, seed + 101 * (k_ + 1))
             w = np.clip((xs - k_ * L) / 0.4 + 0.5, 0.0, 1.0) * np.clip(((k_ + 1) * L - xs) / 0.4 + 0.5, 0.0, 1.0)
             z = np.maximum(z, zk * w[:, None])
+    elif kind == "half_block":             # 2026-10-24 공중 낙하 한쪽 착지: 출발 자리 (i0 1 m 뒤) 앞뒤 1 m 왼쪽 차선만 높이 h 블록
+        xs = x[:, 0] - i0 * hs
+        z[(xs > -2.0) & (xs < 0.0), ny // 2:] = h
+        return z
+    elif kind == "wave_lr":                # 2026-10-25 대회 Wave: 폭 1 m 판이 좌우로 번갈아 h [deg] 기울어짐 (판 0.6 m, 사이는 비틀림으로 이어짐)
+        xs = x[:, 0] - i0 * hs                                       # 출발 1 m 앞부터 판 8 장 (4.8 m), 가운데 선 높이 0
+        yy = y[0, :] - ny * hs / 2.0
+        L = 0.6
+        tri = np.where((xs >= 0) & (xs <= 8 * L), 1.0 - 2.0 * np.abs(((xs / L + 0.5) % 2.0) - 1.0), 0.0)
+        tri = tri * np.clip(xs / L * 2.0, 0.0, 1.0) * np.clip((8 * L - xs) / L * 2.0, 0.0, 1.0)   # 처음·끝 반 장은 0 에서 시작·끝 (턱 0 cm)
+        z = np.tan(np.radians(h)) * np.clip(yy, -0.5, 0.5)[None, :] * tri[:, None]
+        return z                                                     # 가운데 선 = 바닥 높이 (전체를 올리면 로봇이 바닥 속에 스폰돼 박힘)
+    elif kind == "drop_short":             # drop_one 짧은 판 (롤 CMA 8 m 지형): 높이 h -> 0.8 m 뒤 왼쪽만 0 -> 2.3 m 뒤 오른쪽도 0
+        xs = x[:, 0] - i0 * hs
+        z[:] = h
+        z[xs > 0.8, ny // 2:] = 0.0
+        z[xs > 2.3, :] = 0.0
+        return z * np.clip(xs / 0.5 + 1.0, 0.0, 1.0)[:, None]       # 출발 1 m 앞 -0.5 m 부터 경사로
+    elif kind == "drop_one":               # 2026-10-24 한쪽 낙하: 높이 h 길 -> 2 m 뒤 왼쪽 차선만 0 (왼 바퀴 낙하) -> 2 m 더 가서 오른쪽도 0
+        xs = x[:, 0] - i0 * hs
+        z[:] = h
+        z[xs > 2.0, ny // 2:] = 0.0
+        z[xs > 4.0, :] = 0.0
+        ramp = np.clip(xs / 0.5, 0.0, 1.0)
+        return z * ramp[:, None]
     elif kind == "waves":
         z = 0.5 * h * (1.0 + np.sin(2 * np.pi * x / 1.2) * np.cos(2 * np.pi * y / 1.6))
     else:

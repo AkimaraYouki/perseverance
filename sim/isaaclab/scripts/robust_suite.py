@@ -37,10 +37,11 @@ def load_tune():
 
 TUNE = load_tune()
 SCEN = ("flat_stop", "turn", "ridges", "ramp", "jump", "hand10", "hand20", "stones8", "oneside8", "stones_turn", "fast_turn", "com_hold",
-        "stairs6", "stairs8")
+        "stairs6", "stairs8", "drop6", "drop8", "drop10", "airstep6", "airstep8", "airstep10", "rollmix", "wave12", "wave14")
 ap = argparse.ArgumentParser()
 ap.add_argument("--scenario", choices=SCEN, required=True)
 ap.add_argument("--n", type=int, default=8)
+ap.add_argument("--cands", default=None, help="롤 CMA (rollmix): 후보 TUNE 값 목록 json. 로봇 i = 후보 i % C, 지형 = MIX[(i // C) % K]")
 ap.add_argument("--seed", type=int, default=100, help="로봇 i 의 무작위 시드 = seed + i")
 ap.add_argument("--out", default=None)
 ap.add_argument("--trace", default=None, help="스텝 기록 npz (roll, gx, h, h_tgt — 실기 step-log 와 같은 분석용)")
@@ -75,6 +76,13 @@ import lqr_vmc  # noqa: E402
 import wbctrl  # noqa: E402
 
 P = types.SimpleNamespace(**{k: getattr(args, k) for k in TUNE})
+# 롤 CMA 지형 (종류, 높이): 공중 낙하 한쪽 착지 6/8/10, 한쪽 낙하 8/10, 한쪽 돌, 돌길 — 평소 주행이 나빠지지 않게 섞음
+ROLLMIX = (("hand", 0.0), ("half_block", 0.06), ("half_block", 0.08), ("half_block", 0.10), ("drop_short", 0.08), ("drop_short", 0.10),
+           ("oneside_stones", 0.08), ("stones", 0.08))
+CANDS = json.load(open(args.cands)) if args.cands else None
+if CANDS:                                                              # 로봇 i 에 후보 i % C 의 값
+    for k_ in CANDS[0]:
+        setattr(P, k_, np.array([float(CANDS[i % len(CANDS)][k_]) for i in range(args.n)]))
 N, SC = args.n, args.scenario
 OBST = os.path.expanduser("~/perseverance/sim/obstacles")
 spec = dict(
@@ -90,11 +98,24 @@ spec = dict(
     stones_turn=dict(sec=12.0, v=P.vmax_kmh / 3.6, gen=("stones", 0.08), wz_const=2.5),   # 자갈길 최고 속도 급회전 (패드에서 넘어진 상황)
     fast_turn=dict(sec=12.0, v=P.vmax_kmh / 3.6, turns=(2.0, 1.5, 1.5)),   # 평지 최고 속도: 2 s 직진 뒤 스틱 끝 회전 1.5 s / 직진 1.5 s 좌우 번갈아 (패드, 2026-09-28)
     com_hold=dict(sec=30.0, v=0.3, stop_at=12.0),
+    # 한쪽 바퀴 낙하 (2026-10-24, 기본 세트 밖): 높이 h 길에서 왼 바퀴만 떨어지고 (x 3 m) 2 m 뒤 오른 바퀴도 떨어짐
+    drop6=dict(sec=16.0, v=0.4, gen=("drop_one", 0.06)), drop8=dict(sec=16.0, v=0.4, gen=("drop_one", 0.08)),
+    drop10=dict(sec=16.0, v=0.4, gen=("drop_one", 0.10)),
+    # 공중에서 떨어뜨려 왼 바퀴만 높이 h 블록에 착지 (2026-10-24 사용자), 4 s 서 있다 0.3 m/s 출발 -> 1 m 뒤 블록 끝에서 왼 바퀴 낙하
+    airstep6=dict(sec=12.0, v=0.3, go_at=4.0, spawn_z=0.18, gen=("half_block", 0.06)),
+    airstep8=dict(sec=12.0, v=0.3, go_at=4.0, spawn_z=0.20, gen=("half_block", 0.08)),
+    airstep10=dict(sec=12.0, v=0.3, go_at=4.0, spawn_z=0.22, gen=("half_block", 0.10)),
+    # 대회 Wave (2026-10-25): 좌우 12 / 14° 번갈아 기운 판, 사람이 앞에 있는 추종 명령 (0–0.7 m/s 오르내림·가끔 멈춤·작은 방향 변화)
+    wave12=dict(sec=24.0, v=0.7, follow=True, stop_x=7.0, gen=("wave_lr", 12.0)),
+    wave14=dict(sec=24.0, v=0.7, follow=True, stop_x=7.0, gen=("wave_lr", 14.0)),
+    # 롤 CMA 한 판 (2026-10-24): 로봇마다 지형이 다름 (ROLLMIX), 공중 0.18 m 에서 떨어져 2.5 s 서 있다 0.4 m/s, 3.6 m 에서 멈춤
+    rollmix=dict(sec=16.0, v=0.4, go_at=2.5, spawn_z=0.18, stop_x=3.6, gen=("rollmix", 0.0), hand=(4.0, 6.0, 10.0)),   # 손은 "hand" 지형 로봇만
     # 대회 2 단 계단 (2026-10-12, 기본 세트 밖): ㅗ 모양 1 m | 1 m | 1 m, 한 단 6 cm (1일차) / 8 cm (2일차). 두 번 점프로 오르고 굴러 내려옴
     stairs6=dict(sec=14.0, v=P.v, boxes=[(1.0, 4.0, 0.06), (2.0, 3.0, 0.12)], edges=[1.0, 2.0], x_pass=4.6),
     stairs8=dict(sec=14.0, v=P.v, boxes=[(1.0, 4.0, 0.08), (2.0, 3.0, 0.16)], edges=[1.0, 2.0], x_pass=4.6),                   # 무게중심 적응 (2026-10-08, 기본 세트 밖): 0.3 m/s 12 s 뒤 18 s 서 있기
 )[SC]
-P.edge_stop = "x_pass" not in spec                                   # 계단: 윗단에서 멈추지 말고 끝까지 (점프 시험은 예전처럼 멈춤)
+P.edge_stop = "x_pass" not in spec   # 계단: 윗단에서 멈추지 말고 끝까지 (점프 시험은 예전처럼 멈춤)
+P.spawn_z = spec.get("spawn_z", P.spawn_z)                           # 공중 낙하 시나리오는 더 높이
 
 
 def turn_wz(t):
@@ -131,7 +152,12 @@ if "gen" in spec:                                                     # 로봇�
     def _gen_field(difficulty, c):
         nx, ny = int(c.size[0] / c.horizontal_scale), int(c.size[1] / c.horizontal_scale)
         _cnt[0] += 1
-        z = terrain_gen.make_heights(spec["gen"][0], nx, ny, c.horizontal_scale, spec["gen"][1],
+        kd_, hh_ = spec["gen"]
+        if kd_ == "rollmix":                                          # 열 = 로봇 번호 (num_cols = N, 커리큘럼 없음 -> 차례대로)
+            kd_, hh_ = ROLLMIX[((_cnt[0] - 1) // max(1, len(CANDS or [0]))) % len(ROLLMIX)]
+            if kd_ == "hand":                                         # 손으로 들기 = 평지
+                return np.zeros((nx, ny), np.int16)
+        z = terrain_gen.make_heights(kd_, nx, ny, c.horizontal_scale, hh_,
                                      int((c.size[0] / 2 + 1.0) / c.horizontal_scale), seed=args.seed + _cnt[0])
         return np.rint(z / c.vertical_scale).astype(np.int16)
 
@@ -141,7 +167,7 @@ if "gen" in spec:                                                     # 로봇�
 
     cfg.scene.terrain = TerrainImporterCfg(
         prim_path="/World/ground", terrain_type="generator", collision_group=-1, max_init_terrain_level=None,
-        terrain_generator=TerrainGeneratorCfg(size=(16.0, 6.0), num_rows=1, num_cols=N, horizontal_scale=0.02, vertical_scale=0.001,
+        terrain_generator=TerrainGeneratorCfg(size=(8.0, 2.0) if SC == "rollmix" else (16.0, 6.0), num_rows=1, num_cols=N, horizontal_scale=0.04 if SC == "rollmix" else 0.02, vertical_scale=0.001,
                                               slope_threshold=None, curriculum=False, use_cache=False, border_width=0.0,
                                               sub_terrains={"g": _GenCfg(proportion=1.0, border_width=0.0)}),
         physics_material=sim_utils.RigidBodyMaterialCfg(friction_combine_mode="multiply", restitution_combine_mode="multiply",
@@ -261,6 +287,8 @@ for i in range(N):
     dr[i]["wheel_fric_nm"] = [round(P.wheel_fric_nm * x, 3) for x in kf[i]]
 cad.set_wheel_model(robot, wheel_ids, torch.tensor(P.wheel_fric_nm * kf), torch.tensor(P.wheel_fric_dyn_nm * kd_),
                     P.wheel_visc, torch.tensor(P.wheel_deadband_nm * kf), P.wheel_armature, backlash_deg=getattr(P, 'wheel_backlash_deg', 0.0), gear_k=getattr(P, 'wheel_gear_k', 300.0), gear_c=getattr(P, 'wheel_gear_c', 0.05), dt=float(cfg.sim.dt), tau_gain=getattr(P, 'wheel_tau_gain', 1.0))
+if getattr(P, "hip_fric_nm", 0.0) > 0:   # 2026-10-24 고관절 마찰 (실기 정지 0.4–0.5 N·m: 작은 롤 보정에서 다리 ~200 ms 늦고 진폭 50–60 %)
+    robot.write_joint_friction_coefficient_to_sim(float(P.hip_fric_nm), float(min(P.hip_fric_dyn_nm, P.hip_fric_nm)), 0.0, joint_ids=leg_ids)
 CTRL = wbctrl.WBController(P, lqr, m_pend, n=N, seed=args.seed + 1000, edges=spec.get("edges", ()))   # 로봇 N 대 한 번에
 motor_est_a = np.asarray(motor_est)
 
@@ -273,9 +301,12 @@ def yaw_of(q):
 dt = env.step_dt
 steps = int(spec["sec"] / dt)
 fell_t = [None] * N
+osc_t = [None] * N; OSC = [[[], []] for _ in range(N)]; OSG = np.zeros((N, 2), int)   # 고관절 진동 보호 첫 발동 시각
 xmax = np.full(N, -9.0)
 TR = {}
-rec = [dict(pitch=[], roll=[], v=[], therr=[], x=[], tb=[]) for _ in range(N)]
+rec = [dict(pitch=[], roll=[], v=[], therr=[], x=[], tb=[], chat=[]) for _ in range(N)]
+FOLW = []; FRNG = np.random.default_rng(args.seed + 7)                 # 추종 명령 구간 (wave)  # noqa: E702
+LRF = np.zeros(N)                                                     # 좌우 하중 차 1 Hz 저역 (떨림 = 차 - 저역)
 grab = None
 t0 = time.time()
 with torch.inference_mode():
@@ -313,7 +344,7 @@ with torch.inference_mode():
         to = lambda x: x.cpu().numpy()  # noqa: E731
         h_, tau_, wj_, wabs_, thk_, lp_, tht_, vt_, sf_, psi_, af_ = map(to, (h, tau, wj, wabs, th_kin, l_p, th_true, v_true, sf, psi, a_fwd))
 
-        vx = 0.0 if ("stop_at" in spec and t >= spec["stop_at"]) else spec["v"]
+        vx = 0.0 if (("stop_at" in spec and t >= spec["stop_at"]) or ("go_at" in spec and t < spec["go_at"])) else spec["v"]
         if pol is not None:                                           # 정책 모드: 명령만 주고 제어는 학습 환경 액션 항이
             vxs = torch.tensor([0.0 if ("stop_x" in spec and wx[i] >= spec["stop_x"]) else vx for i in range(N)], device=dev)
             if "turns" in spec:
@@ -331,9 +362,14 @@ with torch.inference_mode():
                     rec[i]["roll"].append(math.degrees(math.asin(max(-1.0, min(1.0, float(g_b[i][1]))))))
                     rec[i]["v"].append(float(vt_[i])); xmax[i] = max(xmax[i], wx[i])
             act_t = pol(obs["policy"])
-        acts = np.zeros((N, 4)); kps = np.zeros((N, 2)); kds = np.zeros((N, 2)); ff = np.zeros(N)
+        acts = np.zeros((N, 4)); kps = np.zeros((N, 2)); kds = np.zeros((N, 2)); ff = np.zeros(N); ffr = np.zeros(N)
         if pol is None:
             vx_i = np.where(("stop_x" in spec) & (wx >= spec.get("stop_x", 1e9)), 0.0, vx)
+            if spec.get("follow"):                                  # 사람 추종 흉내: 2.5 s 마다 목표 속도 (20 % 멈춤, 나머지 0.3–0.7), 방향 ±0.05 rad/s
+                seg = int(t // 2.5)
+                while len(FOLW) <= seg:
+                    FOLW.append((np.where(FRNG.random(N) < 0.2, 0.0, FRNG.uniform(0.3, spec["v"], N)), FRNG.uniform(-0.05, 0.05, N)))
+                vx_i = np.where(wx >= spec.get("stop_x", 1e9), 0.0, np.where(t < 1.0, 0.0, FOLW[seg][0]))
             if "turns" in spec:
                 wz = np.full(N, turn_wz(t))
             elif "slalom" in spec:
@@ -342,11 +378,14 @@ with torch.inference_mode():
                 wz = np.full(N, float(spec["wz_const"]))
             else:
                 wz = np.clip(-P.heading_kp * psi_, -1.0, 1.0)
+            if spec.get("follow") and FOLW:
+                wz = np.clip(wz + FOLW[int(t // 2.5)][1], -1.0, 1.0)
             f = wbctrl.Frame(t=t, g_b=g_b, w_b=w_b, h=h_, tau_hip=tau_, w_wheel_joint=wj_, w_wheel_abs=wabs_, th_kin=thk_, l_pend=lp_,
                              wx=wx, wheel_z_min=wzmin, yaw=psi_, sf=sf_, truth_th=tht_, truth_v=vt_, motor_scale=motor_est_a, a_fwd=af_)
             a, kp, kd, ffF, info = CTRL.step(f, vx_i, wz, P.idle_h)
             alive = np.array([x is None for x in fell_t])                # 넘어진 로봇은 힘 빼기 (예전과 같음)
             acts[alive], ff[alive] = a[alive], ffF[alive]
+            ffr[alive] = np.asarray(info["ff_roll"])[alive]
             if args.trace:
                 TR.setdefault("t", []).append(t); TR.setdefault("roll", []).append(np.asarray(info["roll"]).copy())
                 TR.setdefault("gx", []).append(np.asarray(w_b)[:, 0].copy()); TR.setdefault("h", []).append(h_.copy())
@@ -355,8 +394,13 @@ with torch.inference_mode():
                     if k_ in info:
                         TR.setdefault(k_, []).append(np.asarray(info[k_], float).copy())
                 TR.setdefault("v_true", []).append(vt_.copy()); TR.setdefault("wx", []).append(np.asarray(wx, float).copy()); TR.setdefault("vx_cmd", []).append(np.full(N, float(vx)))
+                TR.setdefault("drop_d", []).append(np.asarray(getattr(CTRL, "drop_d", np.zeros(N)), float).copy()); TR.setdefault("tau_hip", []).append(tau_.copy())
                 TR.setdefault("th_true", []).append(tht_.copy()); TR.setdefault("wheel_cmd", []).append(a[:, 2:4] * P.wheel_tau_max)
             kps[alive] = kp[alive, None]; kds[alive] = kd[alive, None]
+            _lr = tau_[:, 0] - tau_[:, 1]                                 # 좌우 고관절 하중 차 떨림 (2026-10-24 롤 CMA: kp 2.9 에서 4 Hz 주고받음)
+            LRF[:] = LRF + (1.0 - math.exp(-2 * math.pi * 1.0 * 0.005)) * (_lr - LRF)
+            for i in np.flatnonzero(alive & (CTRL.phase == wbctrl.DRIVE) & (t > 1.0)):
+                rec[i]["chat"].append(float(_lr[i] - LRF[i]))
             for i in np.flatnonzero(alive):
                 rec[i]["pitch"].append(math.degrees(info["pitch"][i])); rec[i]["roll"].append(math.degrees(info["roll"][i]))
                 rec[i]["v"].append(float(vt_[i]))
@@ -368,7 +412,22 @@ with torch.inference_mode():
             cmd.set(torch.full((N,), float(vx), device=dev), torch.zeros(N, device=dev), torch.full((N,), P.idle_h, device=dev),
                     mode=torch.ones(N, device=dev))
             M = d.joint_pos[:, leg_ids]
-            ffj = hip_sign * torch.tensor(ff, device=dev, dtype=torch.float32)[:, None] * cad.dh_from_M(M).to(torch.float32)
+            ffl = np.stack([ff + ffr, ff - ffr], 1)                    # 롤 B 안: 좌우 다리 힘 차 (0 이면 예전과 같음)
+            ffj = hip_sign * torch.tensor(ffl, device=dev, dtype=torch.float32) * cad.dh_from_M(M).to(torch.float32)
+            # 실기 고관절 진동 보호 흉내 (balance_node: |w| > osc_vel_rad_s 4.0 인 채 부호가 0.3 s 안에 6 번 바뀌면 고장 -> 앉음). 점프 중 제외
+            wh = d.joint_vel[:, leg_ids].cpu().numpy(); jmp_ = CTRL.phase != wbctrl.DRIVE
+            for i_ in range(N):
+                for k_ in range(2):
+                    if jmp_[i_]:
+                        OSC[i_][k_].clear(); OSG[i_, k_] = 0; continue
+                    if abs(wh[i_, k_]) > 4.0:
+                        sg_ = 1 if wh[i_, k_] > 0 else -1
+                        if sg_ != OSG[i_, k_]:
+                            OSC[i_][k_].append(t); OSG[i_, k_] = sg_
+                    while OSC[i_][k_] and t - OSC[i_][k_][0] > 0.3:
+                        OSC[i_][k_].pop(0)
+                    if len(OSC[i_][k_]) >= 6 and osc_t[i_] is None:
+                        osc_t[i_] = round(t, 2)
             if getattr(P, "hip_host_p", False):                     # 실기 고관절 구조: P 는 200 Hz 호스트 (지연 피드백), D 만 드라이브
                 HIP.apply(robot, leg_ids, legs_act, torch.tensor(acts[:, 0:2], device=dev, dtype=torch.float32),
                           torch.full((N,), float(P.idle_h), device=dev), torch.tensor(kps[:, 0], device=dev, dtype=torch.float32),
@@ -390,6 +449,10 @@ with torch.inference_mode():
                 wbb = d.root_ang_vel_b
                 tb = torch.stack([20.0 * (math.radians(roll_deg) * s_ - phi) - 2.0 * wbb[:, 0], 20.0 * (0.0 - th_) - 2.0 * wbb[:, 1],
                                   -1.0 * wbb[:, 2]], 1)
+                if SC == "rollmix":                                     # 손은 "hand" 지형 로봇만
+                    hm_ = torch.tensor([ROLLMIX[(i_ // max(1, len(CANDS or [0]))) % len(ROLLMIX)][0] == "hand" for i_ in range(N)],
+                                       device=dev, dtype=torch.float32)[:, None]
+                    F, tb = F * hm_, tb * hm_
                 robot.set_external_force_and_torque(F[:, None], quat_apply(q, tb)[:, None], body_ids=[0], is_global=True)
             elif t >= tr and grab is not None:
                 robot.set_external_force_and_torque(torch.zeros(N, 1, 3, device=dev), torch.zeros(N, 1, 3, device=dev), body_ids=[0])
@@ -417,13 +480,24 @@ for i in range(N):
         ok = ok and wzmin_end[i] >= 0.07
     elif "x_pass" in spec:                                           # 계단: 넘어지지 않고 끝까지 (내려온 뒤)
         ok = ok and xmax[i] >= spec["x_pass"]
+    elif SC.startswith("wave"):
+        ok = ok and xmax[i] >= 5.9                                   # Wave 끝 (출발 1 m + 판 8 장 4.8 m) 지남
+    elif SC == "rollmix":
+        kd_, hh_ = ROLLMIX[(i // max(1, len(CANDS or [0]))) % len(ROLLMIX)]
+        ok = ok and xmax[i] >= 3.3                                   # 3.6 m 에서 멈추기 전까지 (낙하 두 번·블록 끝 지남)
+    elif SC.startswith("airstep"):
+        ok = ok and xmax[i] >= 1.6                                   # 블록 끝 (1 m) 지나 내려온 뒤까지
+    elif SC.startswith("drop"):
+        ok = ok and xmax[i] >= 5.6                                   # 두 번 떨어진 뒤까지
     elif SC in ("stones8", "oneside8"):
         ok = ok and xmax[i] >= 4.0                                   # 요철 3 m 넘게 들어감
     pr = np.abs(rec[i]["pitch"][200:]) if len(rec[i]["pitch"]) > 200 else np.abs(rec[i]["pitch"])
     rr = np.abs(rec[i]["roll"][200:]) if len(rec[i]["roll"]) > 200 else np.abs(rec[i]["roll"])
-    rows.append(dict(i=i, ok=bool(ok), fell_t=fell_t[i], xmax=round(float(xmax[i]), 2), dr=dr[i],
+    rows.append(dict(i=i, ok=bool(ok), fell_t=fell_t[i], osc_t=osc_t[i], xmax=round(float(xmax[i]), 2), dr=dr[i],
                      pitch95=round(float(np.percentile(pr, 95)), 1) if len(pr) else None,
                      roll95=round(float(np.percentile(rr, 95)), 1) if len(rr) else None,
+                     roll_max=round(float(np.max(rr)), 1) if len(rr) else None,
+                     chat=round(float(np.sqrt(np.mean(np.square(rec[i]["chat"])))), 3) if rec[i]["chat"] else None,
                      jumps=CTRL.jumps[i] if pol is None else [],
                      # 평형각 정렬 오차 [deg]: 마지막 3 s 평균 (보정 뒤 진자각 - 참값), 서 있는 동안 위치 표류 [m]: 마지막 10 s 의 x 범위
                      therr_end=round(float(np.mean(rec[i]["therr"][-600:])), 2) if len(rec[i]["therr"]) else None,
@@ -431,6 +505,7 @@ for i in range(N):
                      x_wander=round(float(np.ptp(rec[i]["x"][-2000:])), 3) if len(rec[i]["x"]) else None))
 npass = sum(r["ok"] for r in rows)
 wall = time.time() - t0
+print(f"[{SC}] 고관절 진동 보호 발동 {sum(r['osc_t'] is not None for r in rows)}/{N}", flush=True)
 print(f"\n[{SC}] 통과 {npass}/{N}   (시뮬 {spec['sec']:.0f} s, 실제 {wall:.0f} s)", flush=True)
 for r in rows:
     print(f"  #{r['i']} {'통과' if r['ok'] else '실패'}  넘어짐 {r['fell_t']}  x최대 {r['xmax']:.2f}  pitch95 {r['pitch95']}  roll95 {r['roll95']}  "

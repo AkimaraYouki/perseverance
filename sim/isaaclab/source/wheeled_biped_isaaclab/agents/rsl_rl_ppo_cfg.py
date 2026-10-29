@@ -85,3 +85,37 @@ class RoughPPORunnerCfg(BalancePPORunnerCfg):
         # **처음부터** 학습하므로 평지에서 검증된 0.006 으로 되돌린다. 이어서 학습 시험은 --from 과 함께
         # `agent.algorithm.entropy_coef=0.001` 을 준다.
         self.algorithm.entropy_coef = 0.006
+
+
+@configclass
+class ResidualPPORunnerCfg(BalancePPORunnerCfg):
+    """잔차 RL (LQR+VMC 위 보정). 보정 0 에서 시작해야 기본 제어기를 망치지 않는다 -> 초기 잡음 작게 (0.3).
+    학습률은 고정 5e-4 (adaptive 가 1e-2 ~ 1e-5 를 오가며 퇴행한 교훈, r4/r5)."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "wheeled_biped_residual"
+        self.num_steps_per_env = 48
+        self.max_iterations = 3000
+        self.save_interval = 100
+        self.policy.init_noise_std = 0.3
+        self.policy.actor_hidden_dims = [128, 128]
+        self.policy.critic_hidden_dims = [256, 256, 128]
+        self.algorithm.schedule = "fixed"
+        self.algorithm.learning_rate = 5.0e-4
+        self.algorithm.entropy_coef = 0.002
+
+
+@configclass
+class RecoveryPPORunnerCfg(BalancePPORunnerCfg):
+    """넘어짐 복구 (일어서기). 처음부터 학습 -> 탐색 잡음 1.0 (기본). 에피소드 5 s, 성공하면 끝."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "wheeled_biped_recovery"
+        self.num_steps_per_env = 48
+        self.max_iterations = 3000
+        self.save_interval = 100
+        self.policy.actor_hidden_dims = [256, 128, 64]
+        self.policy.critic_hidden_dims = [256, 256, 128]
+        self.algorithm.entropy_coef = 0.005

@@ -1,0 +1,1 @@
+--retract_lean 8.3918 --extract_pitch 12.0 --t_tuck 0.1564 --air_kp 12.3411 --air_kd 0.9222 --air_pitch -3.9827 --land_pitch -1.2711 --land_kp 41.1829 --land_kd 0.6298 --h_land 0.2289 --spin_match_k 0.2808 --air_w_max 14.463 --retry_trig_k 0.2593

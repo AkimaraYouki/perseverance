@@ -318,3 +318,9 @@ def jump_leg_ref(env: "ManagerBasedRLEnv", command_name: str, sigma: float = 0.0
     h = leg_state(env.scene["robot"])[0]
     r = torch.exp(-torch.mean(torch.square(h - href[:, None]), dim=1) / sigma**2)
     return r * (t < ts[-1]).float()
+
+
+def climb_progress(env: "ManagerBasedRLEnv", full: float = 0.16) -> torch.Tensor:
+    """턱 위에 올라선 높이 (0~1, full 에서 포화 — 2 단 x 8 cm). 점프 동작이 아니라 **결과**(올라섰는가)에 주는 보상."""
+    from .terrain import climbed_height
+    return (climbed_height(env).clamp(0.0, full) / full)

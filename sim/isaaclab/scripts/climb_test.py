@@ -116,7 +116,14 @@ TUNE = dict(
     roll_ki=8.0,         # 실기 2026-10-12. 10-08 은 3.
                          #   실기 0.5/3/0. 이상 = 15.
                          #   roll 수평 I [1/s]
-    roll_rate_lpf_hz=4.0,  # 실기 2026-10-12 (8 → 4 Hz). 
+    roll_rate_lpf_hz=4.0,  # 실기 2026-10-12 (8 → 4 Hz).
+    roll_ff_k=0.0,       # [N/m] 롤 B 안 (2026-10-24): 좌우 다리 힘 차 피드포워드 ±0.5 k · track (sin roll + td · roll rate). 0 = 끔
+    roll_ff_td=0.0,      # [s] 위 피드포워드의 미분 시간
+    drop_tau=0.0,        # [N·m] 다리 접지 반사 (2026-10-24): 한쪽 고관절 토크가 이 아래 (반대쪽은 짚음) drop_s 이어지면 그쪽 다리 뻗기. 0 = 끔
+    drop_s=0.02,         # [s] 무하중 판정 시간
+    drop_rate=1.5,       # [m/s] 반사 동안 좌우 다리 길이 차 바꾸는 속도
+    drop_tmax=0.15,      # [s] 무하중이 이보다 길면 낙하가 아니라 들림 -> 반사 끝
+    drop_roll_gate_deg=1.0,  # [deg] 반사는 기우는 쪽 바퀴만 (왼쪽 반사는 roll > -이 값, 오른쪽은 roll < 이 값) 
                          #   roll D 항에 넣는 roll 각속도 저역통과 [Hz]. 필터 없이 D 0.6 + 지연 5 ms 면 다리가 발진 (3 mm/스텝 떨림 -> 넘어짐)
     roll_kd=0.1,         # 실기 2026-10-12 (고관절 전류 10–100 Hz 0.05 → 0.24 A 는 지켜볼 것). 10-08 은 0.
                          #   실기 0. 이상 = 0.3.
@@ -146,8 +153,24 @@ TUNE = dict(
     heading_kp=2.0,      # 자동 시험 방향 유지: wz = -heading_kp x yaw [1/s] (정책이 yaw 로 흘러서 직선 주행이 안 된다). 0 = 끔. 패드는 사람이 조향
     v=0.4,               # 접근 속도 [m/s] (자동 시험용. 패드는 스틱). 바퀴 한계 18.85 rad/s x R 0.06 = 1.13 m/s, 웅크림·숙임 여유 두고 0.5~0.6
     jump_max_wz=1.0,     # 패드 점프는 회전 속도가 이보다 작을 때만 [rad/s] (돌면서 뛰면 공중에서 5.6 rad/s 로 돌며 착지 실패)
+    v_ki=0.0,            # 경사 보상 (실기 0.8, 2026-10-14): 명령 일정할 때 속도 오차 적분을 v_ref 에 더함. 0 = 끔
+    v_boost_max=0.4,     # 그 적분 한계 [m/s]
+    jump_x_reset=False,  # True = 점프 중 위치 오차 0 + 착지 끝에 속도 기준 새로 (착지 뒤 0.3 m 되돌아가 턱에서 내려오는 것 방지, 2026-10-23)
+    jump_max_v=0.6,      # [m/s] 이보다 빠르면 패드 점프 거부 (실기 balance.yaml 과 같게, 2026-10-23). 턱 감지 모드 점프는 제외
     jump_min_v=0.2,      # 패드 점프는 앞으로 이 속도 [m/s] 이상일 때만 (0.72 km/h). 제자리·후진 중 점프 막기
     jump_retry=False,    # 막힘 → 물러남 → 다시 달려 점프 (짧은 착지 재시도 = 카메라 없는 접촉 점프). 0 = 끔 (지금 실기). 2026-10-12
+    retry_approach_v=0.0,  # [m/s] 턱 감지 모드 접근 속도 (조종자가 앞으로만 밀면 이 속도). 0 = 스틱 그대로 (2026-10-20)
+    retry_v=0.0,
+    retry_vmax=0.0,      # [m/s] 턱 감지 모드 (접근·후진·재가속·점프 준비) 동안 속도 보호 상한 (넘치면 브레이크). 0 = 끔. 사용자: 0.2–0.3
+    retry_stall_frac=0.0,
+    retry_settle_s=0.0,
+    retry_settle_mode=0,         # 1 = 막힘 판정 대기를 접근 속도 도달 대신 앞 명령 시간으로 (턱 코앞 출발, 2026-10-24). 0 = 옛 판정
+    retry_land_hold_s=0.0,
+    retry_maxv_exempt=False,  # True = 턱 감지 모드 점프는 jump_max_v 검사 제외. False = 지금 실기 wb_core (재가속 넘침이면 거부)
+    retry_land_margin=0.0,  # [m] 턱 감지 모드: 마지막 착지 지점 + 이 값보다 뒤로는 후진 안 함 (턱에서 내려오기 방지). 0 = 끔
+    retry_back_min=0.15,  # [m] 그 제한으로 후진할 거리가 이보다 짧으면 막힘으로 보지 않음 (착지 직후 멈칫 무시)
+    retry_trig_k=0.0,    # [s] 점프 지점 = trigger + 이 값 × (실제 속도 − retry_v). 0 = 고정  # 점프는 실제 속도 ≥ 이 비율 × retry_v 일 때만 (0 = 속도 무관). 재가속 중 다시 막히면 후진부터  # [s] 턱 감지 모드: 점프 착지 (LAND 끝) 뒤 이만큼 멈춰 섰다가 다시 접근. 0 = 끔  # [s] 접근 속도로 이만큼 꾸준히 달린 뒤에만 막힘 판정 (retry_stall_frac > 0 일 때)  # 막힘 = 접근 속도에 닿은 뒤 v < 이 비율 x 접근 속도 (0 = 옛 판정 |v| < 0.05)
+    ex_w_max=0.0,        # [rad/s] 웅크림·신전 중 바퀴 속도 상한 방향 토크 끊기 (이륙 때 여유). 0 = 끔         # [m/s] 후진 뒤 다시 달리는 속도 (점프 접근 속도). 0 = 스틱 그대로
     retry_block_s=0.4,   # 앞 명령 (> 0.15 m/s) 인데 |v| < 0.05 m/s 가 이만큼 이어지면 막힘 [s]
     retry_back_m=0.5,    # 물러나는 거리 [m] (오도메트리). 다시 달려 접근 속도 0.4 m/s 에 닿을 거리 포함
     retry_back_v=0.3,    # 물러나는 속도 [m/s]
@@ -169,6 +192,8 @@ TUNE = dict(
     air_pitch=-5.0,      # 공중 pitch 목표 [deg]. 음수 = 뒤로 젖힘 -> 몸 아래 바퀴가 앞으로 나간다 (-10 -> -5, land_pitch 0, air_kd 5: 상자 8 cm 39/48 -> 45/48, 2026-09-27)
     land_pitch=0.0,      # 하강(다리 펴며 착지 준비) 중 pitch 목표 [deg]. -10 (air_pitch 와 같게) 이면 뒤로 기운 채 착지해 턱에서 굴러떨어짐
                          #   턱에서 굴러떨어짐 (2단 턱 녹화 3 번 중 2 번, 착지 pitch -24 / -39 deg, 2026-09-27)
+    touch_dh=0.0,        # [m/s] >0 이면 착지 판정 = 다리 평균 길이가 이 속도보다 빨리 줄어듦 (눌림). 0 = 고관절 토크 > contact_tau (2026-10-15 실기: 공중에서 걸림)
+    jump_cooldown_s=0.0, # [s] 점프 LAND 끝난 뒤 이 시간 동안 점프 막기 (실기 연속 점프 넘어짐). 0 = 끔
     spin_match_k=0.0,    # [N·m/(rad/s), 바퀴 하나] DESCEND 에서 바퀴 절대 각속도를 몸 속도/R 로 맞춤 (접지 미끄럼·충격 줄이기, 2026-10-13 바퀴 파손). 0 = 끔
     air_w_max=0.0,       # [rad/s] 공중 바퀴 관절 속도가 이걸 넘는 방향으론 토크 0 (포화 방지, 실기 -19 rad/s 포화). 0 = 끔
     air_kp=30.0,         # [N·m/rad, 바퀴 하나]
@@ -230,6 +255,8 @@ TUNE = dict(
     hip_host_p=False,    # 실기 2026-10-09 hip_mode mit_pos: kp·kd 가 드라이브 안 -> 물리 주기 PD (False). 10-08 mit (호스트 kp) = True.
                          #   실기 (2026-10-08 기본값): 고관절 MIT, kd 드라이브 / kp 호스트 200 Hz. 이상 = False.
                          #   고관절을 실기 구조로 (2026-10-08): P 항은 200 Hz 호스트가 지연된 피드백으로, D 만 드라이브. 끄면 IdealPD (P·D 물리 주기)
+    hip_fric_nm=0.0,     # [N·m] 고관절 정지 마찰 (실기 0.4–0.5, 2026-10-24 롤 시험). 0 = 없음 (예전)
+    hip_fric_dyn_nm=0.0, # [N·m] 고관절 운동 마찰
     hip_gain_eff=0.6,    # mit_pos 드라이브가 실제 내는 토크 / 의도 (kp·kd·자중 FF 모두) [로봇 추정 ~0.56–0.6, 2026-10-09 — 처프·Kt 측정으로 확정 전]. 1 = 이상
     hip_cmd_max_nm=8.1,  # 실기 balance_node 고관절 MIT: P 항 + 자중 FF 상한 = current_limit 10 A x Kt 0.81 (잠정) [N·m]. 0 = 없음
     wheel_cmd_max_nm=6.35,  # 실기 balance_node 바퀴 지령 상한 = current_limit 5 A x Kt 1.27 [N·m]. 0 = 없음 (wheel_tau_max 7 까지)
@@ -301,11 +328,23 @@ ap.add_argument("--no_reset", action="store_true", help="넘어져도 되돌리�
 ap.add_argument("--stop_x", type=float, default=None, help="바퀴가 이 x [m] 를 지나면 속도 0, 2 s 뒤 끝 (코스 끝)")
 ap.add_argument("--stop_at", type=float, default=None, help="자동 시험: 이 시각 [s] 에 속도 명령 0 (달리다 멈추기)")
 ap.add_argument("--record", default=None, metavar="DIR")
+ap.add_argument("--cam_eye", default="0.2,-1.4,0.35", help="녹화·창 카메라 위치 (로봇 기준 x,y,z m). 정측면 0,-1.5,0.3 / 대각선 1.0,-1.0,0.6")
+ap.add_argument("--cam_lookat", default="0,0,0.1", help="카메라가 보는 점 (로봇 기준 x,y,z m)")
+ap.add_argument("--cam_focal", type=float, default=0.0, help="카메라 초점거리 [mm] (기본 18 = 시야 60°). 120~ 이면 망원 = 원근 거의 없는 측면 (멀리 둘 것). 0 = 그대로")
+ap.add_argument("--rec_crop", type=int, default=1, help="이 배수로 크게 렌더한 뒤 가운데를 rec_res 로 잘라냄 (2 = 시야각 절반, 원근 줄인 측면)")
+ap.add_argument("--rec_res", default="1280,720", help="녹화 해상도 가로,세로 (유튜브 1920,1080)")
+ap.add_argument("--hip_cap_nm", type=float, default=0.0, help="실기식 고관절 상한: 명령 PD ≤ 이 값 -> 실제 ≤ 값 × hip_gain_eff (jump_rl --hip_robot_cap 과 같음). 0 = 액추에이터 한계만")
 ap.add_argument("--rec_label", default=None, help="녹화 화면 왼쪽 위 지형 이름 (없으면 장애물 설정으로)")
 ap.add_argument("--out", default=None)
+ap.add_argument("--auto_step", type=int, default=0, help="1 = 추종 중 카메라 턱 감지 -> 감속 -> 턱 감지 모드 -> 점프 -> 복귀 (gen2_tools auto_step + step_watch, 몸 카메라)")
+ap.add_argument("--obcam_hfov", type=float, default=110.0, help="--auto_step 몸 카메라 가로 화각 [deg] (pinhole, 640x480)")
+ap.add_argument("--plywood", type=int, default=0, help="1 = 턱 상자를 합판 색·재질로")
+ap.add_argument("--auto_done_travel", type=float, default=1.3, help="--auto_step: 마지막 착지 뒤 막힘 없이 이만큼 가면 턱 감지 모드 해제 [m]")
+ap.add_argument("--auto_arm_dist", type=float, default=0.9, help="--auto_step: 카메라 턱 거리가 이 안이면 턱 감지 모드 [m]")
+ap.add_argument("--auto_slow_v", type=float, default=0.3, help="--auto_step: 카메라가 턱을 본 뒤 감속 속도 [m/s]")
 AppLauncher.add_app_launcher_args(ap)
 args = ap.parse_args()
-if args.record:
+if args.record or args.auto_step:
     args.enable_cameras = True
 app = AppLauncher(args).app
 
@@ -363,7 +402,8 @@ def box(name, x0, x1, h):
         prim_path=f"/World/{name}",
         spawn=sim_utils.CuboidCfg(size=(x1 - x0, 3.0, h), collision_props=sim_utils.CollisionPropertiesCfg(),
                                   physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0),
-                                  visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.55, 0.45, 0.35))),
+                                  visual_material=(sim_utils.PreviewSurfaceCfg(diffuse_color=(0.80, 0.64, 0.44), roughness=0.75)   # 합판
+                                                   if args.plywood else sim_utils.PreviewSurfaceCfg(diffuse_color=(0.55, 0.45, 0.35)))),
         init_state=AssetBaseCfg.InitialStateCfg(pos=((x0 + x1) / 2, -0.08, h / 2)))
 
 
@@ -530,7 +570,8 @@ if not args.headless and not args.record:
     cfg.sim.render_interval = cfg.decimation * max(1, round(200.0 / args.render_hz))   # 200 Hz 마다 그리면 실시간의 0.17 배
 if True:                                                              # 옆에서 로봇을 따라가는 카메라 (창·녹화 공통)
     cfg.viewer.origin_type = "asset_root"; cfg.viewer.asset_name = "robot"; cfg.viewer.env_index = 0
-    cfg.viewer.eye = (0.2, -1.4, 0.35); cfg.viewer.lookat = (0.0, 0.0, 0.1); cfg.viewer.resolution = (1280, 720)
+    cfg.viewer.eye = tuple(float(x) for x in args.cam_eye.split(",")); cfg.viewer.lookat = tuple(float(x) for x in args.cam_lookat.split(","))
+    cfg.viewer.resolution = tuple(int(x) * max(1, args.rec_crop) for x in args.rec_res.split(","))
 def paint_robot(env, env_ids):
     """몸통·다리·바퀴에 색. 시뮬 시작 전(prestartup)에 링크 프림에 PreviewSurface 를 묶는다
     (시작 뒤에 묶으면 물리 뷰가 무효화돼 죽는다)."""
@@ -559,6 +600,12 @@ def paint_robot(env, env_ids):
 from isaaclab.managers import EventTermCfg as _EventTerm  # noqa: E402
 cfg.events.paint = _EventTerm(func=paint_robot, mode="prestartup")
 cfg.scene.replicate_physics = False                                   # prestartup 이벤트 조건 (로봇 1 대라 비용 없음)
+if args.auto_step:
+    from isaaclab.sensors import CameraCfg
+    _ap = 2.0 * 10.0 * math.tan(math.radians(args.obcam_hfov) / 2)          # focal 10 mm -> 가로 화각 obcam_hfov
+    cfg.scene.obcam = CameraCfg(prim_path="/World/obcam", update_period=0.0, height=480, width=640, data_types=["rgb"],
+                                spawn=sim_utils.PinholeCameraCfg(focal_length=10.0, horizontal_aperture=_ap,
+                                                                 vertical_aperture=_ap * 480 / 640, clipping_range=(0.02, 30.0)))
 env = gym.make(TASK, cfg=cfg, render_mode="rgb_array" if args.record else None).unwrapped
 dev = env.device
 robot = env.scene["robot"]
@@ -589,6 +636,17 @@ def load_policy(path):
 policy = load_policy(args.policy)
 leg_ids = robot.find_joints(cad.LEG_JOINTS, preserve_order=True)[0]
 wheel_bodies = robot.find_bodies(["l_wheel", "r_wheel"], preserve_order=True)[0]
+AUTO = None
+if args.auto_step:   # 2026-10-27 카메라 턱 감지 자동 점프 (실기 person_follow_cam 과 같은 모듈)
+    sys.path.insert(0, os.path.expanduser("~/perseverance/src/gen2_tools/gen2_tools"))
+    import auto_step as _auto_step  # noqa: E402
+    import step_watch as _step_watch  # noqa: E402
+    import tracking_core as _tcore  # noqa: E402
+    _fx_ob = 320.0 / math.tan(math.radians(args.obcam_hfov) / 2)
+    AUTO = dict(cam=env.scene["obcam"], crank=robot.find_bodies(["l_crank", "r_crank"], preserve_order=True)[0],
+                watch=_step_watch.StepWatch(_tcore.BearingModel("pinhole", 640, 480, fx=_fx_ob, cx=320.0)),
+                fsm=_auto_step.AutoStep(done_travel=args.auto_done_travel, slow_v=args.auto_slow_v, arm_dist=args.auto_arm_dist, step_v=max(0.3, args.auto_slow_v)),
+                d=None, st="FOLLOW", frame=None, log=[])
 hip_sign = torch.tensor([cad.M_SIGN["L"], cad.M_SIGN["R"]], device=dev)
 wheel_ids = robot.find_joints(cad.WHEEL_JOINTS, preserve_order=True)[0]
 wheel_term = env.action_manager.get_term("wheels")
@@ -700,16 +758,30 @@ rng = cmd.cfg.ranges
 
 # ── 창 모드 HUD + 카메라 (play_joy.py 에서 옮김. omni.ui 는 한글이 깨져서 영어) ─────────────────────
 BTN_LB, BTN_RB, BTN_START, DPAD_X, DPAD_Y = 4, 5, 7, 6, 7
-_c = (0.2, -1.4, 0.35)
+_c = tuple(float(x) for x in args.cam_eye.split(","))
 cam0 = (math.atan2(_c[1], _c[0]), math.hypot(_c[0], _c[1]), _c[2])
 cam = list(cam0)                                                      # [방위각 rad, 수평거리 m, 높이 m]
 vcc = getattr(env, "viewport_camera_controller", None)
+_FOCAL_PRIMS = []
+if args.cam_focal > 0:   # 망원 정측면 (아이소메트릭처럼 원근 없음): 렌더할 때마다 다시 건다 (뷰포트 쪽이 되돌림)
+    import omni.usd
+    from pxr import UsdGeom
+    _st = omni.usd.get_context().get_stage()
+    for _cp in _st.Traverse():
+        if _cp.IsA(UsdGeom.Camera):
+            _FOCAL_PRIMS.append(_cp)
+    print(f"[카메라] 초점거리 {args.cam_focal} mm 걸 카메라: {[str(c.GetPath()) for c in _FOCAL_PRIMS]}", flush=True)
+
+
+def set_focal():
+    for _cp in _FOCAL_PRIMS:
+        _cp.GetAttribute("focalLength").Set(float(args.cam_focal))
 
 
 def apply_cam():
     if vcc is not None:
         yaw, dd, hz = cam
-        vcc.update_view_location(eye=(dd * math.cos(yaw), dd * math.sin(yaw), hz), lookat=(0.0, 0.0, 0.12))
+        vcc.update_view_location(eye=(dd * math.cos(yaw), dd * math.sin(yaw), hz), lookat=tuple(float(x) for x in args.cam_lookat.split(",")))
 
 
 HIST = 200
@@ -855,7 +927,7 @@ if args.record:
     rec = imageio.get_writer(rec_path, fps=50, codec="libx264", quality=8, macro_block_size=8)
     rec_every = max(1, round(1.0 / (dt * 50)))                   # 50 fps = 시뮬 1 s 가 영상 1 s (실제 시간 그대로)
     from PIL import Image, ImageDraw, ImageFont
-    _font = ImageFont.truetype("/usr/share/fonts/truetype/nanum/NanumBarunGothicBold.ttf", 26)
+    _font = ImageFont.truetype("/usr/share/fonts/truetype/nanum/NanumBarunGothicBold.ttf", int(26 * int(args.rec_res.split(",")[1]) / 720))
     _label = args.rec_label or (f"{args.gen_type} {args.gen_h*100:.0f} cm" if args.obstacle == "gen" else args.obstacle)
 
     def rec_stamp(fr, t, v):
@@ -863,9 +935,10 @@ if args.record:
         im = Image.fromarray(np.ascontiguousarray(fr)); dr = ImageDraw.Draw(im)
         lines = [f"{t:6.2f} s   실제 시간 1배속", f"{abs(v)*3.6:4.1f} km/h   {_label}"]
         w_ = max(dr.textlength(s_, font=_font) for s_ in lines)            # 글자 길이에 맞춘 검은 상자
-        dr.rectangle([8, 8, int(28 + w_), 84], fill=(0, 0, 0))
+        sc_ = int(args.rec_res.split(",")[1]) / 720
+        dr.rectangle([8, 8, int(28 * sc_ + w_), int(84 * sc_)], fill=(0, 0, 0))
         for i_, s_ in enumerate(lines):
-            dr.text((18, 14 + 34 * i_), s_, font=_font, fill=(255, 255, 255))
+            dr.text((int(18 * sc_), int((14 + 34 * i_) * sc_)), s_, font=_font, fill=(255, 255, 255))
         return np.asarray(im)
 
 
@@ -1026,7 +1099,7 @@ def episode():
                   f"K(l=0.25) {_np.round(lqr.gain(0.25), 2).tolist()}  — 제어기 wbctrl (로봇용), 모터 추정 x{MOTOR['est']:.2f}", flush=True)
         if CTRL is None:                                        # 센서 치우침은 실행 동안 그대로 (제어기 시드), 모델 오차와 같은 시드
             CTRL = wbctrl.WBController(args, lqr, _m_pend, n=1, seed=int(args.dr_seed) if args.dr_seed else int(_rng.integers(1 << 30)),
-                                       edges=edges if (pad is None and args.mode == "jump") else ())
+                                       edges=edges if (pad is None and args.mode == "jump" and not args.jump_retry and not args.auto_step) else ())   # 턱 감지 모드는 모서리 위치를 모른다
         CTRL.lqr = lqr
         CTRL.reset()
         CJ["n"] = 0
@@ -1054,6 +1127,15 @@ def episode():
         if args.stop_x is not None and wx >= args.stop_x:            # 코스 끝: 멈추고 2 s 뒤 끝
             vx = 0.0
             t_end = t + 2.0 if t_end is None else t_end
+        if AUTO is not None:                                       # 추종 속도 -> 카메라 턱 감지 상태기계 (감속·턱 감지 모드)
+            if t < 1.5:
+                vx = 0.0                                           # 공중 스폰 착지 뒤 서 있다가 출발 (사람이 걷기 시작)
+            _st0 = AUTO["st"]
+            vx, args.jump_retry, AUTO["st"] = AUTO["fsm"].update(t, vx, AUTO["d"], true_v(),
+                                                                 CTRL is not None and int(CTRL.phase[0]) != wbctrl.DRIVE, odom_x=wx)
+            if AUTO["st"] != _st0:
+                AUTO["log"].append((round(t, 2), AUTO["st"], round(wx, 2), None if AUTO["d"] is None else round(AUTO["d"], 2)))
+                print(f"[자동 턱] {t:6.2f} s  {_st0} -> {AUTO['st']}  x {wx:.2f}  카메라 턱 {AUTO['d']}", flush=True)
         if args.turns is not None:                                 # 좌우 급회전 번갈아 (조향 시연)
             t0_, on_, off_ = args.turns
             kk_, rr_ = divmod(max(0.0, t - t0_), on_ + off_)
@@ -1183,13 +1265,16 @@ def episode():
             phase = wbctrl.PHASES[CTRL.phase[0]]
             act = torch.tensor(a_, device=dev, dtype=torch.float32)[None]
             M = robot.data.joint_pos[:, leg_ids]
-            ffj = hip_sign * float(ffF) * cad.dh_from_M(M).to(torch.float32)
+            _fr = float(info.get("ff_roll", 0.0))
+            ffj = hip_sign * torch.tensor([[float(ffF) + _fr, float(ffF) - _fr]], dtype=torch.float32, device=M.device) * cad.dh_from_M(M).to(torch.float32)
             if args.hip_host_p:                                   # 실기 고관절 구조: P 는 200 Hz 호스트 (지연 피드백), D 만 드라이브
                 HIP.apply(robot, leg_ids, legs_act, act[:, 0:2], torch.tensor([h_ref], device=dev), torch.tensor([float(kp_)], device=dev),
                           torch.tensor([float(kd_)], device=dev), ffj, round(args.delay_ms / 5.0), tau_max=args.hip_cmd_max_nm)
             else:
                 ge = args.hip_gain_eff                            # mit_pos: PD 가 드라이브 안 (물리 주기), 드라이브 실효 배율
                 legs_act.stiffness[:] = float(kp_) * ge; legs_act.damping[:] = float(kd_) * ge
+                if args.hip_cap_nm > 0:                           # 실기 balance_node hip_pd_tau_max: 명령 ≤ cap -> 실제 ≤ cap × 실효
+                    legs_act.effort_limit[:] = args.hip_cap_nm * ge
                 robot.set_joint_effort_target(ffj * ge, joint_ids=leg_ids)
             EST.update(th=info["th"], thd=info["thd"], v=info["v"])
             stats.update(brake=bool(info.get("brake", False)), bump=bool(info.get("bump", False)), lift=bool(CTRL.lift_on[0]),
@@ -1283,8 +1368,24 @@ def episode():
             ACTQ.append(act.clone())
             dly = int(round(args.delay_ms / 5.0)) + (1 if _rng.random() < args.jitter_ms / 5.0 else 0)
             act = ACTQ[max(0, len(ACTQ) - 1 - dly)]
+        if AUTO is not None:                                       # 몸 카메라 자세 = 고관절 축 가운데 + CAD 마운트 (앞 111.8, 위 20.8 mm)
+            _q = robot.data.root_quat_w[0:1]
+            _hip = robot.data.body_pos_w[0, AUTO["crank"]].mean(0, keepdim=True)
+            _cp = _hip + quat_apply(_q, torch.tensor([[0.1118, 0.0, 0.0208]], device=dev))
+            AUTO["cam"].set_world_poses(positions=_cp, orientations=_q, convention="world")
         _t1 = time.perf_counter()
         obs, _, term, _, _ = env.step(act)
+        if AUTO is not None and k % max(1, round(1.0 / (dt * 30))) == 0:   # 30 Hz
+            _rgb = AUTO["cam"].data.output["rgb"][0, ..., :3].cpu().numpy()
+            _bgr = np.ascontiguousarray(_rgb[..., ::-1])
+            _fwd = quat_apply(_q, torch.tensor([[1.0, 0.0, 0.0]], device=dev))[0]
+            _dep = -math.asin(max(-1.0, min(1.0, float(_fwd[2]))))            # 카메라 축이 아래로 숙인 각 (+ 아래)
+            _floor = float(robot.data.body_pos_w[0, wheel_bodies, 2].min()) - 0.07
+            AUTO["d"] = AUTO["watch"].update(_bgr, float(_cp[0, 2]) - _floor, _dep, wx)
+            if os.environ.get("AUTO_DBG") and k % 60 == 0:
+                print(f"[dbg] t {t:.2f} x {wx:.2f} cam_z {float(_cp[0, 2]):.3f} floor {_floor:.3f} dep {math.degrees(_dep):+.2f} "
+                      f"cands {[(round(c[0], 2), round(c[2][1]), round(c[2][3])) for c in AUTO['watch'].last][:4]} d {AUTO['d']}", flush=True)
+            AUTO["frame"] = AUTO["watch"].draw(_bgr, AUTO["d"])
         _t2 = time.perf_counter()
         PROF["ctrl"] += _t1 - _t0; PROF["step"] += _t2 - _t1; PROF["n"] += 1
         if bool(term[0]) and not fell:
@@ -1352,7 +1453,18 @@ def episode():
                         tw_l=float(d.applied_torque[0, wheel_ids[0]] * wsign[0]), vw_l=float(d.joint_vel[0, wheel_ids[0]] * wsign[0]),
                         th_est=EST["th"], thd_est=EST["thd"], v_est=EST["v"], v_true=true_v(), th_true=true_th()))
         if rec is not None and k % rec_every == 0:
-            rec.append_data(rec_stamp(np.asarray(env.render())[..., :3], t, true_v()))
+            set_focal()
+            _fr = np.asarray(env.render())[..., :3]
+            if args.rec_crop > 1:   # 가운데 잘라내기 = 망원
+                _w, _h = (int(x) for x in args.rec_res.split(","))
+                _y0, _x0 = (_fr.shape[0] - _h) // 2, (_fr.shape[1] - _w) // 2
+                _fr = _fr[_y0:_y0 + _h, _x0:_x0 + _w]
+            if AUTO is not None and AUTO["frame"] is not None:       # 오른쪽 위: 몸 카메라 + 턱 감지 + 상태
+                import cv2 as _cv2
+                _ins = _cv2.resize(AUTO["frame"][..., ::-1], (_fr.shape[1] // 3, _fr.shape[0] // 3))
+                _cv2.putText(_ins, AUTO["st"], (8, _ins.shape[0] - 10), _cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+                _fr = np.ascontiguousarray(_fr); _fr[8:8 + _ins.shape[0], -8 - _ins.shape[1]:-8] = _ins  # noqa: E702
+            rec.append_data(rec_stamp(_fr, t, true_v()))
     return judge(log, lqr_jumps() if CTRL is not None else jumps, fell, fell_t)
 
 

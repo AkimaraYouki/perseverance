@@ -179,9 +179,9 @@ class WheelLegCommand(CommandTerm):
         (2) 어디서나 무작위 (평지·험지 점프). 재생 중(pinned)에는 자동 발동을 끄고 trigger_jump() 로만."""
         dt = self._env.step_dt
         self.jump_timer += dt
-        if not self.pinned:
+        if not self.pinned or self.cfg.jump_auto_when_pinned:
             ready = self.jump_timer > self.cfg.jump_cooldown_s
-            rnd = torch.rand(self.num_envs, device=self.device) < self.cfg.jump_rand_rate * dt
+            rnd = (torch.rand(self.num_envs, device=self.device) < self.cfg.jump_rand_rate * dt) & (not self.pinned)
             auto = torch.zeros_like(ready)
             sens = self._env.scene.sensors.get("critic_scanner") if hasattr(self._env.scene, "sensors") else None
             if sens is not None:
@@ -229,6 +229,7 @@ class WheelLegCommandCfg(CommandTermCfg):
     jump_rand_rate: float = 0.05           # 초당 무작위 점프 확률 (평지·험지)
     jump_trigger_dist: tuple = (0.05, 0.40)  # 장애물 앞 자동 발동 거리 (무작위 = 이른/늦은 점프 섞기)
     jump_step_thresh: float = 0.03         # 앞이 발밑보다 이만큼 높으면 장애물
+    jump_auto_when_pinned: bool = False    # 재생(pinned)에서도 장애물 앞 자동 점프 (데모·녹화용)
 
     @configclass
     class Ranges:

@@ -616,3 +616,292 @@ class WheeledBipedCADJumpSkillEnvCfg_PLAY(WheeledBipedCADJumpSkillEnvCfg):
         self.observations.policy.enable_corruption = False
         self.curriculum.terrain_levels = None
         self.scene.terrain.max_init_terrain_level = None
+
+
+@configclass
+class JumpSkillRewardsCfgV2(JumpSkillRewardsCfg):
+    climb = RewTerm(func=custom_rewards.climb_progress, weight=3.0, params={"full": 0.16})
+
+
+@configclass
+class JumpSkillCurriculumCfg:
+    terrain_levels = CurrTerm(func=rough.terrain_levels_climb)
+
+
+@configclass
+class WheeledBipedCADJumpSkillEnvCfgV2(WheeledBipedCADJumpSkillEnvCfg):
+    """j2: j1 + 올라선 보상 + 올라서야 단계 상승하는 커리큘럼 (j1 은 뛰지 않고 버텨도 단계가 올랐다)."""
+    rewards: JumpSkillRewardsCfgV2 = JumpSkillRewardsCfgV2()
+    curriculum: JumpSkillCurriculumCfg = JumpSkillCurriculumCfg()
+
+
+@configclass
+class WheeledBipedCADJumpSkillEnvCfgV3(WheeledBipedCADJumpSkillEnvCfgV2):
+    """j3: 연속 점프. j1/j2 는 쿨다운 5 s (에피소드당 한 번) 라 2 단 계단의 두 번째 점프를 연습한 적이 없다.
+    2 단 폭 35 cm 를 0.5 m/s 로 가면 턱 사이 0.7 s -> 쿨다운 0.6 s, 에피소드 4 s."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.episode_length_s = 4.0
+        self.commands.base_velocity.jump_cooldown_s = 0.6
+
+
+# ---------------------------------------------------------------------------
+# 잔차 RL (2026-09-26): LQR+VMC 기본 제어기 (residual.py) 위에 정책이 작은 보정만. 대회 지형 + 실기 조건 무작위.
+# 목표: pv robust (실기 조건 시험 세트) 95 % 이상.
+# ---------------------------------------------------------------------------
+from isaaclab.terrains.trimesh.mesh_terrains_cfg import MeshPlaneTerrainCfg  # noqa: E402
+
+from . import residual as resid  # noqa: E402
+
+RESIDUAL_TERRAINS_CFG = rough.ROUGH_TERRAINS_CFG.replace(
+    horizontal_scale=0.1,       # 0.05 면 지형 메시가 4 배 -> Kit 파생 데이터 캐시가 실행마다 수 GB 씩 불어 디스크가 참 (2026-09-26)
+    sub_terrains={
+        "flat": MeshPlaneTerrainCfg(proportion=0.10),
+        "gravel": rough.ROUGH_TERRAINS_CFG.sub_terrains["gravel"].replace(proportion=0.08),
+        "rugged": rough.ROUGH_TERRAINS_CFG.sub_terrains["rugged"].replace(proportion=0.06),
+        "bumps": rough.ROUGH_TERRAINS_CFG.sub_terrains["bumps"].replace(proportion=0.08),
+        # 대회 CAD: 8 cm, 밑변·주기 0.5 m, 좌우 반씩 엇갈림 (차선 0.5 m) + 좁은 차선판
+        "ridges_cad": rough.StaggeredRidgesTerrainCfg(proportion=0.22, height_range=(0.02, 0.09), base=0.5, period=0.5,
+                                                      lane_w=0.5, **rough._HF),
+        "ridges_narrow": rough.StaggeredRidgesTerrainCfg(proportion=0.12, height_range=(0.02, 0.09), base=0.35,
+                                                         period=0.6, lane_w=0.2, **rough._HF),
+        # 경기장 경사로 30 cm / 1.2 m (14 deg = 0.25) 오르내리기
+        "slope_up": rough.ROUGH_TERRAINS_CFG.sub_terrains["slope_up"].replace(proportion=0.11, slope_range=(0.0, 0.30)),
+        "slope_down": rough.ROUGH_TERRAINS_CFG.sub_terrains["slope_down"].replace(proportion=0.11, slope_range=(0.0, 0.30)),
+        # 턱 내려가기 (가운데 꼭대기, 한 단 2~9 cm, 단 폭 1 m = 경기장 ㅗ)
+        "step_down": rough.MeshPyramidStairsTerrainCfg(proportion=0.12, step_height_range=(0.02, 0.09), step_width=1.0,
+                                                       platform_width=2.0, border_width=0.0),
+    },
+)
+
+
+@configclass
+class ResidualSceneCfg(RoughSceneCfg):
+    terrain = RoughSceneCfg().terrain.replace(terrain_generator=RESIDUAL_TERRAINS_CFG, max_init_terrain_level=3)
+
+
+@configclass
+class ResidualActionsCfg:
+    ctrl = resid.ResidualCtrlActionCfg()
+
+
+@configclass
+class ResidualObservationsCfg:
+    @configclass
+    class PolicyCfg(ObsGroup):
+        """정책 = 실기 센서로 만든 것만: IMU (자세·자이로·비력), 다리·바퀴 엔코더, 고관절 토크, 명령, 기본 제어기 내부값."""
+        projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.02, n_max=0.02))
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.05, n_max=0.05))
+        velocity_commands = ObsTerm(func=mdp.generated_commands, params={"command_name": "base_velocity"})
+        leg_vel = ObsTerm(func=cad.leg_vel, noise=Unoise(n_min=-0.05, n_max=0.05))
+        wheel_vel = ObsTerm(func=cad.wheel_vel, noise=Unoise(n_min=-0.5, n_max=0.5))
+        imu_acc = ObsTerm(func=custom_rewards.imu_specific_force_g, noise=Unoise(n_min=-0.03, n_max=0.03))
+        ctrl = ObsTerm(func=resid.residual_obs)
+
+        def __post_init__(self):
+            self.enable_corruption = True
+            self.concatenate_terms = True
+
+    @configclass
+    class CriticCfg(ObsGroup):
+        projected_gravity = ObsTerm(func=mdp.projected_gravity)
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
+        velocity_commands = ObsTerm(func=mdp.generated_commands, params={"command_name": "base_velocity"})
+        leg_vel = ObsTerm(func=cad.leg_vel)
+        wheel_vel = ObsTerm(func=cad.wheel_vel)
+        imu_acc = ObsTerm(func=custom_rewards.imu_specific_force_g)
+        ctrl = ObsTerm(func=resid.residual_obs)
+        privileged = ObsTerm(func=resid.privileged_obs)
+        height_scan = ObsTerm(func=rough.height_scan_rel, params={"sensor_cfg": SceneEntityCfg("critic_scanner")})
+
+    policy: PolicyCfg = PolicyCfg()
+    critic: CriticCfg = CriticCfg()
+
+
+@configclass
+class ResidualRewardsCfg:
+    alive = RewTerm(func=mdp.is_alive, weight=1.0)
+    terminated = RewTerm(func=mdp.is_terminated, weight=-50.0)        # 넘어짐이 최우선 (대회: 95 %)
+    track_v = RewTerm(func=resid.track_v_exp, weight=3.0, params={"std": 0.2})   # 1.0 이면 험지에서 속도를 줄여 버림 (rl1: 삼각형길 18 s 에 4.2~6.7 m, 기본 7.1 m)
+    track_wz = RewTerm(func=resid.track_wz_exp, weight=0.5, params={"std": 0.7})
+    upright = RewTerm(func=resid.upright_l2, weight=-5.0)
+    ang_vel_xy = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.02)
+    ride = RewTerm(func=custom_rewards.base_vertical_acc_exp, weight=0.3, params={"std": 1.0})
+    residual = RewTerm(func=resid.residual_l2, weight=-0.05)          # 필요할 때만 보정
+    residual_rate = RewTerm(func=resid.residual_rate_l2, weight=-0.05)
+    wheel_sat = RewTerm(func=resid.wheel_saturation, weight=-2.0, params={"frac": 0.9})
+
+
+@configclass
+class ResidualTerminationsCfg:
+    time_out = DoneTerm(func=mdp.time_out, time_out=True)
+    fell_over = DoneTerm(func=mdp.bad_orientation, params={"limit_angle": 0.87})    # 50 deg (시험 세트와 같음)
+    too_low = DoneTerm(func=rough.base_below_ground, params={"minimum_height": 0.12,
+                                                             "sensor_cfg": SceneEntityCfg("height_scanner")})
+
+
+@configclass
+class WheeledBipedCADResidualEnvCfg(ManagerBasedRLEnvCfg):
+    scene: ResidualSceneCfg = ResidualSceneCfg(num_envs=4096, env_spacing=2.5)
+    observations: ResidualObservationsCfg = ResidualObservationsCfg()
+    actions: ResidualActionsCfg = ResidualActionsCfg()
+    commands: CommandsCfg = CommandsCfg()
+    rewards: ResidualRewardsCfg = ResidualRewardsCfg()
+    terminations: ResidualTerminationsCfg = ResidualTerminationsCfg()
+    events: EventCfg = EventCfg()
+    curriculum: RoughCurriculumCfg = RoughCurriculumCfg()
+
+    def __post_init__(self):
+        self.decimation = 2
+        self.episode_length_s = 20.0
+        self.sim.dt = 1.0 / 400.0            # 물리 400 Hz (점프·삼각형길 결과 800 Hz 와 같음), 제어 200 Hz
+        self.sim.render_interval = self.decimation
+        self.scene.robot = cad.CAD_ROBOT_CFG_DCHIP.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        self.scene.robot.actuators["legs"].damping = 1.0           # VMC 다리 가상 댐퍼 (kp 60 은 그대로)
+        self.scene.height_scanner.update_period = self.decimation * self.sim.dt
+        self.scene.critic_scanner.update_period = self.decimation * self.sim.dt
+        c = self.commands.base_velocity
+        c.with_mode, c.auto_mode_prob, c.manual_flat_only = True, 1.0, False
+        c.auto_height = c.default_height = 0.1825
+        c.zero_vel_prob, c.fast_turn_prob = 0.15, 0.15
+        c.ranges.lin_vel_x = (-0.4, 0.85)
+        c.ranges.ang_vel_z = (-2.5, 2.5)
+        e = self.events
+        e.reset_joints = None                                        # 폐루프 (CAD 영점에서 시작)
+        e.reset_base.params["pose_range"] = {"x": (-0.3, 0.3), "y": (-0.3, 0.3), "yaw": (-3.14, 3.14),
+                                             "pitch": (-0.05, 0.05), "roll": (-0.05, 0.05)}
+        e.reset_base.params["velocity_range"] = {"x": (-0.1, 0.1), "y": (-0.1, 0.1), "z": (0.0, 0.0),
+                                                 "roll": (-0.1, 0.1), "pitch": (-0.1, 0.1), "yaw": (-0.1, 0.1)}
+        e.wheel_friction.params["static_friction_range"] = (0.5, 1.0)
+        e.wheel_friction.params["dynamic_friction_range"] = (0.5, 1.0)
+        e.base_mass.params["mass_distribution_params"] = (0.85, 1.15)     # 시험 세트와 같은 ±15 %
+        e.base_mass.params["operation"] = "scale"
+        e.base_com.params["com_range"] = {"x": (-0.02, 0.02), "y": (-0.01, 0.01), "z": (-0.02, 0.02)}
+        e.push.params["velocity_range"] = {"x": (-0.3, 0.3), "y": (-0.3, 0.3)}
+
+
+@configclass
+class WheeledBipedCADResidualEnvCfg_PLAY(WheeledBipedCADResidualEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 16
+        self.observations.policy.enable_corruption = False
+        self.events.push = None
+
+
+# ---------------------------------------------------------------------------
+# 넘어짐 복구 (일어서기) — recovery.py. 넘어진 자세에서 시작, 수직 + 정지를 0.3 s 유지하면 성공 (LQR 인계).
+# 매 초 -1 (시간) + 0.8 x 수직도^2 (<= -0.2 라 버티기보다 빨리 서는 게 이득) + 성공 +2.
+# ---------------------------------------------------------------------------
+from . import recovery  # noqa: E402
+
+
+@configclass
+class RecoveryActionsCfg:
+    legs = recovery.CADLegAbsActionCfg(asset_name="robot", joint_names=cad.LEG_JOINTS, preserve_order=True)
+    wheels = cad.CADWheelActionCfg(asset_name="robot", joint_names=cad.WHEEL_JOINTS, preserve_order=True,
+                                   cutoff_hz=20.0, torque_scale=7.0)       # 피크 전체 (복구엔 큰 토크가 필요)
+
+
+@configclass
+class RecoveryObservationsCfg:
+    @configclass
+    class PolicyCfg(ObsGroup):
+        """실기 센서만: IMU 자세·자이로, 다리 엔코더·속도·전류, 바퀴 속도, 직전 행동."""
+        projected_gravity = ObsTerm(func=mdp.projected_gravity, noise=Unoise(n_min=-0.02, n_max=0.02))
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, noise=Unoise(n_min=-0.05, n_max=0.05))
+        leg_pos = ObsTerm(func=cad.leg_pos_rel, params={"default": 0.1825}, noise=Unoise(n_min=-0.002, n_max=0.002))
+        leg_vel = ObsTerm(func=cad.leg_vel, noise=Unoise(n_min=-0.05, n_max=0.05))
+        wheel_vel = ObsTerm(func=cad.wheel_vel, noise=Unoise(n_min=-0.5, n_max=0.5))
+        leg_torque = ObsTerm(func=cad.leg_torque, noise=Unoise(n_min=-0.02, n_max=0.02))
+        actions = ObsTerm(func=mdp.last_action)
+
+        def __post_init__(self):
+            self.enable_corruption = True
+            self.concatenate_terms = True
+
+    @configclass
+    class CriticCfg(ObsGroup):
+        projected_gravity = ObsTerm(func=mdp.projected_gravity)
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
+        leg_pos = ObsTerm(func=cad.leg_pos_rel, params={"default": 0.1825})
+        leg_vel = ObsTerm(func=cad.leg_vel)
+        wheel_vel = ObsTerm(func=cad.wheel_vel)
+        leg_torque = ObsTerm(func=cad.leg_torque)
+        actions = ObsTerm(func=mdp.last_action)
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
+        height = ObsTerm(func=recovery.root_height)
+
+    policy: PolicyCfg = PolicyCfg()
+    critic: CriticCfg = CriticCfg()
+
+
+@configclass
+class RecoveryRewardsCfg:
+    time = RewTerm(func=mdp.is_alive, weight=-1.0)                     # 성공 스텝엔 0
+    upright = RewTerm(func=recovery.upright_sq, weight=0.8)
+    success = RewTerm(func=mdp.is_terminated_term, weight=2.0, params={"term_keys": "stood_up"})   # x 1/dt 는 __post_init__
+    ang_vel = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.005)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
+    wheel_tau = RewTerm(func=mdp.joint_torques_l2, weight=-1e-3,
+                        params={"asset_cfg": SceneEntityCfg("robot", joint_names=cad.WHEEL_JOINTS)})
+    hip_tau = RewTerm(func=mdp.joint_torques_l2, weight=-1e-3,
+                      params={"asset_cfg": SceneEntityCfg("robot", joint_names=cad.LEG_JOINTS)})
+
+
+@configclass
+class RecoveryTerminationsCfg:
+    time_out = DoneTerm(func=mdp.time_out, time_out=True)
+    stood_up = DoneTerm(func=recovery.stood_up, params={"tilt_max": 0.2, "rate_max": 1.0, "hold_s": 0.3})
+
+
+@configclass
+class RecoveryEventCfg:
+    # 넘어지는 중: 공중에서 크게 기운 자세로 놓아 땅에 떨어뜨린다 (앞뒤 넘어짐 위주 + 옆 기울기). 떨어지는 동안도 정책이 움직인다.
+    reset_base = EventTerm(
+        func=mdp.reset_root_state_uniform, mode="reset",
+        params={"pose_range": {"x": (-0.3, 0.3), "y": (-0.3, 0.3), "z": (0.10, 0.25), "yaw": (-3.14, 3.14),
+                               "pitch": (-1.6, 1.6), "roll": (-1.0, 1.0)},
+                "velocity_range": {"x": (-0.5, 0.5), "y": (-0.2, 0.2), "z": (0.0, 0.0),
+                                   "roll": (-1.0, 1.0), "pitch": (-2.0, 2.0), "yaw": (-0.5, 0.5)}})
+    reset_timer = EventTerm(func=recovery.reset_up_timer, mode="reset")
+    friction = EventTerm(
+        func=mdp.randomize_rigid_body_material, mode="startup",
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=".*"), "static_friction_range": (0.5, 1.0),
+                "dynamic_friction_range": (0.5, 1.0), "restitution_range": (0.0, 0.0), "num_buckets": 64,
+                "make_consistent": True})
+    base_mass = EventTerm(
+        func=mdp.randomize_rigid_body_mass, mode="startup",
+        params={"asset_cfg": SceneEntityCfg("robot", body_names="base_link"), "mass_distribution_params": (0.85, 1.15),
+                "operation": "scale"})
+    base_com = EventTerm(
+        func=mdp.randomize_rigid_body_com, mode="startup",
+        params={"asset_cfg": SceneEntityCfg("robot", body_names="base_link"),
+                "com_range": {"x": (-0.02, 0.02), "y": (-0.01, 0.01), "z": (-0.02, 0.02)}})
+
+
+@configclass
+class WheeledBipedCADRecoveryEnvCfg(ManagerBasedRLEnvCfg):
+    scene: SceneCfg = SceneCfg(num_envs=4096, env_spacing=2.0)
+    observations: RecoveryObservationsCfg = RecoveryObservationsCfg()
+    actions: RecoveryActionsCfg = RecoveryActionsCfg()
+    rewards: RecoveryRewardsCfg = RecoveryRewardsCfg()
+    terminations: RecoveryTerminationsCfg = RecoveryTerminationsCfg()
+    events: RecoveryEventCfg = RecoveryEventCfg()
+
+    def __post_init__(self):
+        self.decimation = 2
+        self.episode_length_s = 5.0
+        self.sim.dt = 1.0 / 400.0            # 물리 400 Hz, 제어 200 Hz (잔차 RL 과 같음)
+        self.sim.render_interval = self.decimation
+        self.scene.robot = cad.CAD_ROBOT_CFG_DCHIP.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        self.rewards.success.weight = self.rewards.success.weight / (self.decimation * self.sim.dt)   # 한 번에 +2
+
+
+@configclass
+class WheeledBipedCADRecoveryEnvCfg_PLAY(WheeledBipedCADRecoveryEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 16
+        self.observations.policy.enable_corruption = False

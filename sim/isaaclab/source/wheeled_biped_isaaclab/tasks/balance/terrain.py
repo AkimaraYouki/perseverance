@@ -312,3 +312,26 @@ def wheel_clearance(env: "ManagerBasedRLEnv") -> torch.Tensor:
     hit = torch.stack([env.scene.sensors[s].data.ray_hits_w[:, 0, 2] for s in ("l_wheel_scanner", "r_wheel_scanner")], dim=1)
     c = zc - R_WHEEL - hit
     return torch.nan_to_num(c, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def climbed_height(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """몸통 아래 지면 평균이 출발 타일 원점(구덩이 바닥)보다 얼마나 높은가 [m]. 2 단 계단 오르기 진척."""
+    return ground_patch_mean(env, SceneEntityCfg("height_scanner")) - env.scene.terrain.env_origins[:, 2]
+
+
+def terrain_levels_climb(env: "ManagerBasedRLEnv", env_ids, min_climb: float = 0.015):
+    """점프 전용: 턱 위에 올라서서(>= min_climb) 끝까지 버텨야 상승, 넘어지거나 못 올라가면 하강 (평지 타일은 넘어질 때만)."""
+    terrain = env.scene.terrain
+    up_h = climbed_height(env)[env_ids] >= min_climb
+    done_ok = env.termination_manager.time_outs[env_ids]
+    fell = env.termination_manager.terminated[env_ids]
+    gen = terrain.cfg.terrain_generator
+    names = list(gen.sub_terrains.keys())
+    import numpy as np
+    prop = np.array([gen.sub_terrains[n].proportion for n in names]); prop = prop / prop.sum()
+    col_type = [int(np.min(np.where(c / gen.num_cols + 0.001 < np.cumsum(prop))[0])) for c in range(gen.num_cols)]
+    is_flat = torch.tensor([names[t] == "flat" for t in col_type], device=env.device)[terrain.terrain_types[env_ids]]
+    up = done_ok & up_h & ~is_flat
+    down = fell | (done_ok & ~up_h & ~is_flat)
+    terrain.update_env_origins(env_ids, up, down)
+    return torch.mean(terrain.terrain_levels.float())

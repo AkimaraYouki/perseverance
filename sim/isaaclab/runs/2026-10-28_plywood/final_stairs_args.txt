@@ -1,0 +1,1 @@
+--retry_approach_v 0.1558 --retry_block_s 0.4321 --retry_back_m 0.396 --retry_v 0.3256 --trigger 0.3111 --retry_v 0.28 --retry_stall_frac 0.5 --retry_block_s 0.15 --retry_settle_s 0.5 --trigger 0.27 --retry_trig_k 0.4 --retry_v 0.3 --retry_approach_v 0.14 --retry_back_m 0.3004 --land_kp 22.8847 --land_kd 0.5 --h_land 0.2051 --spin_match_k 0.6944 --extract_pitch 6.7183

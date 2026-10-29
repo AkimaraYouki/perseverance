@@ -44,6 +44,8 @@ ap.add_argument("--slow", default="blocks,step_down", help="천천히 달릴 불
 ap.add_argument("--yaw0", action="store_true", help="모두 +x 로 출발 (삼각형 길을 정면으로). 없으면 방향 무작위 (비스듬히)")
 ap.add_argument("--no_push", action="store_true")
 ap.add_argument("--tag", default="")
+ap.add_argument("--cands", default=None, help="게인 CMA: 후보 TUNE 값 목록 json, 로봇 i = 후보 i %% C (지형 칸은 연속 블록이라 후보마다 지형이 고르게)")
+ap.add_argument("--rows_out", default=None, help="로봇마다 결과 json (지형, 넘어짐, 진동 보호, 떨림)")
 ap.add_argument("--seed", type=int, default=1, help="로봇 무작위 (전후 비교는 같은 시드로)")
 ap.add_argument("--terrains", default=None, help="이 지형만 (쉼표), 예: oneside")
 ap.add_argument("--suite", choices=("all", "rough", "slope"), default="all",
@@ -87,6 +89,10 @@ P = _types.SimpleNamespace(**{k: (getattr(args, k) if k != "seconds" else v) for
 for k in ("imu_tilt_noise_deg", "imu_tilt_bias_deg", "imu_gyro_noise", "enc_vel_noise", "imu_acc_noise", "dr_mass", "dr_com_cm", "dr_fric", "dr_fric_dyn"):
     setattr(P, k, getattr(P, k) * H)
 P.dr_motor = min(0.6, P.dr_motor * H)
+CANDS = json.load(open(args.cands)) if args.cands else None
+if CANDS:                                                              # 로봇 i 에 후보 i % C 의 값 (wbctrl 은 로봇마다 다른 값 받음)
+    for k_ in CANDS[0]:
+        setattr(P, k_, np.array([float(CANDS[i % len(CANDS)][k_]) for i in range(args.num_envs)]))
 
 _cnt = [0]
 
@@ -261,6 +267,8 @@ motor_est = kv * (1.0 + g.normal(0, 0.02, N))                          # 전압�
 kd_ = 1.0 + g.uniform(-1, 1, (N, 2)) * P.dr_fric_dyn                   # 운동 마찰
 cad.set_wheel_model(robot, wheel_ids, torch.tensor(P.wheel_fric_nm * kf), torch.tensor(P.wheel_fric_dyn_nm * kd_),
                     P.wheel_visc, torch.tensor(P.wheel_deadband_nm * kf), P.wheel_armature, backlash_deg=getattr(P, 'wheel_backlash_deg', 0.0), gear_k=getattr(P, 'wheel_gear_k', 300.0), gear_c=getattr(P, 'wheel_gear_c', 0.05), dt=float(cfg.sim.dt), tau_gain=getattr(P, 'wheel_tau_gain', 1.0))
+if getattr(P, "hip_fric_nm", 0.0) > 0:   # 2026-10-24 고관절 마찰 (실기 정지 0.4–0.5 N·m: 작은 롤 보정에서 다리 ~200 ms 늦고 진폭 50–60 %)
+    robot.write_joint_friction_coefficient_to_sim(float(P.hip_fric_nm), float(min(P.hip_fric_dyn_nm, P.hip_fric_nm)), 0.0, joint_ids=leg_ids)
 mass_true = masses.to(dev)
 CTRL = wbctrl.WBController(P, lqr, m_pend, n=N, seed=args.seed + 1000)
 
@@ -290,6 +298,9 @@ def yaw_of(q):
 
 fell = np.zeros(N, bool)
 fall_t = np.full(N, np.nan)
+# 실기 고관절 진동 보호 흉내 (|w| > 4 rad/s 인 채 부호가 0.3 s 안에 6 번) + 좌우 하중 차 떨림 (1 Hz 고역 RMS), 2026-10-24
+osc_t = np.full(N, np.nan); OSR = np.full((N, 2, 6), -9.0); OSK = np.zeros((N, 2), int); OSG = np.zeros((N, 2))  # noqa: E702
+LRF = np.zeros(N); CH2 = np.zeros(N); CHN = np.zeros(N)  # noqa: E702
 done = np.zeros(N, bool)                                                # 첫 에피소드가 끝났나 (넘어짐 또는 칸 완주)
 yaw0 = None
 yaw_dev = np.zeros(N)
@@ -348,7 +359,8 @@ with torch.inference_mode():
         cmd_term.set(torch.tensor(vx, device=dev, dtype=torch.float32), torch.zeros(N, device=dev), torch.full((N,), P.idle_h, device=dev),
                      mode=torch.ones(N, device=dev)) if args.cmd == "course" else None
         M = d.joint_pos[:, leg_ids]
-        ffj = hip_sign * torch.tensor(ff, device=dev, dtype=torch.float32)[:, None] * cad.dh_from_M(M).to(torch.float32)
+        ffr = np.where(alive, np.asarray(info["ff_roll"]), 0.0)                     # 롤 B 안
+        ffj = hip_sign * torch.tensor(np.stack([ff + ffr, ff - ffr], 1), device=dev, dtype=torch.float32) * cad.dh_from_M(M).to(torch.float32)
         kp_a, kd_a = np.where(alive, kp, 0.0), np.where(alive, kd, 0.0)
         if getattr(P, "hip_host_p", False):                         # 실기 고관절 구조: P 는 200 Hz 호스트 (지연 피드백), D 만 드라이브
             HIP.apply(robot, leg_ids, legs_act, torch.tensor(acts[:, 0:2], device=dev, dtype=torch.float32),
@@ -358,6 +370,22 @@ with torch.inference_mode():
             legs_act.stiffness[:] = torch.tensor(kp_a, device=dev, dtype=torch.float32)[:, None] * P.hip_gain_eff   # mit_pos: PD 가 드라이브 안 (물리 주기)
             legs_act.damping[:] = torch.tensor(kd_a, device=dev, dtype=torch.float32)[:, None] * P.hip_gain_eff
             robot.set_joint_effort_target(ffj * P.hip_gain_eff, joint_ids=leg_ids)
+        if CANDS or args.rows_out:
+            tt_ = (k + 1) * dt
+            wh = to(d.joint_vel[:, leg_ids]); drv_ = (CTRL.phase == wbctrl.DRIVE) & ~done  # noqa: E702
+            sg = np.sign(wh) * (np.abs(wh) > 4.0)
+            flip = (sg != 0) & (sg != OSG) & drv_[:, None]
+            for k2 in range(2):
+                ii = np.flatnonzero(flip[:, k2])
+                OSR[ii, k2, OSK[ii, k2] % 6] = tt_; OSK[ii, k2] += 1  # noqa: E702
+            OSG = np.where(sg != 0, sg, OSG)
+            OSR[~drv_] = -9.0
+            trip = ((tt_ - OSR.min(2)) <= 0.3).any(1) & np.isnan(osc_t)
+            osc_t[trip] = tt_
+            lr = to(tau)[:, 0] - to(tau)[:, 1]
+            LRF += (1.0 - math.exp(-2 * math.pi * dt)) * (lr - LRF)
+            m_ = drv_ & alive & (tt_ > 1.0)
+            CH2 += np.where(m_, (lr - LRF) ** 2, 0.0); CHN += m_  # noqa: E702
         here = to(torch.cdist(d.root_pos_w[:, :2], org).argmin(1) % nc)    # 지금 서 있는 칸의 종류 (열)
         wfr = np.abs(f.w_wheel_joint).max(1) / (18.85 * kv)
         tilt = np.degrees(np.arccos(np.clip(-f.g_b[:, 2], -1, 1)))
@@ -395,6 +423,9 @@ def wilson(s, n, z=1.96):
     return p, max(0.0, ctr - half), min(1.0, ctr + half)
 
 
+if args.rows_out:
+    json.dump([dict(i=i, terrain=col_name[int(types[i])], level=int(levels[i]), fell=bool(fell[i]), osc=bool(not np.isnan(osc_t[i])),
+                    chat=float(np.sqrt(CH2[i] / CHN[i])) if CHN[i] > 0 else None) for i in range(N)], open(args.rows_out, "w"))
 rows = {}
 lv_np = levels.cpu().numpy()
 for i in range(N):

@@ -27,6 +27,8 @@ ap.add_argument("--policy", required=True)
 ap.add_argument("--task", default="Isaac-WheeledBiped-Balance-Play-v0")
 ap.add_argument("--cad", action="store_true", help="CAD 4절링크 폐루프 모델 (Isaac-WheeledBiped-CAD-Play-v0)")
 ap.add_argument("--rough", action="store_true", help="거친 지형 + 높이 모드 (CAD-Rough-Play). --cad 포함")
+ap.add_argument("--jump", action="store_true", help="점프 과제 (CAD-Jump-Play-v1, 관측 26). 패드 Y = 점프, 패드 없으면 턱 앞 자동 점프")
+ap.add_argument("--x0", type=float, default=0.0, help="타일 원점 기준 시작 x [m] (2 단 계단 구덩이 벽은 약 3.45)")
 ap.add_argument("--terrain", default="gravel",
                 help="지형 종류 — terrain.py ROUGH_TERRAINS_CFG 의 sub_terrains 이름 "
                      "(flat gravel rugged rough wave_long wave_short slope_up slope_down bumps). 없는 이름이면 목록을 보여 주고 끝낸다")
@@ -77,15 +79,22 @@ FRICTION_NM = 0.82          # 바퀴 하나 마찰 한계 추정 (HUD 에서 % �
 DPAD_X, DPAD_Y = 6, 7
 BTN_X, BTN_Y, BTN_LB, BTN_RB = 2, 3, 4, 5
 
+if args.jump:
+    args.rough = True
 if args.rough:
     args.cad = True
-    args.task = "Isaac-WheeledBiped-CAD-Rough-Play-v0"
+    args.task = "Isaac-WheeledBiped-CAD-Jump-Play-v1" if args.jump else "Isaac-WheeledBiped-CAD-Rough-Play-v0"
 elif args.cad:
     args.task = "Isaac-WheeledBiped-CAD-Play-v0"
 cfg = parse_env_cfg(args.task, num_envs=args.num_envs, use_fabric=True)
 if args.rough:
     cfg.scene.terrain.terrain_generator = cfg.scene.terrain.terrain_generator.replace(seed=args.terrain_seed)
-    cfg.events.reset_base.params["pose_range"] = {"x": (0.0, 0.0), "y": (0.0, 0.0), "yaw": (0.0, 0.0)}
+    cfg.events.reset_base.params["pose_range"] = {"x": (args.x0, args.x0), "y": (0.0, 0.0), "yaw": (0.0, 0.0)}
+    if args.jump:
+        cfg.commands.base_velocity.jump_rand_rate = 0.0
+        cfg.commands.base_velocity.jump_cooldown_s = 0.6        # 연속 점프 (2 단 계단 턱 사이 0.7 s)
+        cfg.commands.base_velocity.jump_auto_when_pinned = args.joystick is None
+        cfg.terminations.time_out = None
     cfg.events.reset_base.params["velocity_range"] = {}
 cfg.viewer.origin_type = "asset_root"
 cfg.viewer.asset_name = "robot"
@@ -325,7 +334,9 @@ with torch.inference_mode():
             if pad.button(BTN_LB) or pad.button(BTN_RB):
                 z = 0.8 * dt if pad.button(BTN_LB) else -0.8 * dt
                 cam[1] = min(4.0, max(0.3, cam[1] * (1.0 + z))); dcam = True       # LB 멀리, RB 가까이
-            if pad.button(BTN_Y):
+            if args.jump and pad.button(BTN_Y):
+                cmd.trigger_jump()                                   # Y = 점프 (쿨다운 1.5 s)
+            if pad.button(6):                                        # BACK = 카메라 초기화
                 cam[:] = list(cam0); dcam = True
             if dcam:
                 apply_cam()
@@ -358,6 +369,8 @@ with torch.inference_mode():
         q_now = float(cmd._leg_h()[0])       # 두 모델 공통 (CAD 는 모터각 -> 다리 관절값 변환)
         h_cmd_txt = "AUTO" if (HAS_MODE and hmode) else f"{(h_t+R_WHEEL)*1000:5.1f} mm"
         hmode_txt = ("AUTO (policy picks height)" if hmode else "MANUAL (triggers)") if HAS_MODE else "-"
+        if args.jump and bool(cmd.jump_window[0]):
+            hmode_txt += "   JUMP!"
         if args.cad:
             from wheeled_biped_isaaclab.tasks.balance.cad import leg_state as _ls
             _hl = _ls(r)[0][0]

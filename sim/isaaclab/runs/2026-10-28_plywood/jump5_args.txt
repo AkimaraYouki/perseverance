@@ -1,0 +1,1 @@
+--lqr_table /home/parksuho/.claude/jobs/fcc5fea5/tmp/kt/gains_x1.20.yaml --accel_max 0.8 --jerk_max 3.0 --vmax_kmh 3.0
