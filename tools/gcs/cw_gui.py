@@ -137,6 +137,9 @@ GROUPS = [
         ('/person_tracker', 'reacq_gate_rate_deg_s', '놓친 동안 찾는 범위가 넓어지는 속도', 5.0, 90.0, 5.0, 40.0, '°/s'),
         ('/person_tracker', 'track_keep_frames', '사라진 번호를 붙잡는 프레임 (30 = 1 초)', 5, 60, 1, 30, '프레임'),
         ('/person_tracker', 'track_new', '새 번호를 만드는 최소 확신도', 0.30, 0.95, 0.05, 0.6, ''),
+        # 크기 (거리) 일관성 (gcs/cross-guard 2026-10-29): 먼 대상 앞을 가까운 사람이 지나가 다 가려도 그 사람으로 안 붙게
+        ('/person_tracker', 'reid_size_tol', '다시 붙을 사람 상자 높이: 마지막 대상의 이 배 안 (거리 비슷)', 1.1, 2.5, 0.05, 1.35, '배'),
+        ('/person_tracker', 'reid_size_rate', '놓친 1 초마다 허용 배수 늘림', 0.0, 2.0, 0.1, 0.5, '/s'),
     ]),
     ('사람 인식', '카메라 (YOLO) · 라이다 다리 검출 — 로봇이 live_params 로 열면 실시간', [
         ('/person_tracker', 'score_min', '사람 표시 최소 확신도 (새 스택)', 0.1, 0.9, 0.05, 0.40, ''),
@@ -206,8 +209,10 @@ JUMP_SETS = [('default', '기본 (마찰 높음, 15 N·m)'), ('plywood', '합판
 TUNE_SH = '~/gen2_ws/install/gen2_bringup/lib/gen2_bringup/gen2_tune.sh'
 MARKERS = ['점프 평지', '점프 턱 5.6 cm']    # 시험 표시 버튼 (gcs/marker → 로봇 health_logger 'MARKER: …')
 TRACKER_START = ('reid_margin', 'reid_sim_min', 'reid_sim_single', 'reacq_gate_deg', 'reacq_gate_rate_deg_s',
-                 'track_keep_frames', 'track_new')     # person_tracker 가 시작 때만 읽음 -> 추종 스택 켤 때 camera_cal.yaml 에
+                 'track_keep_frames', 'track_new', 'reid_size_tol', 'reid_size_rate')     # person_tracker 가 시작 때만 읽음 -> 추종 스택 켤 때 camera_cal.yaml 에
 FOLLOW_START = ('k_yaw',)                              # person_follow 가 시작 때만 읽음 (게인) -> 같은 방식
+# 프리셋에 같이 저장하는 켜기/끄기 (기능 탭 버튼, 균형 중에도 됨): 불러오면 바로 보냄
+SWITCHES = {PF: ('use_nav', 'camera_only', 'auto_step', 'explore'), '/cmd_mux': ('lidar_limit',)}
 ALWAYS = {PF: {'use_nav', 'camera_only', 'auto_step', 'explore', 'feet_follow'}}   # 노드가 균형 중에도 받는 켜기/끄기 (_ALWAYS)
 MIRROR = {LCM: [GCM]}                       # 로컬 코스트맵 값을 글로벌에도
 RESTART = {'/pad_teleop': 'pad', '/gesture': 'gesture', '/slam_toolbox': 'slam'}   # 노트북에서 띄우는 노드
@@ -686,6 +691,7 @@ class Gui(QtWidgets.QMainWindow):
         self.nodes = set()
         self.robot_info = {}
         self.live_params = {}          # 노드 → live_params 에 적힌 이름들
+        self.sw_vals = {}              # 노드 → {켜기/끄기 이름: 마지막으로 읽은 값} (프리셋 저장용)
         self.bal_mode = ''
         self.pending = {}              # 노드 → {이름: 값}
         self.att_win = None            # 자세 창
@@ -1288,6 +1294,9 @@ class Gui(QtWidgets.QMainWindow):
             self.show_log()
 
     def _on_params(self, node, vals):
+        for k in SWITCHES.get(node, ()):
+            if vals.get(k) is not None:
+                self.sw_vals.setdefault(node, {})[k] = bool(vals[k])
         if node in ASK_LIVE and 'live_params' in vals:
             lp = vals['live_params']
             live = set(lp) if isinstance(lp, list) else set()
@@ -1481,9 +1490,14 @@ class Gui(QtWidgets.QMainWindow):
             data = {}
             for r in self.rows:
                 data.setdefault(r.node, {})[r.name] = r.value()
+            # 켜기/끄기 (로봇에서 읽은 지금 값) + 참고 정보 (불러올 때 적용 안 함: 점프 세트는 해제 + 균형 재시작이라)
+            data['_switches'] = {n: dict(v) for n, v in self.sw_vals.items() if v}
+            data['_info'] = {'jump_set': self.robot_info.get('tune'), 'follow_stack': follow_stack(),
+                             'saved': time.strftime('%Y-%m-%d %H:%M:%S'), 'rows': len(self.rows)}
             with open(f, 'w') as fh:
                 yaml.safe_dump(data, fh, allow_unicode=True)
-            self.log(f'프리셋 저장: {f}')
+            nsw = sum(len(v) for v in data['_switches'].values())
+            self.log(f'프리셋 저장: {f} — 파라미터 {len(self.rows)} 개 + 켜기/끄기 {nsw} 개')
 
     def load_preset(self):
         f, _ = QtWidgets.QFileDialog.getOpenFileName(self, '프리셋 불러오기', PRESETS, 'YAML (*.yaml)')
@@ -1500,6 +1514,17 @@ class Gui(QtWidgets.QMainWindow):
                 self.on_row_changed(r)
                 n += 1
         self.log(f'프리셋 불러옴 ({n} 개): {f}' + ('' if self.auto.isChecked() else ' — "지금 값 모두 적용" 으로 보내기'))
+        sw = data.get('_switches') or {}
+        for node, vals in sw.items():
+            vals = {k: bool(v) for k, v in (vals or {}).items() if k in SWITCHES.get(node, ())}
+            if vals and node in self.nodes:
+                self.ros.set_params(node, vals)
+                self.log(f'켜기/끄기 적용 {node}: ' + ', '.join(f'{k} {"켜기" if v else "끄기"}' for k, v in vals.items()))
+            elif vals:
+                self.log(f'켜기/끄기 {node} 안 보내짐 (노드 꺼짐): ' + ', '.join(f'{k} {v}' for k, v in vals.items()))
+        info = data.get('_info') or {}
+        if info.get('jump_set'):
+            self.log(f'참고: 저장 때 점프 세트 = {info["jump_set"]} (바꾸려면 해제 후 기능 탭 점프 세트)')
 
     def copy_diff(self):
         lines = [f'- {r.node} `{r.name}`: {_fmt(r.default)} → **{_fmt(r.value())}**'
