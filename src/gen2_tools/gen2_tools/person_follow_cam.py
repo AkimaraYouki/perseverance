@@ -42,6 +42,8 @@ class PersonFollowCam(PersonFollow):
     def __init__(self):
         super().__init__()
         self.cmd = self.create_publisher(String, 'people/target_cmd', 10)
+        self.dbg = self.create_publisher(String, 'follow/debug', 10)   # HUD 용 JSON (10 Hz): 거리·출처·발 px·수평선·앞 정지·자동 턱
+        self.dbg_t = 0.0
         self.create_subscription(String, 'people/target', self._tg, 10)
         # 자동 턱 (2026-10-27, Isaac 시험): 카메라 턱 -> 감속 -> 턱 감지 모드 (balance/step_mode) -> 점프 -> 다 올라가면 해제
         self.create_subscription(String, 'step/rays', self._rays, 10)
@@ -62,12 +64,12 @@ class PersonFollowCam(PersonFollow):
         self.feet_on = p('feet_follow', False)
         self.feet_px = p('feet_px', 80.0)                  # [px] 목표: 발이 수평선 아래 이만큼 (로봇 렌즈: 100 = 0.8 m, 80 = 1.0 m, 55 = 1.5 m)
         self.feet_k = p('feet_k', 0.01)                    # [m/s per px] 50 px 모자라면 0.5 m/s
-        self.feet_dv, self.feet_t = None, -1e9
+        self.feet_dv, self.feet_t, self.feet_u, self.feet_row = None, -1e9, None, None
         # 라이다 앞 정지 (사용자 2026-10-29: 미로를 사람 따라 통과, 사람이 너무 가깝거나 장애물이면 라이다로 멈추고 Nav2 로 피함):
         # 몸 폭 (+ corridor_margin_m) 앞쪽 통로에 front_stop_m 안의 라이다 점 3 개 이상이면 전진 0 (회전 · 후진은 됨).
         # 거리 추정 (라이다 묶음 · 발 · 예측 · 발 픽셀) 이 틀려도 사람 다리나 벽 앞에서 선다. 0 = 끔
         self.front_stop = p('front_stop_m', 0.5)
-        self.front_hit = False
+        self.front_hit, self.front_min = False, None
         self.lidar_margin = math.radians(p('lidar_span_margin_deg', 2.0))
         self.lidar_max = p('lidar_max_m', 6.0)
         self.tg_msg, self.tg_new, self.tg_t = None, False, -1e9
@@ -179,7 +181,9 @@ class PersonFollowCam(PersonFollow):
         if self.front_stop <= 0 or not len(self.scan_b):
             return False
         x, y = self.scan_b[:, 0], self.scan_b[:, 1]
-        return int(((x > 0.05) & (x < self.front_stop) & (np.abs(y) < 0.164 + self.margin)).sum()) >= 3
+        lane = (x > 0.05) & (np.abs(y) < 0.164 + self.margin)
+        self.front_min = float(np.sort(x[lane])[2]) if int(lane.sum()) >= 3 else None   # 3 번째로 가까운 점 (HUD)
+        return int((lane & (x < self.front_stop)).sum()) >= 3
 
     def _front_stop(self, t):
         """Clamp a direct command (not Nav2) in place: forward -> 0 when the LiDAR sees something right ahead."""
@@ -249,7 +253,8 @@ class PersonFollowCam(PersonFollow):
             pp = self._to_b(pose, pred) if pred is not None else None
             span = [math.radians(a) for a in j['span_deg']]
             d_feet = self._ground_dist(j['feet_row'], 0.5 * (j['box'][0] + j['box'][2]))
-            self.feet_dv = float(j['feet_row'] - self._horizon_row(0.5 * (j['box'][0] + j['box'][2])))   # 발 아래 끝이 화면 밖 = 큰 값
+            self.feet_u, self.feet_row = 0.5 * (j['box'][0] + j['box'][2]), float(j['feet_row'])
+            self.feet_dv = float(self.feet_row - self._horizon_row(self.feet_u))   # 발 아래 끝이 화면 밖 = 큰 값
             self.feet_t = now
             # LiDAR cluster: near the prediction (same person) -> else near the camera's feet distance (also at the lock,
             # so the wall behind is not taken) -> else the feet distance -> else the prediction
@@ -493,6 +498,33 @@ class PersonFollowCam(PersonFollow):
         if getattr(self, 'auto_on', False):
             s += f' [AUTO {self.auto.state}' + (f' {self.step_d:.1f}m' if self.step_d else '') + ']'
         self.st.publish(String(data=s))
+        self._debug(state, pb)
+
+    def _debug(self, state, pb):
+        """follow/debug JSON for the HUD, 10 Hz: everything the status line has + horizon / feet rows (raw image pixels)."""
+        now = time.monotonic()
+        if getattr(self, 'dbg', None) is None or now - self.dbg_t < 0.1:
+            return
+        self.dbg_t = now
+        if not len(self.scan_b) or self.front_min is None:
+            self._front_blocked()
+        feet_fresh = self.feet_dv is not None and now - self.feet_t < 0.5
+        try:
+            hz = [[u, round(self._horizon_row(u), 1)] for u in range(0, self.cam_w + 1, self.cam_w // 8)]
+        except Exception:                                    # lens model not ready (no camera frame yet)
+            hz = []
+        dd = dict(state=state, dist=None if pb is None else round(float(math.hypot(*pb)), 2),
+                  bearing_deg=None if pb is None else round(math.degrees(math.atan2(pb[1], pb[0])), 1),
+                  src=self.target.get('src') if self.target is not None else None, d_ref=self.d_ref, hold=self.hold,
+                  feet=dict(on=self.feet_on, px=self.feet_px, k=self.feet_k, dv=round(self.feet_dv, 1) if feet_fresh else None,
+                            u=round(self.feet_u, 1) if feet_fresh else None, row=round(self.feet_row, 1) if feet_fresh else None),
+                  horizon=hz, w=self.cam_w, h=self.cam_h,
+                  front=dict(stop_m=self.front_stop, hit=self.front_hit, min_m=None if self.front_min is None else round(self.front_min, 2),
+                             half_w=round(0.164 + self.margin, 3)),
+                  nav='+nav' in self.state, blocked=time.monotonic() - self.blocked_t < self.nav_hold,
+                  auto=dict(on=self.auto_on, state=self.auto.state, step_d=self.step_d),
+                  explore=self.ex_on, leg_h=round(self.leg_h, 3), pitch_deg=round(math.degrees(self.body_pitch + self.cam_tilt), 2))
+        self.dbg.publish(String(data=json.dumps(dd)))
 
 
 def main():
