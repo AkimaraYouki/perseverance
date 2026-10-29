@@ -36,8 +36,9 @@ from std_srvs.srv import SetBool
 
 class PersonFollowCam(PersonFollow):
     _LIVE = dict(PersonFollow._LIVE, auto_step='auto_on', explore='ex_on', explore_s='ex_s', explore_ahead_m='ex_ahead',
-                 explore_side_m='ex_side', explore_v='ex_v', explore_scan_deg='ex_scan_deg')
-    _ALWAYS = PersonFollow._ALWAYS + ('auto_step', 'explore')     # 켜기/끄기는 균형 중에도 (GUI)
+                 explore_side_m='ex_side', explore_v='ex_v', explore_scan_deg='ex_scan_deg',
+                 feet_follow='feet_on', feet_px='feet_px', feet_k='feet_k')
+    _ALWAYS = PersonFollow._ALWAYS + ('auto_step', 'explore', 'feet_follow')     # 켜기/끄기는 균형 중에도 (GUI)
     def __init__(self):
         super().__init__()
         self.cmd = self.create_publisher(String, 'people/target_cmd', 10)
@@ -55,6 +56,13 @@ class PersonFollowCam(PersonFollow):
         self.cam_K, self.cam_D = p('K', [0.0]), p('D', [0.0])  # checkerboard calibration (camera_cal.yaml, 2026-10-26)
         self.cam_roll = p('cam_roll_deg', 0.0)                 # mount roll (cw HUD, 2026-10-27)
         self.bm = None
+        # 발 픽셀 추종 (사용자 2026-10-29 "발은 수평선 아래로 유지하게끔 추종, 수평선부터 픽셀은 파라미터로"): FOLLOW 의 전진 속도를
+        # 거리 (LiDAR / 발 / 예측, 튐) 대신 사람 발 행이 카메라 수평선 아래 feet_px 에 오게 정한다. 멀수록 발이 수평선 쪽으로
+        # 올라감 -> 전진, 가까우면 내려감 (화면 밖 = 아래 끝) -> 멈춤 / 조금 후진. 수평선 = 몸 피치 + cam_tilt 로 렌즈 모델에서
+        self.feet_on = p('feet_follow', False)
+        self.feet_px = p('feet_px', 80.0)                  # [px] 목표: 발이 수평선 아래 이만큼 (로봇 렌즈: 100 = 0.8 m, 80 = 1.0 m, 55 = 1.5 m)
+        self.feet_k = p('feet_k', 0.01)                    # [m/s per px] 50 px 모자라면 0.5 m/s
+        self.feet_dv, self.feet_t = None, -1e9
         self.lidar_margin = math.radians(p('lidar_span_margin_deg', 2.0))
         self.lidar_max = p('lidar_max_m', 6.0)
         self.tg_msg, self.tg_new, self.tg_t = None, False, -1e9
@@ -161,15 +169,27 @@ class PersonFollowCam(PersonFollow):
         best = min(cl, key=lambda c: abs(c[0] - expect))
         return best[0] if abs(best[0] - expect) < tol else None
 
-    def _ground_dist(self, feet_row, u=None):
-        """Camera -> feet distance on the ground plane from the feet pixel (lens model from camera_cal / parameters)."""
+    def _horizon_row(self, u):
+        """Image row of the horizon (depression 0 with body pitch + cam_tilt) at column u; may lie outside the image."""
+        pitch = self.body_pitch + self.cam_tilt
+        lo, hi = -0.5 * self.cam_h, 1.5 * self.cam_h
+        for _ in range(20):
+            mid = 0.5 * (lo + hi)
+            lo, hi = (mid, hi) if self._lens().ray(u, mid)[1] + pitch < 0 else (lo, mid)
+        return 0.5 * (lo + hi)
+
+    def _lens(self):
         if self.bm is None:
             from gen2_tools.tracking_core import BearingModel
             K = self.cam_K if len(self.cam_K) == 9 else None
             D = self.cam_D if len(self.cam_D) == 4 else None
             self.bm = BearingModel(self.cam_model, self.cam_w, self.cam_h, fx=self.cam_fx, hfov_deg=math.degrees(self.hfov), K=K, D=D,
                                    roll_deg=self.cam_roll)
-        _, ray = self.bm.ray(self.cam_w / 2.0 if u is None else u, feet_row)
+        return self.bm
+
+    def _ground_dist(self, feet_row, u=None):
+        """Camera -> feet distance on the ground plane from the feet pixel (lens model from camera_cal / parameters)."""
+        _, ray = self._lens().ray(self.cam_w / 2.0 if u is None else u, feet_row)
         dep = ray + self.body_pitch + self.cam_tilt
         if dep < math.radians(1.5):
             return None
@@ -209,6 +229,8 @@ class PersonFollowCam(PersonFollow):
             pp = self._to_b(pose, pred) if pred is not None else None
             span = [math.radians(a) for a in j['span_deg']]
             d_feet = self._ground_dist(j['feet_row'], 0.5 * (j['box'][0] + j['box'][2]))
+            self.feet_dv = float(j['feet_row'] - self._horizon_row(0.5 * (j['box'][0] + j['box'][2])))   # 발 아래 끝이 화면 밖 = 큰 값
+            self.feet_t = now
             # LiDAR cluster: near the prediction (same person) -> else near the camera's feet distance (also at the lock,
             # so the wall behind is not taken) -> else the feet distance -> else the prediction
             d = self._lidar_dist(span, None if pp is None else float(math.hypot(pp[0] - self.cam_x, pp[1])))
@@ -330,6 +352,9 @@ class PersonFollowCam(PersonFollow):
                 k = 0.0
             t.angular.z = float(np.clip(self.k_yaw * b, -self.wz_max, self.wz_max))
             t.linear.x = float(np.clip(k * self.k_d * (d - self.d_ref) * max(0.0, math.cos(b)), -self.vx_max * 0.5, self.vx_max))
+            if self.feet_on and state == 'FOLLOW' and now - self.feet_t < 0.3:   # 발 픽셀 추종 (feet_follow, 위 설명)
+                t.linear.x = float(np.clip(k * self.feet_k * (self.feet_px - self.feet_dv) * max(0.0, math.cos(b)),
+                                           -self.vx_max * 0.5, self.vx_max))
             if abs(b) > self.nav_max_b and now - self.blocked_t < self.nav_hold:
                 t.linear.x = 0.0                                # blocked and the person far to the side: turn in place
         if state in ('FOLLOW', 'OCCLUDED') or (self.auto_on and self.auto.state == 'STEP'):
@@ -441,6 +466,8 @@ class PersonFollowCam(PersonFollow):
             s += f' target {math.hypot(*pb):.2f} m @ {math.degrees(math.atan2(pb[1], pb[0])):+.0f} deg'
             if self.target is not None:
                 s += f" [{self.target.get('src', 'camera')}]"
+        if getattr(self, 'feet_dv', None) is not None and time.monotonic() - self.feet_t < 0.5:
+            s += f' [feet {self.feet_dv:.0f}/{self.feet_px:.0f}px' + (' ON' if self.feet_on else '') + ']'
         if getattr(self, 'auto_on', False):
             s += f' [AUTO {self.auto.state}' + (f' {self.step_d:.1f}m' if self.step_d else '') + ']'
         self.st.publish(String(data=s))
