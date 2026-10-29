@@ -190,8 +190,8 @@ class PersonFollow(Node):
         along = self.scan_b @ u
         lat = np.abs(self.scan_b[:, 0] * u[1] - self.scan_b[:, 1] * u[0])
         hit = (along > 0.05) & (along < d - 0.45) & (lat < 0.164 + self.margin)
-        if person:
-            hit &= np.hypot(self.scan_b[:, 0] - pb[0], self.scan_b[:, 1] - pb[1]) > self.person_r
+        if person:   # 사람 다리는 통로 끝 (사람 쪽 0.7 m) 에서만 뺀다: 미로 모서리 옆에 선 사람 (2026-10-29) 때 모서리까지 빠지면 안 막힘
+            hit &= (np.hypot(self.scan_b[:, 0] - pb[0], self.scan_b[:, 1] - pb[1]) > self.person_r) | (along < d - 0.7)
         return int(hit.sum()) >= 3
 
     def _enable(self, req, res):

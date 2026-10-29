@@ -185,12 +185,16 @@ class PersonFollowCam(PersonFollow):
         self.front_min = float(np.sort(x[lane])[2]) if int(lane.sum()) >= 3 else None   # 3 번째로 가까운 점 (HUD)
         return int((lane & (x < self.front_stop)).sum()) >= 3
 
-    def _front_stop(self, t):
-        """Clamp a direct command (not Nav2) in place: forward -> 0 when the LiDAR sees something right ahead."""
+    def _front_stop(self, t, pb=None):
+        """Clamp a direct command (not Nav2) in place: forward -> 0 when the LiDAR sees something right ahead.
+        A wall / corner (the person is farther than front_stop_m + 0.3) also counts as 'blocked' -> Nav2 next tick
+        (user 2026-10-29 maze: wall corners between robot and person -> go around with Nav2, not stand still)."""
         self.front_hit = t.linear.x > 0.0 and self._front_blocked()
         if self.front_hit:
             t.linear.x = 0.0
             self.sm_v = min(self.sm_v, 0.0)
+            if pb is not None and float(np.hypot(*pb)) > self.front_stop + 0.3:
+                self.blocked_t = time.monotonic()
         return t
 
     def _horizon_row(self, u):
@@ -400,7 +404,7 @@ class PersonFollowCam(PersonFollow):
         t = self._smooth(t, now)                           # accel / decel limits (PR #8) ...
         if cap is not None and t.linear.x > cap:           # ... never above the auto-step speed (SLOW 0.3)
             t.linear.x = self.sm_v = float(cap)
-        self.pub.publish(self._front_stop(t))
+        self.pub.publish(self._front_stop(t, pb if state in ('FOLLOW', 'OCCLUDED') else None))
         self._status(state, pb)
 
     def _explore(self, pose, tgt, now, t):
