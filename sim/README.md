@@ -15,6 +15,11 @@
 | `isaaclab/` | Isaac Lab RL 프로젝트 소스 (체크포인트 제외) |
 | `isaaclab/scripts/pd_balance_check.py` | PD 게인 스윕 — 모델이 세워지는지 판정 |
 | `isaaclab/scripts/lqr_balance_check.py` | `gains.yaml` 을 Isaac 에서 검증 |
+| `isaaclab/scripts/wbctrl.py` | **제어기 규격** (N 대 배열). 실기 `wb_core` 가 이것의 C++ 이식. 롤 힘 피드포워드·다리 접지 반사 포함 |
+| `isaaclab/scripts/jump_rl.py` | 점프 상태기계 CMA-ES (`--cma_space` landing/plywood2/plywood3/gains …, `--course` 계단 섞기, `--box_mu` 턱 마찰, `--cma_sigma`) |
+| `isaaclab/scripts/roll_cma.py`, `gain_cma.py` | 롤 PI·LQR 이득 배율 CMA (떨림 벌점) |
+| `isaaclab/scripts/robust_suite.py`, `harsh_eval.py` | 시나리오 (낙하·공중 턱·웨이브 12/14°) / 수천 대 가혹 평가 |
+| `isaaclab/runs/2026-10-28_plywood/` | 대회 합판 점프 세트 CMA 기록 (v1→v4, 스크립트·인자·결과) |
 | `isaaclab/JUMP_REFERENCES.md` | 점프 선행 연구 정리와 학습 방향 (학습 에이전트용 지침) |
 
 ## CAD → 모델 파이프라인
