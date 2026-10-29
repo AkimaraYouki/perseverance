@@ -81,6 +81,7 @@ struct Params      // climb_test.py TUNE defaults (2026-10-07)
   double retry_vmax = 0.0;                             // [m/s] speed cap while the mode is driving (0 = off)
   double retry_stall_frac = 0.0, retry_settle_s = 0.0; // stall = v < frac x approach after settle_s at >= 0.8 x approach (0 = |v| < 0.05)
   double retry_land_hold_s = 0.0;                      // [s] stand still this long after a landing before approaching again
+  double retry_land_settle_s = 0.0;                    // [s] after a landing: no block test, no catch-up (x_err, v_i); 0 = off
   double retry_trig_k = 0.0, retry_fire_frac = 0.0;    // speed-adaptive trigger [s]; fire only at >= frac x retry_v
   double retry_block_s = 0.4, retry_back_m = 0.5, retry_back_v = 0.3, retry_contact = 0.07, trigger = 0.30;
 };
@@ -131,6 +132,7 @@ public:
   int phase() const {return phase_;}
   const Params & params() const {return P_;}
   void set_vmax_kmh(double v) {P_.vmax_kmh = v;}     // runtime speed cap (balance_node live param, disarmed only)
+  void set_retry_approach_v(double v) {P_.retry_approach_v = v;}   // step-detect approach speed (live, disarmed only)
   // step-detect mode on / off at run time (operator, balance/step_mode); switching clears its state
   void set_jump_retry(bool on) {P_.jump_retry = on; reset_retry();}
   bool jump_retry() const {return P_.jump_retry;}

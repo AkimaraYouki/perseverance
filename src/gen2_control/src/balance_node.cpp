@@ -250,6 +250,7 @@ public:
     P.retry_stall_frac = declare_parameter("tune.retry_stall_frac", P.retry_stall_frac);
     P.retry_settle_s = declare_parameter("tune.retry_settle_s", P.retry_settle_s);
     P.retry_land_hold_s = declare_parameter("tune.retry_land_hold_s", P.retry_land_hold_s);
+    P.retry_land_settle_s = declare_parameter("tune.retry_land_settle_s", P.retry_land_settle_s);
     P.retry_trig_k = declare_parameter("tune.retry_trig_k", P.retry_trig_k);
     P.retry_fire_frac = declare_parameter("tune.retry_fire_frac", P.retry_fire_frac);
     P.retry_block_s = declare_parameter("tune.retry_block_s", P.retry_block_s);
@@ -369,21 +370,25 @@ public:
     pub_timer_ = create_wall_timer(10ms, [this] {publish();});
     step_log_ = declare_parameter("step_log", true);
     step_log_dir_ = declare_parameter("step_log_dir", std::string(std::getenv("HOME") ? std::getenv("HOME") : "/tmp") + "/gen2_ws/logs/steps");
-    // runtime change (GCS GUI, comms 2026-10-13_1300): only the overall speed cap, only while disarmed — no gains
+    // runtime change (GCS GUI, comms 2026-10-13_1300): speed limits only, only while disarmed — no gains.
+    // + tune.retry_approach_v (step-detect approach speed 0.1..0.4, user 2026-10-28)
     {
       rcl_interfaces::msg::ParameterDescriptor ro;
       ro.read_only = true;
       ro.description = "set at runtime, robot disarmed only";
-      declare_parameter("live_params", std::vector<std::string>{"tune.vmax_kmh"}, ro);
+      declare_parameter("live_params", std::vector<std::string>{"tune.vmax_kmh", "tune.retry_approach_v"}, ro);
       vmax_kmh_req_ = params_.vmax_kmh;
+      approach_v_req_ = params_.retry_approach_v;
     }
     live_cb_ = add_on_set_parameters_callback([this](const std::vector<rclcpp::Parameter> & ps) {
       rcl_interfaces::msg::SetParametersResult r;
       r.successful = false;
       for (const auto & q : ps) {
-        if (q.get_name() != "tune.vmax_kmh") {r.reason = q.get_name() + ": read at start only"; return r;}
-        if (q.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE || !(q.as_double() >= 0.5 && q.as_double() <= 3.5)) {
-          r.reason = "tune.vmax_kmh: a double in 0.5..3.5"; return r;
+        const bool vmax = q.get_name() == "tune.vmax_kmh", appr = q.get_name() == "tune.retry_approach_v";
+        if (!vmax && !appr) {r.reason = q.get_name() + ": read at start only"; return r;}
+        const double lo = vmax ? 0.5 : 0.1, hi = vmax ? 3.5 : 0.4;
+        if (q.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE || !(q.as_double() >= lo && q.as_double() <= hi)) {
+          r.reason = q.get_name() + ": a double in " + std::to_string(lo).substr(0, 3) + ".." + std::to_string(hi).substr(0, 3); return r;
         }
       }
       {
@@ -391,8 +396,8 @@ public:
         if (mode_ != Mode::kDisarmed) {r.reason = std::string("only while disarmed (now ") + mode_name(mode_) + ")"; return r;}
       }
       for (const auto & q : ps) {
-        vmax_kmh_req_ = q.as_double();
-        RCLCPP_INFO(get_logger(), "live tune.vmax_kmh = %.2f", q.as_double());
+        (q.get_name() == "tune.vmax_kmh" ? vmax_kmh_req_ : approach_v_req_) = q.as_double();
+        RCLCPP_INFO(get_logger(), "live %s = %.2f", q.get_name().c_str(), q.as_double());
       }
       r.successful = true;
       return r;
@@ -638,6 +643,10 @@ private:
       if (mode_ == Mode::kDisarmed && vmax_kmh_req_.load() != params_.vmax_kmh) {   // live speed cap, applied while disarmed
         params_.vmax_kmh = vmax_kmh_req_.load();
         if (core_) {core_->set_vmax_kmh(params_.vmax_kmh);}
+      }
+      if (mode_ == Mode::kDisarmed && approach_v_req_.load() != params_.retry_approach_v) {   // live step approach speed
+        params_.retry_approach_v = approach_v_req_.load();
+        if (core_) {core_->set_retry_approach_v(params_.retry_approach_v);}
       }
       step(t);
     }
@@ -1172,6 +1181,7 @@ private:
   bool use_shm_ = true;
   double th_trim_ = 0.0;
   std::atomic<double> vmax_kmh_req_{3.5};
+  std::atomic<double> approach_v_req_{0.14};
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr live_cb_;
   std::atomic<bool> imu_src_shm_{false};
   std::atomic<double> dt_max_ms_{0.0};

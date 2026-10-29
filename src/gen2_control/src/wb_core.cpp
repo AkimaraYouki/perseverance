@@ -107,7 +107,13 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
     }
     const bool moved = rt_run_ >= P.retry_settle_s + 1e-9;
     const bool stall = P.retry_stall_frac > 0 ? moved && v_now < P.retry_stall_frac * av : v_now < 0.05;
-    const bool blk = drv0 && want && stall && rt_phase_ == 0;
+    // landing settle (real robot 2026-10-29): the landing overshoot (0.4-0.85 m/s vs approach 0.14) built x_err +0.19 m
+    // and a negative slope integrator -> v_ref 0.03-0.05, the robot crept below the stall line and 'blocked -> back off'
+    // fired on flat ground 1-2 s after the landing (re-run, jump refused at 0.64-0.78 m/s, fell). No block, no 'moved'
+    // credit, no catch-up (x_err / v_i below) for retry_land_settle_s after a landing.
+    const bool settle = t - t_jend_ < P.retry_land_settle_s;
+    if (settle) {rt_run_ = 0.0;}
+    const bool blk = drv0 && want && stall && rt_phase_ == 0 && !settle;
     blk_t_ = blk ? blk_t_ + kDt : 0.0;
     if (blk_t_ >= P.retry_block_s) {rt_x_ = odo_; rt_phase_ = 1; blk_t_ = 0.0;}          // blocked: remember where
     if (rt_phase_ == 1) {
@@ -194,6 +200,7 @@ Output WBCore::step(const Frame & f, double vx, double wz, double h_ref, double 
     x_err = x_err_ * (1.0 - P.x_leak_moving * kDt);   // driving: forget a big catch-up in 1/x_leak s
   }
   x_err = clip(x_err + (v_now - v_ref) * kDt, -0.3, 0.3);
+  if (P.jump_retry && t - t_jend_ < P.retry_land_settle_s) {x_err = 0.0; v_i = 0.0; v_ref = g_ref;}   // landing settle (see the block test)
   double th_ref = ph == kRetract ? P.retract_lean * M_PI / 180.0 : 0.0;   // lean forward while crouching
   if (P.lean_ff > 0 && ph == kDrive) {th_ref += P.lean_ff * std::atan(g_acc / 9.81);}   // lean for the reference accel
   const double tau_w = lqr_torque(l_p, x_err, v_now - v_ref, th - th_ref, thd);
