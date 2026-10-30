@@ -1,319 +1,257 @@
-# PERSEVERANCE Gen2 (C-WANG) — 4절 링크 바퀴형 이족 로봇
-**두 바퀴로 균형을 잡고, 다리를 늘였다 줄여 험지를 달리고, 점프로 턱을 넘는다.**
+# PERSEVERANCE Gen2 (C-WANG)
 
-> 🥈 **제4회 제2작전사령관배 드론봇 전투경연대회 — 로봇 2등 (민간부)**, 팀 AXIS (2026-10-28 ~ 29, 경상북도지사상).
-> 지정한 전투원 1 명을 마커 없이 카메라로 따라가며, 미끄러운 합판 계단 (1 일차 6 cm / 2 일차 8 cm) 을 점프로 넘었다.
+4절 링크 다리를 가진 바퀴형 이족 로봇입니다. 두 바퀴로 균형을 잡고, 다리 길이를 바꿔 가며 험지를 달리고, 턱은 점프로 넘습니다.
+
+**제4회 제2작전사령관배 드론봇 전투경연대회 로봇 2등 (민간부, 경상북도지사상)** — 2026.10.28~29, 팀 AXIS
+지정한 전투원 한 명을 마커 없이 카메라로 따라가면서, 미끄러운 합판 계단(1일차 6cm, 2일차 8cm)을 점프로 올라갔습니다.
 
 ![ROS 2 Jazzy](https://img.shields.io/badge/ROS%202-Jazzy-22314E?logo=ros)
 ![Isaac Lab 2.3.2](https://img.shields.io/badge/Isaac%20Lab-2.3.2-76B900?logo=nvidia)
 ![Jetson Orin Nano](https://img.shields.io/badge/Jetson-Orin%20Nano-76B900?logo=nvidia)
-![Control 200 Hz](https://img.shields.io/badge/control-200%20Hz-1f6f8b)
-![Award](https://img.shields.io/badge/%F0%9F%A5%88%202nd%20place-%EC%A0%9C2%EC%9E%91%EC%A0%84%EC%82%AC%EB%A0%B9%EA%B4%80%EB%B0%B0%20%EB%93%9C%EB%A1%A0%EB%B4%87%20%EC%A0%84%ED%88%AC%EA%B2%BD%EC%97%B0%EB%8C%80%ED%9A%8C%202026-c0c0c0)
-![Status](https://img.shields.io/badge/status-active%20research-orange)
 
 <p align="center">
-  <img src="docs/media/real_step_jump.gif" width="45%" alt="실기 10 cm 턱 점프">
-  <img src="docs/media/real_curb_leaves.gif" width="26.5%" alt="실기 야외 낙엽·연석 내려가기">
-  <img src="docs/media/real_grass_turn.gif" width="26.5%" alt="실기 잔디 주행·회전">
+  <img src="docs/media/real_step_jump.gif" width="45%" alt="10cm 턱 점프">
+  <img src="docs/media/real_curb_leaves.gif" width="26.5%" alt="낙엽 깔린 연석 내려가기">
+  <img src="docs/media/real_grass_turn.gif" width="26.5%" alt="잔디 주행">
 </p>
 
----
+## 개요
 
-## 📖 목차 (Table of Contents)
-- [프로젝트 소개](#-프로젝트-소개-about-the-project)
-- [주요 기능](#-주요-기능-key-features)
-- [대회 결과](#-대회-결과-competition)
-- [결과](#-결과-results)
-- [폴더 구조](#-폴더-구조-directory-structure)
-- [시작하기](#-시작하기-getting-started)
-- [사용법](#-사용법-usage)
-- [기여하기](#-기여하기-contributing)
-- [문서](#-문서-documentation)
-- [라이선스](#-라이선스-license)
-- [Contributors](#-contributors)
-- [Contact](#-contact)
+연구 주제는 **LQR과 가상 모델 제어(VMC)를 이용한 4절 링크 바퀴형 이족 로봇의 균형 및 주행 제어**입니다.
 
----
+바퀴는 평지에서 빠르지만 턱을 못 넘고, 다리는 턱을 넘지만 느립니다. 바퀴 달린 다리는 둘의 장점을 합칠 수 있지만, 다리 길이가 계속 바뀌는 역진자를 세운 채로 점프까지 해야 합니다. 이 프로젝트에서 확인하고 싶었던 건 세 가지입니다.
 
-## 🚀 프로젝트 소개 (About The Project)
+1. 다리 길이가 바뀌어도 이득 스케줄 LQR 하나로 균형과 주행이 되는지
+2. 다리(높이·롤)와 바퀴(균형·회전)를 VMC로 나눠 맡겨도 험지나 점프에서 서로 간섭하지 않는지
+3. 시뮬레이션에서 고른 제어기가 실기의 지연, 백래시, 모터 출력 손실 아래에서도 버티는지, 버티지 못한다면 무엇 때문인지
 
-**LQR 과 가상 모델 제어(VMC)를 이용한 4절 링크 바퀴형 이족 로봇의 균형 및 주행 제어**
-*Balance and locomotion control of a wheeled bipedal robot with four-bar legs using LQR and virtual model control.*
+제어기는 `wbctrl.py` 하나를 시뮬레이션에서 설계·검증하고, 같은 내용을 C++(`wb_core`)로 옮겨 로봇에서 돌립니다. 점프 파라미터는 실기 로그에 맞춰 보정한 시뮬레이션 위에서 CMA-ES로 찾았습니다.
 
-**배경.** 바퀴는 평지에서 빠르고 효율적이지만 턱·계단을 못 넘고, 다리는 넘을 수 있지만 느리고 복잡하다.
-바퀴 달린 다리는 둘을 합치지만, 다리 길이가 계속 바뀌는 역진자를 균형 잡으면서 점프까지 해야 한다.
-이 로봇은 사람 추종 보급 로봇 대회 — **2026 제2작전사령관배 드론봇 전투경연대회** (계단 6 / 8 cm, 웨이브 12 / 14°, 지정 1 인 추종, 수신호, 미로) — 를 목표로 만들었고, **로봇 2등 (민간부)** 을 했다.
-
-**풀려는 문제.**
-1. **4절 링크 다리 + 바퀴** 구조에서, 다리 길이가 바뀌어도 하나의 선형 제어기(이득 스케줄 LQR)로 균형·주행이 되는가?
-2. 다리(높이·롤)와 바퀴(균형·회전)를 **VMC 로 나눠** 맡겨도 험지·점프에서 서로 방해하지 않는가?
-3. 시뮬레이션에서 고른 제어기가 **실기의 지연·백래시·모터 출력 손실** 아래에서도 같은 성능을 내는가 — 무엇이 차이를 만드는가?
-
-**접근.** 제어기 **하나** (`wbctrl.py`) 를 시뮬레이션에서 설계·검증하고, 그 규격을 그대로 C++ 로 옮겨 실기에서 돌린다.
-점프 파라미터는 실기 로그에 맞춘 시뮬 플랜트 위에서 CMA-ES 로 고른다.
-
-| 거친 지형 (돌·물결, 최대 6 cm) | 최고 속도 지그재그 (3.5 km/h) | 8 cm 턱 두 번 점프 |
+| 거친 지형 (돌·물결, 최대 6cm) | 최고 속도 지그재그 (3.5km/h) | 8cm 턱 두 번 점프 |
 |---|---|---|
 | ![rough](docs/media/sim_rough.gif) | ![steer](docs/media/sim_steer.gif) | ![jump](docs/media/sim_jump.gif) |
 
-<sub>Isaac Lab, 실시간 1×. 실기와 같은 제어기, 실측 바퀴 마찰·모델 오차·센서 잡음 포함 (`pv demo <scene> --record`).</sub>
+<sub>Isaac Lab, 실시간 속도. 실기와 같은 제어기에 실측 바퀴 마찰, 모델 오차, 센서 잡음을 넣은 상태입니다.</sub>
 
-### 로봇
+## 하드웨어
 
 | 항목 | 사양 |
 |---|---|
-| 질량 | 4.17 kg (URDF 전체) [계산] |
-| 다리 | 4절 링크 ×2, 고관절 **CubeMars AK60-6 V3.0** (MIT 모드). 다리 높이 h 0.1225 – 0.2425 m (고관절~바퀴 중심 0.19 – 0.31 m) |
-| 바퀴 | **CubeMars AK45-10** 직결 ×2 (legacy MIT 모드), 반지름 70 mm, 바퀴 간격 ≈ 198 mm, 바퀴 72.5 g (고무 16.5 g) [측정] |
-| 컴퓨터 | Jetson Orin Nano 8 GB · Ubuntu 24.04 · ROS 2 Jazzy · Cyclone DDS |
-| 센서 | iAHRS IMU (500 Hz), RPLIDAR C1, IMX219 광각 카메라 (어안 보정 가로 124°, 1640×1232 전체 화각 모드), NEO-M8N GNSS + 지자기, PM02 전력계 ×2 (ESP32-C3 센서 허브) |
-| 버스 | CAN 1 Mbit/s (모터 4 개), 제어 200 Hz |
+| 질량 | 4.17kg |
+| 다리 | 4절 링크 2개, 고관절 CubeMars AK60-6 V3.0 (MIT 모드). 다리 높이 0.1225~0.2425m |
+| 바퀴 | CubeMars AK45-10 직결 2개, 반지름 70mm, 좌우 간격 약 198mm |
+| 컴퓨터 | Jetson Orin Nano 8GB, Ubuntu 24.04, ROS 2 Jazzy, Cyclone DDS |
+| 센서 | iAHRS IMU (500Hz), RPLIDAR C1, IMX219 광각 카메라 (어안 보정 후 가로 124°), NEO-M8N GNSS, PM02 전력계 2개 (ESP32-C3 센서 허브) |
+| 통신 | CAN 1Mbit/s (모터 4개), 제어 주기 200Hz |
 
 <p align="center">
-  <img src="docs/media/robot_cad_front.png" height="320" alt="PERSEVERANCE Gen2 CAD, 정면">
-  <img src="docs/media/robot_cad_inside.png" height="320" alt="PERSEVERANCE Gen2 CAD, 전장부">
+  <img src="docs/media/robot_cad_front.png" height="320" alt="CAD 정면">
+  <img src="docs/media/robot_cad_inside.png" height="320" alt="CAD 전장부">
 </p>
-<p align="center"><sub>CAD — 왼쪽: 정면, 오른쪽: 전장부.</sub></p>
 
-CAD (Onshape) → URDF + 폐루프 관절 → Isaac Sim 5.1. 4절 링크 치수는 계단 등반 조건을 목적함수로 최적화했다 ([하드웨어 ① CAD](docs/lab-meeting/hardware/01_cad.md)).
+Onshape에서 설계한 CAD를 URDF(폐루프 관절 포함)로 뽑아 Isaac Sim 5.1에 넣었습니다. 4절 링크 치수는 계단을 오를 수 있는지를 목적함수로 두고 최적화했습니다. 자세한 내용은 [CAD 문서](docs/lab-meeting/hardware/01_cad.md)에 있습니다.
 
-## ✨ 주요 기능 (Key Features)
+## 제어 구조
 
 ```mermaid
 flowchart LR
-  IMU["IMU<br/>pitch·roll·각속도"] --> EST["상태 추정<br/>θ, θ̇, x, v"]
+  IMU["IMU"] --> EST["상태 추정<br/>θ, θ̇, x, v"]
   ENC["바퀴 엔코더"] --> EST
-  EST --> LQR["바퀴 LQR<br/>K(l) 다리 길이 스케줄"]
-  CMD["조종 vx, wz, 높이"] --> LQR
-  CMD --> YAW["회전 PI<br/>좌우 차동 토크"]
-  LQR --> WHL["바퀴 토크 ×2"]
+  EST --> LQR["바퀴 LQR<br/>다리 길이별 이득"]
+  CMD["조종 명령<br/>vx, wz, 높이"] --> LQR
+  CMD --> YAW["회전 PI"]
+  LQR --> WHL["바퀴 토크"]
   YAW --> WHL
   CMD --> VMC["다리 VMC<br/>높이 + 롤 PI + 자중 보상"]
   EST --> VMC
-  VMC --> HIP["고관절 토크 ×2"]
-  JMP["점프 상태기계<br/>웅크림→신전→비행→착지"] -.-> VMC
+  VMC --> HIP["고관절 토크"]
+  JMP["점프 상태기계"] -.-> VMC
   JMP -.-> WHL
 ```
 
-* **바퀴 LQR** — 상태 [진행거리 x, 속도 v, 진자각 θ, 각속도 θ̇], 가상 다리 길이 l 0.12 – 0.40 m 에서 미리 푼 이득 표를 보간.
-* **다리 VMC** — 4절 링크 자코비안으로 가상 다리 힘 → 고관절 토크. 높이 추종, 롤 수평 PI, 자중 피드포워드.
-* **점프** — 6 단계 상태기계, 공중에서는 바퀴를 반작용 휠로 써서 몸통 pitch 를 잡는다 ([규격](comms/to-robot/attachments/jump_state_machine.md)).
-  파라미터 (웅크림 시간·신전 자세·공중 게인·착지 판정 등) 는 시뮬 2048 대 병렬 CMA-ES 로 고르고, 점수는 성공률 − 넘어짐 − 착지 벌점 (다리 바닥 닿음·바퀴 하중·착지 pitch·착지 뒤 후진).
-* **턱 감지 모드** — 천천히 다가가 막히면 (바퀴가 멈춤) 일정 거리 물러났다가 다시 가속해 스스로 점프한다. 조종자는 앞으로 밀기만 하면 되고, 스틱을 놓으면 취소.
-* **경사 보상** — 정상 주행 중 속도 오차를 적분해 속도 목표를 올린다 (경사로·바퀴 손실 보상).
-* **하나의 제어기 원칙** — 시뮬 창 (1 대) · 시험 세트 (수십 대) · 가혹 평가 (4096 대) 가 모두 같은 [`wbctrl.py`](sim/isaaclab/scripts/wbctrl.py) (로봇 N 대 배열) 를 쓰고, 실기 [`wb_core`](src/gen2_control/src/wb_core.cpp) 는 그 C++ 이식이다 (골든 테스트로 출력 일치 확인).
-* **사람 추종 (카메라 우선)** — YOLO11n-pose (TensorRT) → ByteTrack → OSNet ReID 갤러리 + 사라진 방위 게이트로 **지정한 1 명**만 따라간다 (같은 군복이어도). 거리는 사람 상자 안의 LiDAR 군집, 없으면 발 픽셀의 지면 투영 (어안 보정). 가려지면 사라진 곳으로 가서 찾고 (EXPLORE), 앞 LiDAR 정지·미로 모퉁이는 Nav2 로 돈다. 최고 0.7 m/s. [`person_tracker`](src/gen2_tools/gen2_tools/person_tracker.py) · [`person_follow_cam`](src/gen2_tools/gen2_tools/person_follow_cam.py)
-* **자동 턱** — 따라가는 중 보정된 영상에서 턱 선을 찾아 (`step_watch`) 1.5 m 에서 감속, 0.5 m 에서 턱 감지 모드로 바꿔 스스로 점프하고, 마지막 착지 1.3 m 뒤 추종으로 돌아온다 ([`auto_step`](src/gen2_tools/gen2_tools/auto_step.py)).
-* **수신호** — MediaPipe 손 모양 + 멀리서는 몸 자세 (한 팔 위 = 정지, 두 팔 벌림 = 재개) 로 정지·재시작만 ([`gesture_node`](src/gen2_tools/gen2_tools/gesture_node.py), 대회 규정).
-* **점프 세트 전환** — `gen2_tune.sh <세트>` 가 `balance_tune_<세트>.yaml` 을 마지막 파라미터로 얹는다 (기본 / 합판 / 12 N·m). 관제 GUI 에서 턱 재질별로 고른다.
-* **관제** — 패드 조종, HUD (턱 감지 모드 STEP 배지), 상태판, SLAM 을 데스크톱·관제 노트북에서. 판단·주행은 전부 젯슨이라 Wi-Fi 가 끊겨도 로봇은 안전하게 멈춘다.
+- **바퀴 LQR**: 상태는 진행 거리, 속도, 진자각, 각속도 네 개입니다. 가상 다리 길이 0.12~0.40m 구간에서 미리 풀어 둔 이득 표를 보간해서 씁니다.
+- **다리 VMC**: 4절 링크 자코비안으로 가상 다리 힘을 고관절 토크로 바꿉니다. 높이 추종, 롤 수평 PI, 자중 피드포워드가 들어갑니다.
+- **점프**: 웅크림, 신전, 비행, 착지 등 6단계 상태기계입니다. 공중에서는 바퀴를 반작용 휠처럼 써서 몸통 pitch를 잡습니다([규격](comms/to-robot/attachments/jump_state_machine.md)). 파라미터는 시뮬레이션에서 로봇 2048대를 동시에 돌려 CMA-ES로 골랐습니다.
+- **턱 감지 모드**: 천천히 다가가다 바퀴가 막히면 조금 물러났다가 다시 달려서 점프합니다. 조종하는 사람은 앞으로 밀기만 하면 되고, 스틱을 놓으면 취소됩니다.
+- **사람 추종**: YOLO11n-pose(TensorRT), ByteTrack, OSNet ReID를 묶어서 지정한 한 명만 따라갑니다. 옷이 같은 사람이 섞여도 놓치지 않게, 사라진 방향을 기준으로 다시 찾습니다. 거리는 사람 영역 안의 LiDAR 점으로 재고, LiDAR가 안 잡히면 발 위치를 바닥에 투영해서 구합니다. 장애물과 미로 모퉁이는 Nav2로 돌아갑니다. 최고 0.7m/s.
+- **자동 턱 넘기**: 따라가는 중에 카메라 영상에서 턱 선을 찾으면 1.5m 앞에서 속도를 줄이고, 0.5m 앞에서 턱 감지 모드로 바꿔 스스로 넘습니다.
+- **수신호**: 대회 규정대로 정지와 재시작만 씁니다. 가까이서는 손 모양, 멀리서는 몸 자세(한 팔 위로 들기 = 정지, 두 팔 벌리기 = 재개)로 판단합니다.
+- **점프 세트 전환**: `gen2_tune.sh <세트>`로 기본, 합판, 12N·m 세트를 바꿉니다. 관제 GUI에서도 고를 수 있습니다.
 
-## 🏆 대회 결과 (Competition)
+모든 판단과 주행은 Jetson에서 하기 때문에 Wi-Fi가 끊겨도 로봇은 멈춰서 균형을 유지합니다.
 
-**제4회 제2작전사령관배 드론봇 전투경연대회 — 로봇 2등 (민간부), 팀 AXIS** (2026-10-28 ~ 29, 경상북도지사상). 1 위는 4 족 로봇개 팀.
+## 대회
 
-| 미션 | 내용 | 우리 로봇이 쓴 것 |
+제4회 제2작전사령관배 드론봇 전투경연대회에 나가 로봇 부문 2등(민간부)을 했습니다. 1등은 4족 보행 로봇 팀이었습니다.
+
+| 미션 | 내용 | 대응 |
 |---|---|---|
-| 1 험지 | 추종하며 2 단 계단 (1 일차 6 cm, 2 일차 8 cm, **합판**) · 좌우 웨이브 12 / 14° | 턱 감지 점프 + 자동 턱, 합판 점프 세트, 롤 PI |
-| 2 다중객체추적 | 전투원 2 명 중 **지정한 1 명**만 추종 + 상자 회피 | ReID 갤러리 + 방위 게이트, LiDAR 정지, Nav2 |
-| 3 수신호 | Hold Point 정지 → 재추종 | 손 모양 + 몸 자세 (정지·재개만) |
-| 4 복합경로 | 미로형 통로 추종 + 회피, 주행 시간 | 모퉁이 Nav2, 가려짐 탐색 |
+| 험지 | 사람을 따라가며 2단 계단(6cm / 8cm, 합판), 좌우 웨이브(12° / 14°) 통과 | 턱 감지 점프, 자동 턱 넘기, 합판용 점프 세트, 롤 제어 |
+| 다중 객체 추적 | 두 명 중 지정한 한 명만 따라가기, 상자 피하기 | ReID + 방향 기준 재탐색, LiDAR 정지, Nav2 |
+| 수신호 | 정지 지점에서 멈췄다가 다시 따라가기 | 손 모양 + 몸 자세 |
+| 복합 경로 | 미로형 통로, 주행 시간 측정 | 모퉁이 Nav2, 가려졌을 때 탐색 |
 
-규정: 마커 금지 (사람 자체를 추종), 수신호는 정지·재시작에만.
+규정상 마커는 쓸 수 없어서 사람 자체를 인식해야 했고, 수신호는 정지와 재시작에만 쓸 수 있었습니다.
 
-### 합판 턱 — 대회 중 튜닝 (2026-10-28 ~ 29) [측정, 시뮬 2048 판]
-1 일차 합판 계단은 미끄러워 2 단째 착지에서 앞으로 고꾸라졌다 (6 cm 1 단만 성공). 그날 밤 턱 마찰을 낮춘 시뮬 (`jump_rl.py --box_mu`, 바퀴 0.5–0.8 × 턱 0.7) 에서 착지·턱 감지 파라미터를 CMA-ES 로 다시 골라 2 일차 (8 cm) 에 **합판 세트 v4** 로 나갔다.
+### 합판 계단 대응
 
-| 2 단 8 cm 성공률 | 턱 마찰 0.5 | 0.7 (합판) | 1.0 |
+1일차 계단이 미끄러운 합판이라 2단째 착지에서 앞으로 넘어졌습니다(6cm 1단만 성공). 그날 밤 시뮬레이션에서 턱 마찰을 낮춰(바퀴 0.5~0.8 × 턱 0.7) 착지와 턱 감지 파라미터를 다시 찾았고, 2일차(8cm)는 이 합판 세트로 나갔습니다.
+
+| 2단 8cm 성공률 (시뮬 2048회) | 턱 마찰 0.5 | 0.7 (합판) | 1.0 |
 |---|---|---|---|
-| 기본 세트 | 0.5 % | 35.2 % | 73.5 % |
-| 합판 v1 (착지 13 키) | 17.3 % | 58.4 % | 58.4 % |
-| 합판 v3 (+ 후진·재진입·발사 4 키) | 23.2 % | 67.3 % | 86.9 % |
-| **합판 v4** (+ 착지 시간·다리 강성, 19 키) | **31.5 %** | **72.0 %** | **89.2 %** |
+| 기본 세트 | 0.5% | 35.2% | 73.5% |
+| 합판 v1 (착지 13개) | 17.3% | 58.4% | 58.4% |
+| 합판 v3 (+ 후진·재진입·발사 4개) | 23.2% | 67.3% | 86.9% |
+| **합판 v4** (+ 착지 시간·다리 강성, 19개) | **31.5%** | **72.0%** | **89.2%** |
 
-착지 pitch −15° → −7°, 착지 바퀴 하중 ~440 N. 남은 실패는 착지 뒤 앞으로 미끄러지는 것 (마찰 한계). 기록: [`sim/isaaclab/runs/2026-10-28_plywood`](sim/isaaclab/runs/2026-10-28_plywood/README.md), 세트: [`balance_tune_plywood.yaml`](src/gen2_control/config/balance_tune_plywood.yaml).
+착지 순간 pitch가 -15°에서 -7°로 줄었습니다. 남은 실패는 대부분 착지 직후 앞으로 미끄러지는 경우라 마찰 자체의 한계로 보고 있습니다. 기록은 [`sim/isaaclab/runs/2026-10-28_plywood`](sim/isaaclab/runs/2026-10-28_plywood/README.md), 세트 파일은 [`balance_tune_plywood.yaml`](src/gen2_control/config/balance_tune_plywood.yaml)입니다.
 
-## 📊 결과 (Results)
+## 결과
 
-수치 표기: **[측정]** 시뮬·실기에서 잰 값 / **[설정]** 코드 값 / **[계산]** 식으로 낸 값.
+### 시뮬레이션
 
-### 시뮬레이션 — 이상적 플랜트 (5 ms 지연, 서보 바퀴 데드밴드 + 보상)
-로봇마다 질량 ±15 %, 무게중심 ±2 cm, 센서 잡음·바이어스를 무작위로 넣었다 [측정, 확장요약문].
+로봇마다 질량 ±15%, 무게중심 ±2cm, 센서 잡음과 바이어스를 무작위로 넣고 평가했습니다(지연 5ms 기준).
 
 | 평가 | 성공 |
 |---|---|
-| 험지 9 종, 4096 대 × 20 s | **98.9 %** |
-| 시나리오 11 종 (정지·회전·턱·경사·점프·밀기 등) 176 회 | **167 / 176** |
+| 험지 9종, 4096대 × 20초 | 98.9% |
+| 시나리오 11종 (정지, 회전, 턱, 경사, 점프, 밀기 등) | 167 / 176 |
 
-### 실기 — 균형·주행 (2026-10-08) [측정]
-- 손 안 대고 10 – 20 s 균형, 0.1 m/s 전후진.
-- 제자리 회전: 명령 ±0.5 / ±1.0 rad/s → +0.49 / −0.51 / +1.03 / −1.00 rad/s (회전 적분 추가 후).
-- 롤 PI (0.5 / 3 / 0): 평지·옆 밀기·한쪽 바퀴 경사로에서 진동 없음.
-- 루프: 200 Hz, 주기 중앙 5.00 ms (p99 5.02). 보낸 바퀴 토크 → 응답 토크 지연 **10 ms**, 바퀴 상태 나이 4.1 ms.
+### 실기 균형·주행 (2026.10.08)
 
-### 실기 — 점프 [측정]
+- 손 대지 않고 10~20초 균형, 0.1m/s 전후진
+- 제자리 회전: 명령 ±0.5 / ±1.0rad/s에 대해 +0.49 / -0.51 / +1.03 / -1.00rad/s
+- 롤 PI: 평지, 옆에서 밀기, 한쪽 바퀴만 경사로에서 진동 없음
+- 제어 주기 5.00ms(p99 5.02ms), 바퀴 토크 명령에서 응답까지 지연 10ms
+
+### 실기 점프
+
 | 날짜 | 조건 | 결과 |
 |---|---|---|
-| 10-14 | 평지, CMA 7 묶음, 고관절 명령 상한 8.1 N·m | 20 회 중 15 회 성공, 바퀴 높이 ≈ 5.6 cm |
-| 10-15 | 평지, CMA 11 묶음, 상한 12 N·m | 넘어짐 없음 (조작 실수 제외) |
-| 10-23 – 24 | 10 cm 턱, 상한 15 N·m, 턱 감지 모드 자동 12 회 + 수동 2 회 | 막힘 판정·후진·재가속 오판 없음. 착지 pitch **−15 … −23°** (중간 −19°) 로 뒤로 젖혀진 채 후진 (중간 −0.78 m/s) |
+| 10.14 | 평지, 고관절 명령 상한 8.1N·m | 20회 중 15회 성공, 바퀴 높이 약 5.6cm |
+| 10.15 | 평지, 상한 12N·m | 넘어짐 없음 (조작 실수 제외) |
+| 10.23~24 | 10cm 턱, 상한 15N·m, 턱 감지 모드 14회 | 막힘 판정, 후진, 재가속 모두 정상. 다만 착지 pitch가 -15~-23°로 뒤로 젖혀진 채 후진 |
 
-실기에서 드라이브는 명령보다 적게 낸다 — 바퀴 0.83 배, 고관절은 점프 신전 때 명령의 약 35 % (전류 기준). 이 값들을 시뮬 플랜트에 넣은 뒤에야 시뮬이 실기 실패를 재현했다.
+실기 모터는 명령보다 힘을 덜 냅니다. 바퀴는 명령의 0.83배, 고관절은 점프로 다리를 펼 때 명령의 약 35%(전류 기준)였습니다. 이 값을 시뮬레이션에 넣고 나서야 실기에서 실패한 장면이 시뮬레이션에서도 똑같이 재현됐습니다.
 
-<details><summary>대회 전 과제 (2026-10-24) — 착지 젖혀짐</summary>
+<details><summary>대회 전: 착지할 때 뒤로 젖혀지는 문제 (2026.10.24)</summary>
 
-
-대회 2 단 계단 (6 / 8 cm) 에서 턱 감지 모드는 이상 플랜트 시뮬 97 – 99 % 였지만, 실기 로그로 플랜트를 다시 맞추자 (고관절 신전 105 ms, 경사 보상, 재가속 속도 실기 수준) 착지 pitch −16° 로 실기와 같은 젖혀짐이 나왔다 [측정, 2048 판씩]:
+이상적인 시뮬레이션에서는 2단 계단 성공률이 97~99%였지만, 실기 로그로 시뮬레이션을 보정하자(고관절 신전 105ms, 경사 보상, 실기 수준의 재가속 속도) 실기와 똑같이 착지 pitch -16°로 젖혀지는 현상이 나왔습니다.
 
 | 코스 | 성공 | 넘어짐 |
 |---|---|---|
-| 2 단 8 cm | 74.4 % | 25.2 % |
-| 단 10 cm | 87.5 % | 12.5 % |
-| 단 12 cm | 83.3 % | 15.3 % |
+| 2단 8cm | 74.4% | 25.2% |
+| 단 10cm | 87.5% | 12.5% |
+| 단 12cm | 83.3% | 15.3% |
 
-→ 같은 실기 플랜트에서 착지 파라미터를 CMA-ES 로 다시 골랐다 (목적함수에 착지 pitch·착지 뒤 후진 벌점). 이 흐름이 대회 중 합판 세트로 이어졌다.
+같은 조건에서 착지 파라미터를 다시 찾았고(착지 pitch와 착지 후 후진에 벌점), 이 작업이 대회 중 합판 세트로 이어졌습니다.
 
 </details>
 
-<details><summary>이전 과제 (2026-10-08) — 제어 지연</summary>
+<details><summary>그 이전: 제어 지연 (2026.10.08)</summary>
 
-시뮬 기본값을 실기 측정값 (MIT 바퀴, 지연 10 + 5 ms, 감속기 백래시 0.3°, 고관절 MIT 구조) 으로 바꾸고 제어 이득은 이상값 그대로 두었을 때 [측정, 88 대]:
+시뮬레이션을 실측값(지연 10+5ms, 감속기 백래시 0.3°, 실기 고관절 구조)으로 바꾸고 이득은 그대로 두었을 때, 88대 중 성공 수입니다.
 
-| 플랜트 | 성공 |
+| 조건 | 성공 |
 |---|---|
-| 실기 플랜트 (현재 기본) | 48 / 88 |
-| ↳ 지연만 이상값 (5 ms) | **69 / 88** |
-| ↳ 백래시만 끔 | 52 / 88 |
-| ↳ 고관절만 이상 PD | 50 / 88 |
+| 실기 조건 그대로 | 48 / 88 |
+| 지연만 이상값(5ms)으로 | 69 / 88 |
+| 백래시만 끔 | 52 / 88 |
+| 고관절만 이상 PD | 50 / 88 |
 | 전부 이상값 | 67 / 88 |
 
-→ 성능 차이의 대부분은 **제어 지연 (5 → 10 ms)** 에서 온다. 다음 단계는 지연에 강건한 이득 (후보 C: K(0.2) = [−1.73, −2.80, −12.93, −1.64], 지연·백래시 모델에서 93/96) 과 무게중심 오차 민감도 개선, 그리고 실기 θ̇ 이득에서 보이는 15 Hz 바퀴 떨림의 원인 규명이었다.
+성능 차이 대부분은 제어 지연(5ms에서 10ms로)에서 왔습니다.
 
 </details>
 
-## 📁 폴더 구조 (Directory Structure)
+## 폴더 구조
+
 ```text
-📦 perseverance
- ┣ 📂 sim                    시뮬·설계 (데스크톱)
- ┃ ┣ 📂 isaaclab/scripts     wbctrl.py (제어기 규격), climb_test.py (TUNE 블록 = 모든 파라미터),
- ┃ ┃                         robust_suite.py, harsh_eval.py, 점프 CMA-ES jump_rl.py, roll_cma.py, gain_cma.py
- ┃ ┣ 📂 isaaclab/runs        대회 튜닝 기록 (합판 점프 세트 CMA 스크립트·인자·결과)
- ┃ ┣ 📂 model                URDF, LQR·4절 링크 표 (balance_tables*.yaml), 발자국·센서 위치
- ┃ ┗ 📂 control              VMC + LQR 게인 설계
- ┣ 📂 src                    ROS 2 패키지 (젯슨)
- ┃ ┣ 📂 gen2_control         balance_node (200 Hz), wb_core (wbctrl 의 C++ 이식)
- ┃ ┣ 📂 gen2_hardware        SocketCAN, CubeMars AK 코덱
- ┃ ┣ 📂 gen2_sensor_hub      ESP32-C3 센서 허브 드라이버
- ┃ ┣ 📂 gen2_camera          IMX219 → 압축 영상
- ┃ ┣ 📂 gen2_status_display  SPI LCD 상태 화면
- ┃ ┣ 📂 gen2_tools           pad_teleop, cmd_mux, 사람 추종 (person_tracker, person_follow_cam, tracking_core),
- ┃ ┃                         자동 턱 (step_watch, auto_step), 수신호 (gesture_node), 시험·보정 도구
- ┃ ┗ 📂 gen2_bringup         launch, Cyclone DDS 설정, systemd 유닛
- ┣ 📂 tools
- ┃ ┣ 📂 gcs                  관제 노트북 GUI (프리셋·점프 세트·추종 파라미터)·설치 스크립트
- ┃ ┣ 📂 robot                추종 스택 실행 (run_follow_cam.sh), 카메라 보정 camera_cal.yaml, 모델
- ┃ ┗ 📂 desktop              데스크톱 HUD (어안 보정·수평선·발 목표선·STEP 배지), 대시보드, RViz 설정
- ┣ 📂 firmware               ESP32 센서 허브 펌웨어
- ┣ 📂 system                 젯슨 systemd·네트워크·udev 설정
- ┣ 📂 logs                   실기 기록 CSV (200 Hz 스텝 기록)
- ┣ 📂 comms                  데스크톱 ↔ 젯슨 ↔ 관제 에이전트 우편함 (메시지 하나 = 파일 하나)
- ┣ 📂 docs                   랩미팅 자료, 확장요약문, 운용 흐름, 벤치 문서, 공급사 문서
- ┗ 📜 README.md
+perseverance
+├── sim                      시뮬레이션·설계 (데스크톱)
+│   ├── isaaclab/scripts     wbctrl.py (제어기), climb_test.py (전체 파라미터), 평가·CMA-ES 스크립트
+│   ├── isaaclab/runs        대회 중 튜닝 기록
+│   ├── model                URDF, LQR·4절 링크 표
+│   └── control              VMC + LQR 이득 설계
+├── src                      ROS 2 패키지 (Jetson)
+│   ├── gen2_control         balance_node (200Hz), wb_core
+│   ├── gen2_hardware        SocketCAN, CubeMars AK 프로토콜
+│   ├── gen2_sensor_hub      ESP32-C3 센서 허브 드라이버
+│   ├── gen2_camera          IMX219 영상
+│   ├── gen2_status_display  LCD 상태 화면
+│   ├── gen2_tools           조종, 사람 추종, 자동 턱 넘기, 수신호, 시험 도구
+│   └── gen2_bringup         launch, DDS 설정, systemd
+├── tools                    관제 노트북 GUI, 추종 실행 스크립트, 데스크톱 HUD
+├── firmware                 ESP32 센서 허브 펌웨어
+├── system                   Jetson 시스템 설정
+├── logs                     실기 기록 (200Hz)
+├── comms                    데스크톱·로봇·관제 노트북 사이 작업 기록
+└── docs                     랩미팅 자료, 확장요약문, 운용 문서
 ```
 
-## ⚙️ 시작하기 (Getting Started)
+## 실행
 
-### 사전 요구사항 (Prerequisites)
-| 기기 | 환경 |
-|---|---|
-| 로봇 | Jetson Orin Nano 8 GB, Ubuntu 24.04, ROS 2 Jazzy, Cyclone DDS, CAN (can0 1 Mbit/s) |
-| 시뮬 (데스크톱) | Ubuntu 22.04, RTX GPU, Isaac Sim 5.1 + Isaac Lab 2.3.2 |
-| 조종 (데스크톱) | ROS 2 Humble + Cyclone DDS, 도메인 42, 게임패드 |
-| 관제 노트북 | Ubuntu 24.04, ROS 2 Jazzy |
+**로봇 (Jetson)**: 빌드와 모터 시험은 [실기 문서](docs/robot_bench.md), 전원 켜는 순서는 [운용 흐름](docs/operation_flow.md)을 참고하세요.
 
-### 설치 및 실행 (Installation)
-```bash
-# 저장소 복제
-git clone https://github.com/AkimaraYouki/perseverance.git ~/perseverance
-```
-
-**로봇 (젯슨)** — 빌드·부팅 서비스·모터 시험은 [실기 벤치 문서](docs/robot_bench.md), 전원 → 균형 순서는 [운용 흐름](docs/operation_flow.md).
 ```bash
 cd ~/gen2_ws && source /opt/ros/jazzy/setup.bash
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
-colcon test && colcon test-result --verbose
-ros2 launch gen2_control balance.launch.py      # balance_node + cmd_mux (부팅 때 자동, 해제 상태)
+ros2 launch gen2_control balance.launch.py
 ```
 
-**관제 노트북** — 설치 스크립트 하나 (일반 Wi-Fi 에서, 10 – 20 분). 자세한 순서는 [`tools/gcs`](tools/gcs/README.md).
+**관제 노트북**: [`tools/gcs`](tools/gcs/README.md)
+
 ```bash
 bash ~/perseverance/tools/gcs/setup_gcs.sh
 ```
 
-**시뮬 (데스크톱)** — Isaac Lab 설치 뒤 `sim/isaaclab` 을 Isaac Lab 프로젝트로 쓴다. 자산 파이프라인은 [시뮬 자산](sim/README.md).
+**시뮬레이션 (데스크톱)**: Isaac Lab 2.3.2를 설치한 뒤 `sim/isaaclab`을 프로젝트로 씁니다. 파라미터는 `climb_test.py` 맨 위에 모여 있습니다.
 
-## 💻 사용법 (Usage)
-
-**시뮬** — 파라미터는 `climb_test.py` 의 TUNE 블록에서 고친다.
 ```bash
-pv demo <scene>        # 창 1 대 (rough, steer, jump …), --record 로 GIF
-pv robust              # 시나리오 11 종 × 8 대
-pv harsh               # 가혹 평가 (수천 대)
+pv demo <scene>   # 한 대 띄워서 보기 (rough, steer, jump ...)
+pv robust         # 시나리오 11종
+pv harsh          # 수천 대 가혹 평가
 ```
 
-**조종 (데스크톱 ROS 2 Humble ↔ 로봇 Jazzy, Cyclone DDS, 도메인 42)**
+**조종**
+
 ```bash
 source ~/gen2_desk/env.sh
-ros2 run joy joy_node --ros-args -p autorepeat_rate:=20.0     # 터미널 1
-ros2 run gen2_tools pad_teleop                                  # 터미널 2
+ros2 run joy joy_node --ros-args -p autorepeat_rate:=20.0
+ros2 run gen2_tools pad_teleop
 ```
 
 | 패드 | 동작 |
 |---|---|
-| START | 시작 (서기 → 균형) |
+| START | 일어서서 균형 |
 | BACK | 앉기 |
 | LB + RB | 비상 해제 |
-| Y | 점프 (0.2 m/s 이상 전진 중) |
-| 십자키 ↑ | 턱 감지 모드 켜기 / 끄기 (켠 뒤 앞으로 밀기만, 스틱 놓으면 취소) |
-| 십자키 ↓ | 추종 중 카메라 자동 턱 켜기 / 끄기 |
+| Y | 점프 (0.2m/s 이상 전진 중) |
+| 십자키 ↑ | 턱 감지 모드 켜기/끄기 |
+| 십자키 ↓ | 따라가는 중 자동 턱 넘기 켜기/끄기 |
 
-**사람 추종 (로봇)** — 카메라 우선 스택. 관제 GUI 에서 켜거나:
+**사람 추종**: 관제 GUI에서 켜거나 직접 실행합니다.
+
 ```bash
-bash ~/perseverance/tools/robot/run_follow_cam.sh     # person_tracker + person_follow_cam (+ Nav2)
-gen2_tune.sh plywood                                  # 점프 세트: plywood | hip12 | default (해제 상태에서)
+bash ~/perseverance/tools/robot/run_follow_cam.sh
+gen2_tune.sh plywood   # 점프 세트: plywood | hip12 | default
 ```
 
-**부호 규약** (전 파일 공통): 전진 +x, 왼쪽 +y (REP-103), 위 +z. θ 는 윗부분이 앞으로 기울면 +. 양의 바퀴 토크 → 전진.
+좌표는 전진 +x, 왼쪽 +y, 위 +z입니다. θ는 몸이 앞으로 기울면 +, 바퀴 토크가 +면 전진입니다.
 
-## 🤝 기여하기 (Contributing)
-데스크톱 (시뮬)·젯슨 (로봇)·관제 노트북이 각자 브랜치에서 작업하고 `main` 으로 합친다.
-1. 브랜치는 담당별로: `desktop/<주제>`, `robot/<주제>`, `gcs/<주제>`.
-2. 제어기 수정은 `wbctrl.py` 한 곳에서 하고, 로봇은 같은 내용을 `wb_core` 로 이식한 뒤 골든 테스트로 일치를 확인한다.
-3. 파라미터는 TUNE 블록 (`climb_test.py`) / `balance.yaml` 에 모으고, 바꿀 때는 이전 값과 근거 (측정·시뮬 결과) 를 주석으로 남긴다.
-4. 다른 기기에 부탁·보고할 일은 [`comms/`](comms/README.md) 에 파일 하나로 (근거 수치·파일 경로·커밋 포함).
-5. Pull Request 로 `main` 에 합친다.
+## 문서
 
-## 📚 문서 (Documentation)
-- [랩미팅 자료](docs/lab-meeting/README.md) — 학습·통신·ROS 2·제어 / CAD·센서·액추에이터
+- [랩미팅 자료](docs/lab-meeting/README.md)
 - [확장요약문 (PDF)](docs/abstract/extended_abstract_lqr_vmc.pdf)
-- [운용 흐름](docs/operation_flow.md) · [실기 벤치·운용 참고](docs/robot_bench.md) · [시뮬 자산](sim/README.md)
-- [실기 제어기 구조](docs/controller_structure.md) · [젯슨 / 데스크톱 역할 분배](docs/roles.md)
-- [점프 상태기계 규격](comms/to-robot/attachments/jump_state_machine.md)
+- [운용 흐름](docs/operation_flow.md), [실기 문서](docs/robot_bench.md), [시뮬레이션 자산](sim/README.md)
+- [제어기 구조](docs/controller_structure.md), [점프 상태기계](comms/to-robot/attachments/jump_state_machine.md)
 
-## 👥 Contributors
+## 만든 사람
 
-| 이름 | 담당 |
-|---|---|
-| **박수호** ([@AkimaraYouki](https://github.com/AkimaraYouki)) | 로봇 설계·제작 전반 — 기구 설계 (4절 링크 치수 최적화, Onshape CAD, 3D 프린팅), 전장·하드웨어 통합 (Jetson, CAN 모터 4 개, 센서 허브), 제어기 설계 (이득 스케줄 LQR + VMC, 점프 상태기계), 시뮬레이션·sim2real (Isaac Lab 플랜트 보정, CMA-ES 튜닝), 로봇 소프트웨어 (ROS 2), 사람 추종·자동 턱 넘기, 실험·검증, 대회 운용 |
+**박수호** ([@AkimaraYouki](https://github.com/AkimaraYouki)) — 금오공과대학교 스마트모빌리티공학, AIAS Lab 학부연구생
 
-- 지도교수: 손정우 교수 (AIAS Lab, 금오공과대학교)
-- 개발 보조: [Claude Code](https://claude.com/claude-code) — 데스크톱 (시뮬)·젯슨 (로봇)·관제 노트북 에이전트로 코드 작성·시뮬 실행을 맡기고 설계·판단·실기 시험은 직접 (커밋의 `Co-Authored-By`).
-- **1 인 개발**: 기구 설계부터 제작·전장·제어·소프트웨어·실험까지 박수호 혼자 했다. 이 저장소의 커밋 533 개는 전부 박수호 계정 (로봇·데스크톱·관제 에이전트 포함) 이다.
-- 대회 출전 팀명: AXIS.
+기구 설계(4절 링크 치수 최적화, CAD, 3D 프린팅)부터 전장과 하드웨어 통합, 제어기 설계, 시뮬레이션과 sim2real, ROS 2 소프트웨어, 사람 추종과 자동 턱 넘기, 실험과 대회 운용까지 혼자 개발했습니다.
 
-## 📜 라이선스 (License)
-아직 라이선스를 정하지 않았다 (`LICENSE` 파일 없음). 정해지기 전까지 모든 권리는 저작자에게 있다.
+지도교수: 손정우 교수 (AIAS Lab)
 
-## 📬 Contact
-* parksuho (스마트모빌리티 학부연구생) — GitHub [@AkimaraYouki](https://github.com/AkimaraYouki)
-* 프로젝트 링크: [github.com/AkimaraYouki/perseverance](https://github.com/AkimaraYouki/perseverance)
+라이선스는 아직 정하지 않았습니다. 정하기 전까지 모든 권리는 저작자에게 있습니다.
