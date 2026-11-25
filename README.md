@@ -186,7 +186,13 @@ perseverance
 ├── system                   Jetson 시스템 설정
 ├── logs                     실기 기록 (200Hz)
 ├── comms                    데스크톱·로봇·관제 노트북 사이 작업 기록
-└── docs                     랩미팅 자료, 확장요약문, 운용 문서
+└── docs
+    ├── presentations        2026년 11월 학회 포스터·발표 영상 (KSNVE, KSMPE 캡스톤)
+    ├── lab-meeting          랩미팅 자료
+    ├── abstract             확장요약문
+    ├── media                README 그림·GIF
+    ├── vendor               모터 매뉴얼
+    └── aruco                ArUco 마커
 ```
 
 ## 실행
@@ -241,6 +247,7 @@ gen2_tune.sh plywood   # 점프 세트: plywood | hip12 | default
 
 ## 문서
 
+- [학회 발표 자료 (포스터·영상)](docs/presentations/README.md)
 - [랩미팅 자료](docs/lab-meeting/README.md)
 - [확장요약문 (PDF)](docs/abstract/extended_abstract_lqr_vmc.pdf)
 - [운용 흐름](docs/operation_flow.md), [실기 문서](docs/robot_bench.md), [시뮬레이션 자산](sim/README.md)
