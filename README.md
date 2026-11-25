@@ -49,7 +49,7 @@
   <img src="docs/media/robot_cad_inside.png" height="320" alt="CAD 전장부">
 </p>
 
-Onshape에서 설계한 CAD를 URDF(폐루프 관절 포함)로 뽑아 Isaac Sim 5.1에 넣었습니다. 4절 링크 치수는 계단을 오를 수 있는지를 목적함수로 두고 최적화했습니다. 자세한 내용은 [CAD 문서](docs/lab-meeting/hardware/01_cad.md)에 있습니다.
+Onshape에서 설계한 CAD를 URDF(폐루프 관절 포함)로 뽑아 Isaac Sim 5.1에 넣었습니다. 4절 링크 치수는 계단을 오를 수 있는지를 목적함수로 두고 최적화했습니다.
 
 ## 제어 구조
 
@@ -188,11 +188,9 @@ perseverance
 ├── comms                    데스크톱·로봇·관제 노트북 사이 작업 기록
 └── docs
     ├── presentations        2026년 11월 학회 포스터·발표 영상 (KSNVE, KSMPE 캡스톤)
-    ├── lab-meeting          랩미팅 자료
-    ├── abstract             확장요약문
     ├── media                README 그림·GIF
-    ├── vendor               모터 매뉴얼
-    └── aruco                ArUco 마커
+    ├── vendor               모터·IMU 매뉴얼, 모터 펌웨어, 센서허브 원본 펌웨어
+    └── *.md                 운용 흐름, 실기 벤치, 젯슨·데스크톱 역할
 ```
 
 ## 실행
@@ -248,10 +246,8 @@ gen2_tune.sh plywood   # 점프 세트: plywood | hip12 | default
 ## 문서
 
 - [학회 발표 자료 (포스터·영상)](docs/presentations/README.md)
-- [랩미팅 자료](docs/lab-meeting/README.md)
-- [확장요약문 (PDF)](docs/abstract/extended_abstract_lqr_vmc.pdf)
 - [운용 흐름](docs/operation_flow.md), [실기 문서](docs/robot_bench.md), [시뮬레이션 자산](sim/README.md)
-- [제어기 구조](docs/controller_structure.md), [점프 상태기계](comms/to-robot/attachments/jump_state_machine.md)
+- [점프 상태기계](comms/to-robot/attachments/jump_state_machine.md), [젯슨·데스크톱 역할](docs/roles.md)
 
 ## 만든 사람
 
