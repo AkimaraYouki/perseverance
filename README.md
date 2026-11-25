@@ -15,6 +15,8 @@
   <img src="docs/media/real_grass_turn.gif" width="26.5%" alt="잔디 주행">
 </p>
 
+<p align="center"><a href="#개요">개요</a> · <a href="#하드웨어">하드웨어</a> · <a href="#제어-구조">제어 구조</a> · <a href="#대회">대회</a> · <a href="#결과">결과</a> · <a href="#발표-자료">발표 자료</a> · <a href="#폴더-구조">폴더 구조</a> · <a href="#실행">실행</a></p>
+
 ## 개요
 
 연구 주제는 **LQR과 가상 모델 제어(VMC)를 이용한 4절 링크 바퀴형 이족 로봇의 균형 및 주행 제어**입니다.
@@ -49,7 +51,16 @@
   <img src="docs/media/robot_cad_inside.png" height="320" alt="CAD 전장부">
 </p>
 
-Onshape에서 설계한 CAD를 URDF(폐루프 관절 포함)로 뽑아 Isaac Sim 5.1에 넣었습니다. 4절 링크 치수는 계단을 오를 수 있는지를 목적함수로 두고 최적화했습니다.
+Onshape에서 설계한 CAD를 URDF(폐루프 관절 포함)로 뽑아 Isaac Sim 5.1에 넣었습니다.
+
+### 4절 링크 다리
+
+<p align="center">
+  <img src="docs/media/leg_extension_cad.jpg" height="300" alt="다리 펴짐 (CAD 겹침)">
+  <img src="docs/media/leg_drift_torque.png" height="300" alt="바퀴축 흔들림, 고관절 토크·전달각">
+</p>
+
+고관절 모터 하나로 4절 링크를 돌려 바퀴를 120mm 올리고 내립니다. 다리가 움직일 때 바퀴가 앞뒤로 밀리면 그 자체가 균형을 흔들기 때문에, 바퀴축이 거의 수직으로 움직이도록 링크 길이 다섯 개를 미분 진화로 넓게 찾은 뒤 최소제곱으로 다듬었습니다(링크 80mm 이상, 전달각 30° 이상, 고관절 토크 4.5N·m 이하). 결과는 바퀴축 앞뒤 흔들림 1.34mm(RMS), 전달각 49~147°, 최대 고관절 토크 4.35N·m입니다(설계 계산값).
 
 ## 제어 구조
 
@@ -69,14 +80,16 @@ flowchart LR
   JMP -.-> WHL
 ```
 
-- **바퀴 LQR**: 상태는 진행 거리, 속도, 진자각, 각속도 네 개입니다. 가상 다리 길이 0.12~0.40m 구간에서 미리 풀어 둔 이득 표를 보간해서 씁니다.
-- **다리 VMC**: 4절 링크 자코비안으로 가상 다리 힘을 고관절 토크로 바꿉니다. 높이 추종, 롤 수평 PI, 자중 피드포워드가 들어갑니다.
-- **점프**: 웅크림, 신전, 비행, 착지 등 6단계 상태기계입니다. 공중에서는 바퀴를 반작용 휠처럼 써서 몸통 pitch를 잡습니다([규격](comms/to-robot/attachments/jump_state_machine.md)). 파라미터는 시뮬레이션에서 로봇 2048대를 동시에 돌려 CMA-ES로 골랐습니다.
-- **턱 감지 모드**: 천천히 다가가다 바퀴가 막히면 조금 물러났다가 다시 달려서 점프합니다. 조종하는 사람은 앞으로 밀기만 하면 되고, 스틱을 놓으면 취소됩니다.
-- **사람 추종**: YOLO11n-pose(TensorRT), ByteTrack, OSNet ReID를 묶어서 지정한 한 명만 따라갑니다. 옷이 같은 사람이 섞여도 놓치지 않게, 사라진 방향을 기준으로 다시 찾습니다. 거리는 사람 영역 안의 LiDAR 점으로 재고, LiDAR가 안 잡히면 발 위치를 바닥에 투영해서 구합니다. 장애물과 미로 모퉁이는 Nav2로 돌아갑니다. 최고 0.7m/s.
-- **자동 턱 넘기**: 따라가는 중에 카메라 영상에서 턱 선을 찾으면 1.5m 앞에서 속도를 줄이고, 0.5m 앞에서 턱 감지 모드로 바꿔 스스로 넘습니다.
-- **수신호**: 대회 규정대로 정지와 재시작만 씁니다. 가까이서는 손 모양, 멀리서는 몸 자세(한 팔 위로 들기 = 정지, 두 팔 벌리기 = 재개)로 판단합니다.
-- **점프 세트 전환**: `gen2_tune.sh <세트>`로 기본, 합판, 12N·m 세트를 바꿉니다. 관제 GUI에서도 고를 수 있습니다.
+| 기능 | 방법 |
+|---|---|
+| 바퀴 균형 | LQR. 상태는 진행 거리, 속도, 진자각, 각속도 네 개. 가상 다리 길이 0.12~0.40m에서 미리 풀어 둔 이득 표를 보간 |
+| 다리 높이·수평 | VMC. 4절 링크 자코비안으로 가상 다리 힘을 고관절 토크로 바꿈. 높이 추종, 롤 수평 PI, 자중 피드포워드 |
+| 점프 | 웅크림, 신전, 비행, 착지 등 6단계 상태기계. 공중에서는 바퀴를 반작용 휠처럼 써서 pitch를 잡음([규격](comms/to-robot/attachments/jump_state_machine.md)). 파라미터는 로봇 2048대를 동시에 돌려 CMA-ES로 고름 |
+| 턱 감지 모드 | 천천히 다가가다 바퀴가 막히면 조금 물러났다가 다시 달려서 점프. 조종하는 사람은 앞으로 밀기만, 스틱을 놓으면 취소 |
+| 사람 추종 | YOLO11n-pose(TensorRT) + ByteTrack + OSNet ReID로 지정한 한 명만. 옷이 같은 사람이 섞이면 사라진 방향 기준으로 다시 찾음. 거리는 사람 영역의 LiDAR 점(없으면 발 위치를 바닥에 투영). 장애물·미로 모퉁이는 Nav2. 최고 0.7m/s |
+| 자동 턱 넘기 | 따라가는 중 카메라 영상에서 턱 선을 찾으면 1.5m 앞에서 감속, 0.5m 앞에서 턱 감지 모드로 바꿔 스스로 넘음 |
+| 수신호 | 대회 규정대로 정지와 재시작만. 가까이서는 손 모양, 멀리서는 몸 자세(한 팔 위로 = 정지, 두 팔 벌리기 = 재개) |
+| 점프 세트 전환 | `gen2_tune.sh <세트>`로 기본, 합판, 12N·m 세트 전환. 관제 GUI에서도 선택 |
 
 모든 판단과 주행은 Jetson에서 하기 때문에 Wi-Fi가 끊겨도 로봇은 멈춰서 균형을 유지합니다.
 
@@ -110,12 +123,15 @@ flowchart LR
 
 ### 시뮬레이션
 
-로봇마다 질량 ±15%, 무게중심 ±2cm, 센서 잡음과 바이어스를 무작위로 넣고 평가했습니다(지연 5ms 기준).
+<p align="center"><img src="docs/media/sim_nine_terrains.png" width="85%" alt="험지 9종 (각 4m, 이어 붙인 단면)"></p>
+
+로봇마다 질량 ±15%, 무게중심 ±2cm, 센서 잡음과 바이어스를 무작위로 넣고 평가했습니다(지연 5ms 기준). 위 그림은 험지 9종을 각 4m씩 이어 붙인 단면입니다.
 
 | 평가 | 성공 |
 |---|---|
 | 험지 9종, 4096대 × 20초 | 98.9% |
 | 시나리오 11종 (정지, 회전, 턱, 경사, 점프, 밀기 등) | 167 / 176 |
+| 점프 착지 (평지 / 6cm / 8cm 턱, 각 3072회) | 90% / 67% / 62% |
 
 ### 실기 균형·주행 (2026.10.08)
 
@@ -131,6 +147,9 @@ flowchart LR
 | 10.14 | 평지, 고관절 명령 상한 8.1N·m | 20회 중 15회 성공, 바퀴 높이 약 5.6cm |
 | 10.15 | 평지, 상한 12N·m | 넘어짐 없음 (조작 실수 제외) |
 | 10.23~24 | 10cm 턱, 상한 15N·m, 턱 감지 모드 14회 | 막힘 판정, 후진, 재가속 모두 정상. 다만 착지 pitch가 -15~-23°로 뒤로 젖혀진 채 후진 |
+
+<p align="center"><img src="docs/media/jump_sim_vs_real.gif" width="85%" alt="10cm 턱 점프, 시뮬레이션과 실기"></p>
+<p align="center"><sub>10cm 턱 점프. 왼쪽 Isaac Sim, 오른쪽 실기. 단계가 바뀌는 시각을 맞춰 나란히 느리게 재생</sub></p>
 
 실기 모터는 명령보다 힘을 덜 냅니다. 바퀴는 명령의 0.83배, 고관절은 점프로 다리를 펼 때 명령의 약 35%(전류 기준)였습니다. 이 값을 시뮬레이션에 넣고 나서야 실기에서 실패한 장면이 시뮬레이션에서도 똑같이 재현됐습니다.
 
@@ -164,6 +183,15 @@ flowchart LR
 
 </details>
 
+## 발표 자료
+
+| [Control Performance Evaluation of a Wheeled Bipedal Robot](docs/presentations/2026-11_KSNVE_poster_Park/KSNVE_poster_Park.pdf) | [Locomotion Control of a Two Wheel-Legged Robot](docs/presentations/2026-11_KSMPE_capstone_Mun/KSMPE_poster_Mun.pdf) |
+|:---:|:---:|
+| [<img src="docs/media/poster_thumb_Park.jpg" width="300" alt="KSNVE 포스터">](docs/presentations/2026-11_KSNVE_poster_Park/KSNVE_poster_Park.pdf) | [<img src="docs/media/poster_thumb_Mun.jpg" width="300" alt="KSMPE 포스터">](docs/presentations/2026-11_KSMPE_capstone_Mun/KSMPE_poster_Mun.pdf) |
+| 한국소음진동공학회 2026 추계, 포스터 (박수호) | 한국기계가공학회 2026 추계, 캡스톤 디자인 (문인주) |
+
+캡스톤 발표 슬라이드, 슬라이드 영상, 포스터 옆에 띄운 40초 하이라이트 영상은 [docs/presentations](docs/presentations/README.md)에 있습니다(Git LFS).
+
 ## 폴더 구조
 
 ```text
@@ -188,7 +216,7 @@ perseverance
 ├── comms                    데스크톱·로봇·관제 노트북 사이 작업 기록
 └── docs
     ├── presentations        2026년 11월 학회 포스터·발표 영상 (KSNVE, KSMPE 캡스톤)
-    ├── media                README 그림·GIF
+    ├── media                README 그림·GIF (포스터 그림 일부, 포스터 썸네일 포함)
     ├── vendor               모터·IMU 매뉴얼, 모터 펌웨어, 센서허브 원본 펌웨어
     └── *.md                 운용 흐름, 실기 벤치, 젯슨·데스크톱 역할
 ```
