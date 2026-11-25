@@ -8,14 +8,14 @@ Closed_Fist, Open_Palm, Pointing_Up, Thumb_Down, Thumb_Up, Victory, ILoveYou.
 A gesture counts after it is held for hold_s with score >= min_score; then its action runs once
 (again only after the hand changes). Gaps up to gap_s (no hand / other) do not restart the hold.
 
-Recognition boosts (GCS 2026-10-26, measured on 632 robot-camera frames, user at ~1 m seated, purple ISP tint):
+Recognition boosts (GCS 2026-10-26, measured on 632 robot-camera frames, person at ~1 m seated, purple ISP tint):
 - hand-shape rule on the 21 landmarks when the canned classifier says None: Open_Palm = 4 fingers + thumb
   extended and fingers pointing up; Thumb_Up = 4 fingers curled, thumb extended and the highest point.
   The canned model wants the palm facing the camera — a raised, angled palm was 8/117 frames, with the rule 107/117.
 - crop fallback: no hand in the full 640x480 frame -> left / right square halves upscaled x2 (small, far hands).
   Far gestures 93 -> 297 / 351 frames; idle (hand on mouse, drinking) 0 held detections. Costs ~140 ms on frames
   without a hand (laptop CPU); the side that found the hand is tried first next time.
-- body pose for far signals (GCS 2026-10-28, user "두 팔 벌리거나 떰스업 하면 재개"): person_tracker keypoints on
+- body pose for far signals (GCS 2026-10-28, "두 팔 벌리거나 떰스업 하면 재개"): person_tracker keypoints on
   people/camera (COCO 17) of the LOCKED person (target) — a hand is ~18 px at 3 m, a body pose is still clear.
   Both arms spread sideways = restart (as Thumb_Up), one arm straight up above the head = stop (as Open_Palm).
   A hand result (MediaPipe / shape rule) wins over the pose (a thumb held high stays a thumb). Actions (param `actions`, "Gesture:action" strings):
@@ -105,7 +105,7 @@ class GestureNode(Node):
         K = np.asarray(kps, float)
         if K.shape[0] < 13:
             return None
-        ok = lambda *i: all(K[j, 2] > conf for j in i)  # noqa: E731   (far people: arm keypoints 0.3-0.4, user 2026-10-29)
+        ok = lambda *i: all(K[j, 2] > conf for j in i)  # noqa: E731   (far people: arm keypoints 0.3-0.4, 2026-10-29)
         if not ok(5, 6):
             return None
         ls, rs = K[5, :2], K[6, :2]

@@ -1,5 +1,5 @@
 # "최적1" — desktop landing CMA 2026-10-24 (overlay on balance.yaml; NOT loaded by default).
-# Load only when the user says "최적1 테스트": pass as an extra --params-file after balance.yaml. Without it = current balance.yaml.
+# Load only for the "최적1 테스트" run: pass as an extra --params-file after balance.yaml. Without it = current balance.yaml.
 # Plant: real-log calibrated sim (hip eff 0.5-0.6 -> EXTRACT 105 ms like the robot, wheel 0.83, v_ki 0.8, hip cap 15 N·m,
 # step-mode re-run speed x0.6-1.0 random). Objective: success - 2 x falls - landing penalties (|land pitch| > 8 deg, back-off after landing).
 # Sim, step-detect mode, 2048 runs each (before -> after):

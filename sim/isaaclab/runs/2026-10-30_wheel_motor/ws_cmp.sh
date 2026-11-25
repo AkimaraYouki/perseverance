@@ -1,6 +1,6 @@
 #!/bin/bash
 # 2026-10-30 바퀴 모터 비교 2: 최고 속도 (평지 1.5 / 2.5 m/s 명령, 험지 1.0 m/s) + 외란 (서 있는 채 앞 밀기 0.6~1.5 m/s)
-D=$HOME/.claude/jobs/fcc5fea5/tmp/kt; IL=$HOME/Desktop/IsaacLab/isaaclab.sh; cd $HOME/wheeled_biped_isaaclab
+D=$HOME/pv_out/kt; IL=$HOME/Desktop/IsaacLab/isaaclab.sh; cd $HOME/wheeled_biped_isaaclab
 run() { m=$1; n=$2; shift 2
   if [ $m = ak40 ]; then E="WB_WHEEL_PEAK_NM=4.1 WB_WHEEL_NOLOAD_RAD_S=45.55"; M="--wheel_tau_max 4.1 --wheel_cmd_max_nm 4.1"; else E=""; M=""; fi
   for t in 1 2; do env $E WB_WHEEL_STATS=$D/cmp_${m}_$n.npz timeout 2400 env -u PYTHONPATH $IL -p scripts/_isaaclab_launch.py scripts/harsh_eval.py "$@" $M < /dev/null > $D/cmp_${m}_$n.log 2>&1; grep -q "바퀴 통계" $D/cmp_${m}_$n.log && break; done

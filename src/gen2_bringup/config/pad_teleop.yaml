@@ -6,12 +6,12 @@ joy_node:
     autorepeat_rate: 20.0      # keep /joy flowing while the sticks are held (pad_teleop needs < 0.5 s gaps)
 pad_teleop:
   ros__parameters:
-    vx_max: 0.83               # stick end [m/s] = 3.0 km/h walking speed (user 2026-10-14) = balance vmax_kmh 3.0. 0.97 overshot 2026-10-09
+    vx_max: 0.83               # stick end [m/s] = 3.0 km/h walking speed (2026-10-14) = balance vmax_kmh 3.0. 0.97 overshot 2026-10-09
     wz_max: 2.0                # [rad/s]
     height_rate: 0.05          # [m/s] while a trigger is fully pressed
     deadzone: 0.08
     joy_timeout_s: 0.5
-    # the user's pad (Xbox over Bluetooth, measured 2026-10-09 with `ros2 topic echo /joy`)
+    # my pad (Xbox over Bluetooth, measured 2026-10-09 with `ros2 topic echo /joy`)
     vx_axis: 1
     wz_axis: 2
     lt_axis: 5

@@ -96,7 +96,7 @@ static constexpr bool STATUS_LED_ACTIVE_LOW = true;
 // ============================================================================
 // Rates
 // ============================================================================
-// 2026-10-14: GPS, magnetometer and LEDs were removed (all false). 2026-10-22 (user): refitted -> all true again,
+// 2026-10-14: GPS, magnetometer and LEDs were removed (all false). 2026-10-22: refitted -> all true again,
 // host link stays USB only. With a switch false the HostFrame layout is unchanged: those fields stay 0.
 static constexpr bool ENABLE_GPS = true;    // Holybro GPS UART (GPIO20/21) + safety LED (GPIO5)
 static constexpr bool ENABLE_MAG = true;    // IST8310 on I2C (GPIO6/7)

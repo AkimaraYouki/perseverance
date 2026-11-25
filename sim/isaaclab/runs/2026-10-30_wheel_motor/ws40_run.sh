@@ -1,6 +1,6 @@
 #!/bin/bash
 # 바퀴 모터 선정 통계 (2026-10-30): 험지 0.4 / 0.7 m/s + 계단 점프 (합판 v4, 8 cm 2 단 / 10 cm 단)
-D=$HOME/.claude/jobs/fcc5fea5/tmp/kt; IL=$HOME/Desktop/IsaacLab/isaaclab.sh; cd $HOME/wheeled_biped_isaaclab
+D=$HOME/pv_out/kt; IL=$HOME/Desktop/IsaacLab/isaaclab.sh; cd $HOME/wheeled_biped_isaaclab
 M="--wheel_tau_max 4.1 --wheel_cmd_max_nm 4.1 --db_comp_nm 0.28"   # AK40-10: 피크 4.1 N·m (7.3 A), 0.5 A 문턱 = 0.28 N·m
 run() { n=$1; shift; for t in 1 2; do WB_WHEEL_PEAK_NM=4.1 WB_WHEEL_NOLOAD_RAD_S=45.55 WB_WHEEL_STATS=$D/ws40_$n.npz timeout 2400 env -u PYTHONPATH $IL -p scripts/_isaaclab_launch.py "$@" < /dev/null > $D/ws40_$n.log 2>&1; grep -q "바퀴 통계" $D/ws40_$n.log && break; done; echo "== $n" >> $D/ws40.txt; grep -A6 "바퀴 통계" $D/ws40_$n.log >> $D/ws40.txt; grep -E "^\[가혹 평가\]|점프 평가\]" $D/ws40_$n.log | cut -c1-200 >> $D/ws40.txt; }
 run harsh04 scripts/harsh_eval.py --num_envs 4096 --seconds 20 $M

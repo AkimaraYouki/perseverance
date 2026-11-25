@@ -12,16 +12,16 @@ balance/* services. Only standard messages, so it also runs on ROS 2 Humble.
   A              stop (vx = wz = 0 while held)
   B              default height
   LB + RB 0.5 s  emergency DISARM (0 A — the robot drops)
-  LB / RB        follow HOLD (stop) / GO (resume) = follow/hold — 2026-10-28 user. Acts 0.15 s after the press only if the
+  LB / RB        follow HOLD (stop) / GO (resume) = follow/hold — 2026-10-28. Acts 0.15 s after the press only if the
                  other bumper is not pressed too (so LB + RB stays the DISARM)
   X              person follow on / off (registers the person ahead) (sticks override; release = follow resumes)
   Y              jump (balance/jump: needs >= 0.2 m/s forward, not turning — robot wb_core 2026-10-12)
   D-pad ↑        manual step-detect mode on / off (balance/step_mode, toggles): then just push forward — it approaches,
                  backs off from a step and jumps it by itself; release the stick to cancel
-  D-pad ↓        camera auto step on / off while following (person_follow auto_step, toggles) — 2026-10-28 user
+  D-pad ↓        camera auto step on / off while following (person_follow auto_step, toggles) — 2026-10-28
 If /joy stops (pad unplugged, joy_node dead) the heartbeat stops: the robot stops, sits and disarms.
 
-Index defaults = the user's pad (Xbox over Bluetooth, joy_node on Humble, measured 2026-10-09):
+Index defaults = my pad (Xbox over Bluetooth, joy_node on Humble, measured 2026-10-09):
 axes LX 0, LY 1, RX 2, RT 4, LT 5 (sticks: left / up = +1, triggers: 1 released .. -1 pressed);
 buttons A 0, B 1, Y 4, LB 6, RB 7, BACK 10, START 11. Other pads: set the *_axis / *_button parameters
 (check with `ros2 topic echo /joy`).
@@ -52,7 +52,7 @@ class PadTeleop(Node):
         self.h_rate = p('height_rate', 0.05)
         self.dead = p('deadzone', 0.08)
         self.joy_to = p('joy_timeout_s', 0.5)
-        # defaults = the user's pad on the desktop (Xbox over Bluetooth, measured 2026-10-09)
+        # defaults = my pad on the desktop (Xbox over Bluetooth, measured 2026-10-09)
         self.ax = {k: p(f'{k}_axis', v) for k, v in dict(vx=1, wz=2, lt=5, rt=4, dpad_y=7).items()}   # D-pad ↕: up = +1
         self.bt = {k: p(f'{k}_button', v) for k, v in dict(a=0, b=1, x=3, y=4, back=10, start=11, lb=6, rb=7).items()}
         self.joy, self.joy_t, self.prev = None, 0.0, {}

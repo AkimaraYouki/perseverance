@@ -1,5 +1,5 @@
 {
- "policy": "/home/parksuho/.claude/jobs/fcc5fea5/tmp/policy_6d_m1150.pt",
+ "policy": "policy_6d_m1150.pt",
  "hard": false,
  "rows": [
   {

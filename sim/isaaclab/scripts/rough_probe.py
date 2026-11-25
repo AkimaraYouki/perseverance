@@ -11,7 +11,7 @@
     몸통σ   몸체 COM 높이  - 같은 지면 평균                  의 표준편차 = 몸통이 따라 움직인 양
     격리율  몸통σ / 바닥σ.  1 = 몸통이 바퀴 따라 그대로 오르내림,  0 = 완벽한 짐벌
     az      몸통 COM 수직가속도 RMS [m/s^2] (승차감),  vz  수직속도 RMS
-    전달률  몸통 수직가속 RMS / 바퀴축 수직가속 RMS — **짐벌 주 지표** (사용자: 고정이 아니라 부드럽게 오르내리기).
+    전달률  몸통 수직가속 RMS / 바퀴축 수직가속 RMS — **짐벌 주 지표** (고정이 아니라 부드럽게 오르내리기).
             1 이면 바퀴 충격이 그대로 몸통에, 작을수록 다리가 걸러 준다. 격리율(변위)은 참고용.
     roll    좌우 기울기 RMS (목표 0),  pitchσ  앞뒤 흔들림,  h평균  주행 중 다리 평균 (자동 모드가 고른 높이)
 
@@ -38,7 +38,7 @@ ap.add_argument("--wz", type=float, default=1.0)
 ap.add_argument("--h", type=float, default=0.1825, help="수동 모드 높이 명령")
 ap.add_argument("--modes", nargs="+", default=["manual", "auto"], choices=["manual", "auto"])
 ap.add_argument("--manual_terrains", nargs="+", default=["flat"],
-                help="수동 모드를 잴 지형 (사용자: 수동은 평지용). all 이면 전부")
+                help="수동 모드를 잴 지형 (수동은 평지용). all 이면 전부")
 ap.add_argument("--out", default=None)
 AppLauncher.add_app_launcher_args(ap)
 args = ap.parse_args()
@@ -167,7 +167,7 @@ for c, (name, lv, md) in enumerate(CASES):
                  vz_rms=float(np.sqrt((seg("vz") ** 2).mean())),
                  az_rms=float(np.sqrt((seg("az") ** 2).mean())),
                  azw_rms=float(np.sqrt((seg("azw") ** 2).mean())),
-                 # 가속도 전달률: 바퀴축이 받은 수직 충격 중 몸통까지 온 비율 (사용자 정의 "짐벌 = 부드럽게")
+                 # 가속도 전달률: 바퀴축이 받은 수직 충격 중 몸통까지 온 비율 ("짐벌 = 부드럽게")
                  acc_trans=float(np.sqrt((seg("az") ** 2).mean()) / max(np.sqrt((seg("azw") ** 2).mean()), 1e-6)),
                  rollrate_rms=float(np.degrees(np.sqrt((seg("rollrate") ** 2).mean()))),
                  h_mean_mm=float(seg("hleg").mean() * 1e3),

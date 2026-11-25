@@ -16,8 +16,8 @@
   명령 텐서의 세 번째 값은 h_ref 다 — 정책이 보는 것도, 다리 액션의 기준도 이것이다.
   조이스틱에서는 스틱이 h_target 을 올리고 내리므로 실기와 같은 구조가 된다.
 
-높이 모드 (2026-09-25 사용자, with_mode=True 일 때만 — 명령이 4 개가 된다: [vx, wz, h_ref, m]):
-  m = 0  수동: 평균 높이 = 사용자 h_ref (촘촘히 추종). **평지 전용** (manual_flat_only).
+높이 모드 (2026-09-25, with_mode=True 일 때만 — 명령이 4 개가 된다: [vx, wz, h_ref, m]):
+  m = 0  수동: 평균 높이 = 조종자 h_ref (촘촘히 추종). **평지 전용** (manual_flat_only).
   m = 1  자동: 평균 높이도 정책이 외란·지형에 맞춰 정한다. h_ref 는 공칭값(auto_height)으로 가고
                보상에서 느슨한 선호로만 쓴다 (rewards.gimbal_height_exp 의 std_auto).
   with_mode=False(평지 과제 기본)면 예전과 똑같이 3 개 — 기존 정책/스크립트 호환.
@@ -133,7 +133,7 @@ class WheelLegCommand(CommandTerm):
             vx[pure & (axis == 1)] = 0.0
             vx[pure & (axis == 2)] = 0.0
             wz[pure & (axis == 2)] = 0.0
-        # 고속 코너링: 속도와 회전을 둘 다 크게 (2026-09-25 사용자 요청 — 코너에서 안쪽으로 기울기 학습)
+        # 고속 코너링: 속도와 회전을 둘 다 크게 (2026-09-25 — 코너에서 안쪽으로 기울기 학습)
         if self.cfg.fast_turn_prob > 0.0:
             ft = torch.rand(n, device=dev) < self.cfg.fast_turn_prob
             m = int(ft.sum())
@@ -148,7 +148,7 @@ class WheelLegCommand(CommandTerm):
         if self.cfg.with_mode:
             auto = torch.rand(n, device=dev) < self.cfg.auto_mode_prob
             if self.cfg.manual_flat_only:
-                # 수동 높이 모드는 평지 전용 (사용자 2026-09-25). 거친 지형 위에서는 항상 자동.
+                # 수동 높이 모드는 평지 전용 (2026-09-25). 거친 지형 위에서는 항상 자동.
                 from .terrain import on_flat_tile
                 ids_t = torch.as_tensor(env_ids, device=dev) if not isinstance(env_ids, slice) else torch.arange(self.num_envs, device=dev)
                 auto |= ~on_flat_tile(self._env, ids_t)
@@ -175,7 +175,7 @@ class WheelLegCommand(CommandTerm):
 
     def _update_jump(self):
         """학습 중 점프 발동: (1) 장애물 앞 자동 — 전진 명령 >= 0.2 m/s 이고 앞 d 지점이 발밑보다 3 cm 이상 높을 때.
-        d 는 env 마다 jump_trigger_dist 에서 무작위라 일부러 이르거나 늦은 점프가 섞인다 (잘못 착지 -> 회복 학습, 사용자 요청).
+        d 는 env 마다 jump_trigger_dist 에서 무작위라 일부러 이르거나 늦은 점프가 섞인다 (잘못 착지 -> 회복 학습).
         (2) 어디서나 무작위 (평지·험지 점프). 재생 중(pinned)에는 자동 발동을 끄고 trigger_jump() 로만."""
         dt = self._env.step_dt
         self.jump_timer += dt

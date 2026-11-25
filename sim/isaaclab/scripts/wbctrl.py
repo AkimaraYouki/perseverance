@@ -1,6 +1,6 @@
 """휠-레그 제어기 — LQR(바퀴) + VMC(다리) + 상태 추정 + 속도 제한 + 들림 감지 + 점프 상태머신.
 
-**제어기는 이것 하나다** (2026-10-03 사용자: "지형만 다르고 제일 정확한 제어기 하나만, 실기 이식 가능한 LQR VMC").
+**제어기는 이것 하나다** (2026-10-03: "지형만 다르고 제일 정확한 제어기 하나만, 실기 이식 가능한 LQR VMC").
 로봇 N 대를 배열로 한 번에 계산한다 (numpy): 실기·창은 N = 1, pv robust 는 수십 대, pv harsh 는 수천 대 — 모두 이 코드.
 시뮬 전용 코드(Isaac)는 없다: 입력은 한 스텝의 센서·기구학 값 (Frame, 배열 앞 차원 = 로봇), 출력은 행동·다리 게인·자중 피드포워드.
 실기 C++/Simulink 로 옮길 때 이 파일이 규격이다 (로봇 1 대 = 배열 길이 1, 마스크 = if).
@@ -208,7 +208,7 @@ class WBController:
             # 막힘 → 물러남 → 다시 달려 점프 (2026-10-12): 턱에 막혀 서 있으면 (앞 명령인데 거의 안 감) 바퀴 중심 ≈ 모서리 앞 retry_contact.
             # 그 자리 (오도메트리 x_b) 에서 retry_back_m 물러났다가 다시 달려, 바퀴 중심이 모서리 앞 trigger 가 되는 x_b + retry_contact − trigger
             # 에서 점프 요청. 짧게 착지한 점프의 재시도이자, 카메라 없이 쓰는 접촉 점프. 점프 상태기계는 그대로 (요청만 만든다).
-            # 2026-10-20 사용자 "턱 감지 주행 모드" (평지 전용): 천천히 접근 (retry_approach_v) -> 안 감 = 턱 -> retry_back_m 후진
+            # 2026-10-20 "턱 감지 주행 모드" (평지 전용): 천천히 접근 (retry_approach_v) -> 안 감 = 턱 -> retry_back_m 후진
             # -> retry_v 로 가속 -> 점프. retry_approach_v / retry_v 0 = 조종자 스틱 속도 그대로 (옛 동작)
             self.odo = self.odo + v_now * DT
             pvec = lambda k, d: np.broadcast_to(np.asarray(getattr(P, k, d), float), (n,))  # noqa: E731   (vec 는 아래에서 다른 뜻으로 씀)
@@ -318,7 +318,7 @@ class WBController:
         ctl = (ph == DRIVE) | (ph == RETRACT) | (ph == EXTRACT) | (ph == LAND)
         th_ref = np.where(ph == RETRACT, np.radians(P.retract_lean), 0.0)      # 점프 파라미터는 로봇마다 배열이어도 됨 (CMA 튜닝)
         vm = np.minimum(P.vmax_kmh / 3.6, P.vmax_motor_frac * w_max * R_WHEEL)
-        rc = getattr(self, "rt_cap", np.zeros(n))                       # 2026-10-20 사용자: 점프 전 속도 0.2–0.3 m/s (실측 이륙 0.97 m/s 로 넘침 -> 넘어짐)
+        rc = getattr(self, "rt_cap", np.zeros(n))                       # 2026-10-20: 점프 전 속도 0.2–0.3 m/s (실측 이륙 0.97 m/s 로 넘침 -> 넘어짐)
         vm = np.where((rc > 0) & (ph == DRIVE), np.minimum(vm, rc), vm)          # 점프 전 (주행) 에만 — 신전 중엔 브레이크가 이륙을 막음
         g_vf = self.g_vf + (1.0 - math.exp(-2 * math.pi * P.speed_lpf_hz * DT)) * (v_now - self.g_vf)
         e = np.abs(g_vf) - vm

@@ -371,7 +371,7 @@ public:
     step_log_ = declare_parameter("step_log", true);
     step_log_dir_ = declare_parameter("step_log_dir", std::string(std::getenv("HOME") ? std::getenv("HOME") : "/tmp") + "/gen2_ws/logs/steps");
     // runtime change (GCS GUI, comms 2026-10-13_1300): speed limits only, only while disarmed — no gains.
-    // + tune.retry_approach_v (step-detect approach speed 0.1..0.4, user 2026-10-28)
+    // + tune.retry_approach_v (step-detect approach speed 0.1..0.4, 2026-10-28)
     {
       rcl_interfaces::msg::ParameterDescriptor ro;
       ro.read_only = true;

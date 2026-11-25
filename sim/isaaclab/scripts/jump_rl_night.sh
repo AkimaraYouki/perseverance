@@ -1,7 +1,7 @@
 #!/bin/bash
 # 밤새 점프 RL: jr3flat 기다림 → 평가 → jr4 (다리 ±12 cm) → 평가 → jr5 (턱) → 평가 → ONNX
 cd ~/wheeled_biped_isaaclab
-N=~/.claude/jobs/fcc5fea5/tmp/night; S=$N/summary.txt
+N=~/pv_out/night; S=$N/summary.txt
 LR=logs/rsl_rl/wheeled_biped_jump
 IL=~/Desktop/IsaacLab/isaaclab.sh
 FLAT="--p_flat 1.0 --v_min 0.85 --v_max 0.97 --edge_min 2.0 --edge_max 2.5"
@@ -9,7 +9,7 @@ STEP="--p_flat 0.0 --v_min 0.3 --v_max 0.6 --edge_min 1.5 --edge_max 2.0"
 log() { echo "$(date +%H:%M) $*" >> $S; }
 last_model() { ls -t $(ls -td $LR/*_$1 | head -1)/model_*.pt 2>/dev/null | head -1; }
 wait_train() {  # run iters
-  until grep -qE "Learning iteration $(( $2 - 1 ))/|학습 끝|Traceback" $N/$1.log ~/.claude/jobs/fcc5fea5/tmp/$1.log 2>/dev/null; do sleep 20; done
+  until grep -qE "Learning iteration $(( $2 - 1 ))/|학습 끝|Traceback" $N/$1.log ~/pv_out/$1.log 2>/dev/null; do sleep 20; done
   sleep 40
   for p in $(pgrep -f -- "--run $1( |$)"); do kill -9 $p; done; sleep 5
 }

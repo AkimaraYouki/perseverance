@@ -1,6 +1,6 @@
 #!/bin/bash
 # 2026-10-28 대회: 합판 턱 미끄러움, 2 단 둘째 단 실패·앞으로 고꾸라짐 -> 기본 묶음을 미끄러운 턱 (box_mu) 에서 재현
-D=$HOME/.claude/jobs/fcc5fea5/tmp/kt; IL=$HOME/Desktop/IsaacLab/isaaclab.sh; cd $HOME/wheeled_biped_isaaclab
+D=$HOME/pv_out/kt; IL=$HOME/Desktop/IsaacLab/isaaclab.sh; cd $HOME/wheeled_biped_isaaclab
 P="$(cat $D/jump5_args.txt | sed 's/--accel_max 0.8 --jerk_max 3.0/--accel_max 1.2 --jerk_max 6/') --hip dc --hip_w0 29.3 --hip_cap_nm 15 --v_ki 0.8 --v_boost_max 0.4"
 B="$(cat $D/cma11_15_best_args.txt)"
 R0="--retry 1 --jump_retry 1 --retry_back_v 0.3 --edge_min 0.6 --edge_max 1.0 --v_min 0.3 --v_max 0.3 $(cat $D/final_stairs_args.txt) --max_tries 3 --after_land_s 1.5 --rv_scale 0.6,1.0 --tread 1.0"

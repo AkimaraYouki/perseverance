@@ -35,7 +35,7 @@ sensor_hub:
       reserve_fraction: 0.20        # runtime counts down to 20 % left
       power_avg_tau_s: 30.0         # runtime uses a 30 s power average
       soc_init_settle_s: 2.0        # initial SoC from resting voltage averaged over this window
-      # 2026-10-12 Rigol linear PSU (user) 11.10 / 12.00 / 12.60 V -> raw 10.083 / 11.026 / 11.627 V (10 s means):
+      # 2026-10-12 Rigol linear PSU 11.10 / 12.00 / 12.60 V -> raw 10.083 / 11.026 / 11.627 V (10 s means):
       # mostly a ~1 V offset (scale-only fit left 0.11 V); least squares residual <= 0.010 V (pass: +-0.03 V pack)
       voltage_scale: 0.96966
       voltage_offset_v: 1.3191
@@ -44,7 +44,7 @@ sensor_hub:
       max_present_cell_v: 4.35
       cells: 3
       capacity_ah: 3.3
-      soc_from_voltage: true      # 2026-10-09 user: 0 % = 3.30 V/cell, 100 % = 4.20 V/cell; coulomb count read 0 % (current is only a Jetson VDD_IN estimate)
+      soc_from_voltage: true      # 2026-10-09: 0 % = 3.30 V/cell, 100 % = 4.20 V/cell; coulomb count read 0 % (current is only a Jetson VDD_IN estimate)
       internal_r_ohm: 0.0
       current_offset_a: 0.0
       warn_cell_v: 3.50

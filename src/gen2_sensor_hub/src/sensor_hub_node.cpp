@@ -661,7 +661,7 @@ private:
     }
     o.valid = true;
     if (c.soc_from_voltage) {
-      // 0 % = error_cell_v (3.30 V), 100 % = 4.20 V on the LiPo curve (user 2026-10-09)
+      // 0 % = error_cell_v (3.30 V), 100 % = 4.20 V on the LiPo curve (2026-10-09)
       o.soc = lipo_percentage(fu.v_avg);
       o.remaining_ah = c.capacity_ah * o.soc;
     } else {

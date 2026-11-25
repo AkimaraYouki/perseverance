@@ -14,7 +14,7 @@
   없으면 저장소 tools/robot/camera_cal.yaml). 사람 상자·관절도 같은 식으로 옮겨 그린다.
   u/Tab = 보정 켜기/끄기, [ ] = 좌우 기울기 (roll) -/+0.5°, , . = 앞뒤 숙임 (pitch) -/+0.5°, 0 = 기울기 0, w/Enter = 저장
   (~/.config/cw/camera_mount.json — 로봇 cam_tilt_deg 에 옮길 값도 화면에 표시). 수평선·세로선으로 맞춘다.
-모든 정보 (사용자 2026-10-29): /follow/debug (추종 노드 JSON) -> 로봇 수평선 (하늘색), 발 목표선 (수평선 + feet_px, 초록 점선),
+모든 정보 (2026-10-29): /follow/debug (추종 노드 JSON) -> 로봇 수평선 (하늘색), 발 목표선 (수평선 + feet_px, 초록 점선),
   지금 발 위치와 '수평선 아래 몇 px', 왼쪽 정보판 (상태·거리 출처·발 px·앞 정지·Nav2·자동 턱·명령·로봇 상태),
   미니맵에 라이다 (scan_level) 점과 앞 정지 구역 (빨강 = 서는 중). /cmd_vel, /controller/state 도 읽는다. i = 정보판 켜기/끄기
 """

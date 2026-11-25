@@ -70,7 +70,7 @@ class PersonFollow(Node):
         self.cam_only = p('camera_only', True)
         self.person_r = p('person_radius_m', 0.4)          # LiDAR points this close to the person are the person
         self.nav_max_b = math.radians(p('nav_max_bearing_deg', 30.0))   # person further to the side: no Nav2, turn first
-        # smooth starts / stops while following (GCS 2026-10-26, user "추종시 가감속 부드럽게"): rate limits on the
+        # smooth starts / stops while following (GCS 2026-10-26, "추종시 가감속 부드럽게"): rate limits on the
         # direct-steering command (Nav2's own output is not touched). Braking stays quicker than speeding up.
         self.acc = p('follow_accel', 0.4)              # m/s^2 speeding up (forward or backward)
         self.dec = p('follow_decel', 0.8)              # m/s^2 slowing down
@@ -82,7 +82,7 @@ class PersonFollow(Node):
         self.cam_h_off = p('cam_h_off_m', 0.081)  # camera above the leg height h (base 0.0655 + camera 0.0153)
         self.cam_dmax = p('cam_max_dist_m', 5.0)
         self.leg_h, self.body_pitch = 0.182, 0.0
-        # against following objects (2026-10-15, user: "sometimes it follows a thing"): inside the camera view the target must be
+        # against following objects (2026-10-15: "sometimes it follows a thing"): inside the camera view the target must be
         # confirmed by the camera (a person box with matching clothes) at least every cam_confirm_s (0.5), else LiDAR legs alone
         # (chair / table legs next to the person) are not accepted; camera-only candidates need score >= cam_only_score
         # and visible ankles or knees

@@ -51,7 +51,7 @@ SSH = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=4', '-o', 'ControlMas
        '-o', f'ControlPath={HOME}/.ssh/cm-%r@%h:%p', '-o', 'ControlPersist=120']
 
 # ------------------------------------------------------------------ 파라미터 표 (게인 제외)
-# (노드, 이름, 설명, 최소, 최대, 간격, 기본값, 단위)  기본값 = 관제 기본 = 프리셋 1026_1414 (사용자 2026-10-26, 그 밖은 소스/설정 파일 값).
+# (노드, 이름, 설명, 최소, 최대, 간격, 기본값, 단위)  기본값 = 관제 기본 = 프리셋 1026_1414 (2026-10-26, 그 밖은 소스/설정 파일 값).
 # bool 이면 최소~단위 무시. 로봇 노드는 재시작하면 설정 파일 값 → GUI '기본값으로' 로 다시 보냄
 STACK_FILE = os.path.expanduser('~/.config/cw/follow_stack')      # cw follow cam|legacy 와 같은 파일
 STACK_NAME = {'cam': '카메라 중심 (새)', 'legacy': '다리 + 카메라 (옛)'}
@@ -75,7 +75,7 @@ GROUPS = [
         (PF, 'follow_accel', '추종 가속 (빨라질 때, 작을수록 부드럽게)', 0.1, 1.2, 0.05, 0.4, 'm/s²'),   # PR #8
         (PF, 'follow_decel', '추종 감속 (느려질 때)', 0.2, 1.5, 0.05, 0.8, 'm/s²'),
         (PF, 'follow_wz_accel', '추종 회전 변화 한계', 0.5, 6.0, 0.25, 2.0, 'rad/s²'),
-        # 실시간 아님: 추종 스택 켤 때 camera_cal.yaml person_follow 칸에 (사용자 2026-10-29: 조금만 틀어져도 놓침, 1.5 -> 2.0~2.5 추천)
+        # 실시간 아님: 추종 스택 켤 때 camera_cal.yaml person_follow 칸에 (2026-10-29: 조금만 틀어져도 놓침, 1.5 -> 2.0~2.5 추천)
         (PF, 'k_yaw', '추종 회전 게인 (방향 오차 1 rad 당 rad/s, 스택 켤 때 적용)', 0.5, 4.0, 0.1, 1.5, ''),
         (PF, 'search_wz', '사람 찾을 때 회전 속도', 0.0, 1.5, 0.05, 1.0, 'rad/s'),
         (RPP, 'FollowPath.desired_linear_vel', '우회 주행 속도 (Nav2)', 0.1, 1.2, 0.05, 0.7, 'm/s'),
@@ -217,7 +217,7 @@ ALWAYS = {PF: {'use_nav', 'camera_only', 'auto_step', 'explore', 'feet_follow'}}
 MIRROR = {LCM: [GCM]}                       # 로컬 코스트맵 값을 글로벌에도
 RESTART = {'/pad_teleop': 'pad', '/gesture': 'gesture', '/slam_toolbox': 'slam'}   # 노트북에서 띄우는 노드
 ASK_LIVE = ['/balance', '/pad_teleop', '/gesture', '/person_tracker', '/person_detector', '/leg_detector', PF]   # live_params 물어볼 노드
-# 실시간 = 해제 (disarmed) 하고 변경 (사용자 2026-10-13): 균형·주행 중에는 어떤 값도 보내지 않는다
+# 실시간 = 해제 (disarmed) 하고 변경 (2026-10-13): 균형·주행 중에는 어떤 값도 보내지 않는다
 
 
 # ------------------------------------------------------------------ ROS (뒤 스레드)
@@ -1331,7 +1331,7 @@ class Gui(QtWidgets.QMainWindow):
             self.bal_info.setText('  ·  '.join(f'{lab} {_fmt(vals[n])}{(" " + u) if u else ""}'
                                               for n, lab, u in BAL_INFO if vals.get(n) is not None))
         if node == '/cmd_mux' and vals.get('lidar_limit') is not None:
-            # 꺼짐이 로봇 기본 (2026-10-09 사용자: 자기 다리·바퀴가 잡혀 주행이 막힘). 회피는 person_follow 가 한다
+            # 꺼짐이 로봇 기본 (2026-10-09: 자기 다리·바퀴가 잡혀 주행이 막힘). 회피는 person_follow 가 한다
             self.lamp['lidar'].set('on' if vals['lidar_limit'] else 'warn')
             self.note['lidar'].setText('켜짐' if vals['lidar_limit'] else '꺼짐 (의도 — 회피는 추종 쪽 Nav2 가 함)')
         for r in self.rows:

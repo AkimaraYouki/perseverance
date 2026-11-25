@@ -1,5 +1,5 @@
 {
- "policy": "/home/parksuho/.claude/jobs/fcc5fea5/tmp/policy_cad.pt",
+ "policy": "policy_cad.pt",
  "hard": false,
  "rows": [
   {

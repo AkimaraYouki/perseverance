@@ -46,7 +46,7 @@ class SceneCfg(InteractiveSceneCfg):
             friction_combine_mode="multiply",
             restitution_combine_mode="multiply",
             # multiply 결합이라 실효 마찰 = 지면 x 로봇 재질. 지면을 1.0 으로 두고 로봇(바퀴) 재질을
-            # 0.5~0.8 에서 무작위로 뽑는다 (사용자 지정).
+            # 0.5~0.8 에서 무작위로 뽑는다.
             # 예전 0.8/0.7 x 로봇 기본 0.5 = 실효 0.4/0.35 였다.
             static_friction=1.0,
             dynamic_friction=1.0,
@@ -97,10 +97,10 @@ class CommandsCfg:
         fast_turn_prob=0.0 if STAGE == 1 else 0.20,
         fast_turn_wz=(0.6, 2.0),
         ranges=WheelLegCommandCfg.Ranges(
-            # 2026-09-25 사용자 요청: 3 km/h. 0.85 m/s = 바퀴 14.2 rad/s (무부하 18.85 의 75 %).
+            # 2026-09-25: 3 km/h. 0.85 m/s = 바퀴 14.2 rad/s (무부하 18.85 의 75 %).
             # 그 이상은 균형 회복에 쓸 속도 여유가 거의 없다.
             lin_vel_x=(-0.85, 0.85),
-            # 2026-09-25 사용자: 회전이 너무 느리다. 제자리 회전 시 바퀴 = 1.35 x wz 이라 이론상 14 rad/s 까지 되지만
+            # 2026-09-25: 회전이 너무 느리다. 제자리 회전 시 바퀴 = 1.35 x wz 이라 이론상 14 rad/s 까지 되지만
             # 균형·마찰 여유를 두고 2.5 rad/s (143 deg/s).
             ang_vel_z=(-2.5, 2.5),
             height=(0.130, 0.235),
@@ -181,7 +181,7 @@ class EventCfg:
     )
 
     # --- 도메인 랜덤화 ---
-    # 바퀴-바닥 마찰 0.5 ~ 0.8 (사용자 지정 2026-09-25, 처음 0.25~0.6 에서 변경). 두 단계 모두 켠다.
+    # 바퀴-바닥 마찰 0.5 ~ 0.8 (2026-09-25, 처음 0.25~0.6 에서 변경). 두 단계 모두 켠다.
     wheel_friction = EventTerm(
         func=mdp.randomize_rigid_body_material,
         mode="startup",
@@ -237,7 +237,7 @@ class RewardsCfg:
 
     # --- 균형 ---
     # 두 바퀴 로봇이라 자세 유지가 과제보다 먼저다. 가중치를 크게 준다.
-    # 2026-09-25 사용자 요청: 좌우는 수평(코너에서는 안쪽으로 기울기), 앞뒤는 균형 때문에 어쩔 수 없음.
+    # 2026-09-25: 좌우는 수평(코너에서는 안쪽으로 기울기), 앞뒤는 균형 때문에 어쩔 수 없음.
     # 예전 upright(flat_orientation_l2)는 앞뒤·좌우를 같이 벌해서 코너 기울기와 부딪혔다.
     upright = RewTerm(func=custom_rewards.pitch_l2, weight=-2.0)
     roll_track = RewTerm(func=custom_rewards.roll_track_exp, weight=1.5, params={"std": 0.03})
@@ -430,7 +430,7 @@ class RoughObservationsCfg:
 @configclass
 class RoughRewardsCfg(RewardsCfg):
     # 짐벌: 몸통 높이 = 넓은 지면 평균 + h_ref (바퀴 밑 요철은 다리가 흡수). 평지 track_height 를 대체한다.
-    # 수동 모드 std 2 cm (사용자 높이에 붙인다), 자동 모드 std 5 cm (공칭 = CAD 기본자세, 느슨한 선호).
+    # 수동 모드 std 2 cm (조종자가 준 높이에 붙인다), 자동 모드 std 5 cm (공칭 = CAD 기본자세, 느슨한 선호).
     gimbal_height = RewTerm(func=custom_rewards.gimbal_height_exp, weight=1.5,
                             params={"command_name": "base_velocity", "std": 0.02, "std_auto": 0.05,
                                     "sensor_cfg": SceneEntityCfg("height_scanner")})
@@ -473,13 +473,13 @@ class WheeledBipedCADRoughEnvCfg(WheeledBipedCADEnvCfg):
         # 레이캐스트는 정책 주기(200 Hz)마다 한 번이면 된다
         self.scene.height_scanner.update_period = self.decimation * self.sim.dt
         self.scene.critic_scanner.update_period = self.decimation * self.sim.dt
-        # 높이 모드 (commands.py): 명령 = [vx, wz, h_ref, m]. 자동 공칭 = CAD 기본자세 (M = 0, 사용자 지정 IDLE)
+        # 높이 모드 (commands.py): 명령 = [vx, wz, h_ref, m]. 자동 공칭 = CAD 기본자세 (M = 0, 정해 둔 IDLE)
         c = self.commands.base_velocity
         c.with_mode = True
         c.auto_mode_prob = 0.5          # 평지 타일에서. 거친 지형 타일 위에서는 항상 자동 (수동은 평지용)
         c.manual_flat_only = True
         c.auto_height = cad.H0_JOINT
-        # 다리 권한: 어떤 h_ref 에서든 최소·최대 양끝까지 (사용자). 0.12 m = 전체 행정 0.1225~0.2425.
+        # 다리 권한: 어떤 h_ref 에서든 최소·최대 양끝까지. 0.12 m = 전체 행정 0.1225~0.2425.
         # 예전 0.03 에서 이어받을 때는 add_mode_input.py 가 다리 출력을 1/4 로 환산한다.
         self.actions.legs.leg_scale = 0.12
 

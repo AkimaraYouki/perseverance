@@ -1,6 +1,6 @@
-"""거친 지형 학습 (2026-09-25 사용자: "울퉁불퉁, 웨이브 등 다양하게, ROBUST 하게").
+"""거친 지형 학습 (2026-09-25: "울퉁불퉁, 웨이브 등 다양하게, ROBUST 하게").
 
-목표 (사용자): **몸통이 제자리에 고정 — 짐벌처럼.** 바퀴가 요철을 타고 오르내려도 다리가 늘었다
+목표: **몸통이 제자리에 고정 — 짐벌처럼.** 바퀴가 요철을 타고 오르내려도 다리가 늘었다
 줄었다 해서 몸통 높이와 좌우 수평은 그대로 두는 능동 서스펜션.
 
 정책은 지형을 보지 않는다 (블라인드). 관측은 평지 과제와 똑같이 IMU + 관절뿐이라 실기로 그대로 옮겨진다.
@@ -8,7 +8,7 @@
 
 지형 종류 (행 = 난이도 0 -> 1, 열 = 종류):
   flat        평지 — 평지 성능을 잊지 않게, 수동 높이 모드는 여기서만
-  gravel      자갈길: 10 cm 격자 무작위 높이 ±(1.0 -> 3.0) cm, 평활 없음 (사용자 목표 1 -> 3 cm)
+  gravel      자갈길: 10 cm 격자 무작위 높이 ±(1.0 -> 3.0) cm, 평활 없음 (목표 1 -> 3 cm)
   rugged      험지: 2 m 기복(0 -> 6 cm) + 40 cm 굵은 요철 ±(0.5 -> 3) cm + 10 cm 자갈 ±(0.5 -> 1.5) cm
   rough       무작위 요철. 25 cm 격자에서 높이 ±(0.5 -> 3.5) cm
   wave_long   파장 2 m, x·y 성분 각각 ±(0 -> 5) cm (겹치면 피크-피크 20 cm), 경사 최대 9 deg
@@ -66,7 +66,7 @@ class RoughScaledTerrainCfg(HfRandomUniformTerrainCfg):
     noise_amp: tuple[float, float] = (0.003, 0.02)
 
 
-# --- 험지: 긴 기복 + 굵은 요철 + 자갈 요철을 겹친다 (2026-09-25 사용자: "자갈길이나 험지") ---------------------
+# --- 험지: 긴 기복 + 굵은 요철 + 자갈 요철을 겹친다 (2026-09-25: "자갈길이나 험지") ---------------------
 from isaaclab.terrains.height_field.utils import height_field_to_mesh  # noqa: E402
 from isaaclab.terrains.height_field.hf_terrains_cfg import HfTerrainBaseCfg  # noqa: E402
 
@@ -119,9 +119,9 @@ ROUGH_TERRAINS_CFG = TerrainGeneratorCfg(
     slope_threshold=None,       # 가파른 칸을 수직벽으로 바꾸지 않는다 (위 bumps 설명)
     use_cache=False,
     sub_terrains={
-        # 평지: 수동 높이 모드는 평지에서만 학습한다 (사용자: "수동은 평지용")
+        # 평지: 수동 높이 모드는 평지에서만 학습한다 ("수동은 평지용")
         "flat": MeshPlaneTerrainCfg(proportion=0.15),
-        # 자갈길: 10 cm 격자 무작위 높이, 평활 없음. 2026-09-25 사용자: "요철이 너무 낮다, 1 cm -> 3 cm 까지 목표"
+        # 자갈길: 10 cm 격자 무작위 높이, 평활 없음. 2026-09-25: "요철이 너무 낮다, 1 cm -> 3 cm 까지 목표"
         # ±(0.4 -> 2.0) cm 에서 ±(1.0 -> 3.0) cm 로.
         "gravel": RoughScaledTerrainCfg(proportion=0.15, noise_amp=(0.010, 0.030), noise_step=0.002,
                                         downsampled_scale=0.1, **_HF),
@@ -192,7 +192,7 @@ def base_below_ground(env: "ManagerBasedRLEnv", minimum_height: float, sensor_cf
     return asset.data.root_pos_w[:, 2] - ground_patch_mean(env, sensor_cfg) < minimum_height
 
 
-# --- 지금 서 있는 타일이 평지인가 (수동 높이 모드는 평지 전용 — 사용자 2026-09-25) --------------------------
+# --- 지금 서 있는 타일이 평지인가 (수동 높이 모드는 평지 전용 — 2026-09-25) --------------------------
 _TILE_CACHE = {}
 
 
@@ -265,7 +265,7 @@ def staggered_ridges_terrain(difficulty: float, cfg: "StaggeredRidgesTerrainCfg"
 @configclass
 class StaggeredRidgesTerrainCfg(HfTerrainBaseCfg):
     function = staggered_ridges_terrain
-    height_range: tuple[float, float] = (0.01, 0.06)   # 사용자: 약 5 cm
+    height_range: tuple[float, float] = (0.01, 0.06)   # 약 5 cm
     base: float = 0.35                                  # 밑변 (길게)
     period: float = 0.60
     lane_w: float = 0.20                                # 바퀴 간 폭 0.198 -> 좌우 바퀴가 다른 차선

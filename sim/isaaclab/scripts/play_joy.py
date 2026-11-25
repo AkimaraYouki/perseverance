@@ -268,13 +268,13 @@ CYCLE = [  # (이름, vx, wz, h, 높이모드) — 이 로봇의 6방향(전후�
     ("올라가기", 0.0, 0.0, h_hi, 0), ("내려가기", 0.0, 0.0, h_lo, 0),
     ("고속전진", 0.8, 0.0, h_mid, 0), ("좌코너", 0.6, 1.5, h_mid, 0), ("복귀", 0.0, 0.0, h_mid, 0),
 ]
-if HAS_MODE and args.terrain != "flat":   # 거친 지형: 자동 전용 (사용자: 수동은 평지용)
+if HAS_MODE and args.terrain != "flat":   # 거친 지형: 자동 전용 (수동은 평지용)
     CYCLE = [
         ("자동 정지", 0.0, 0.0, h_mid, 1), ("자동 전진", 0.5, 0.0, h_mid, 1), ("자동 후진", -0.5, 0.0, h_mid, 1),
         ("자동 좌회전", 0.0, 1.5, h_mid, 1), ("자동 고속", 0.8, 0.0, h_mid, 1), ("자동 코너", 0.6, 1.5, h_mid, 1),
         ("자동 정지", 0.0, 0.0, h_mid, 1),
     ]
-elif HAS_MODE:   # 평지: 수동(사용자 높이) 과 자동(정책이 높이 결정) 을 번갈아
+elif HAS_MODE:   # 평지: 수동(조종자 높이) 과 자동(정책이 높이 결정) 을 번갈아
     CYCLE = [
         ("정지", 0.0, 0.0, h_mid, 0), ("전진", 0.5, 0.0, h_mid, 0), ("올라가기", 0.0, 0.0, h_hi, 0),
         ("전진", 0.5, 0.0, h_hi, 0), ("후진", -0.5, 0.0, h_mid, 0),
@@ -323,7 +323,7 @@ with torch.inference_mode():
             label = "비상정지" if estop else ("패드" if pad.connected else "패드 끊김→정지")
             if not pad.connected:
                 vx = wz = 0.0
-            # 카메라 — 십자키: 둘러보기, LB/RB: 확대/축소 (사용자 지정)
+            # 카메라 — 십자키: 둘러보기, LB/RB: 확대/축소
             dcam = False
             dx = pad.axis(DPAD_X)
             if dx:

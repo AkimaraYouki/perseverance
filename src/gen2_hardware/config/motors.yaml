@@ -5,14 +5,14 @@
     can_interface: "can0"          # 1 Mbit/s (AppParams can_baud_rate 3; verified on bus)
     publish_rate_hz: 100.0
     motors:
-      # Robot = 4 actuators (user-confirmed 2026-09-24): wheels AK45-10 x2, legs AK60-6 V3.0 x2.
+      # Robot = 4 actuators (2026-09-24): wheels AK45-10 x2, legs AK60-6 V3.0 x2.
       # Naming follows REP-103 / sim URDF: L = +y (left), R = -y. Final names will be
       # wheel_l, wheel_r, leg_l, leg_r. Only one AK45-10 (side not yet known) is on the bus
       # today; rename it once its side is known and add the others with their CAN IDs.
       names: ["wheel_l", "wheel_r", "leg_l", "leg_r"]
       wheel_l:
         model: "AK45-10"
-        can_id: 2                   # LEFT wheel (user 2026-10-07: original IDs kept)
+        can_id: 2                   # LEFT wheel (2026-10-07: original IDs kept)
         protocol: "mit_legacy"      # 2026-10-08: AK45-10 MIT firmware (replies to every command, 0.33 ms;
                                     # no 0.5 A deadband). Servo firmware had the deadband.
         mit:                        # CMESC_MIT_APP_AK45_10.bin (desktop disassembly 2026-10-08)
@@ -23,22 +23,22 @@
           kd_max: 5.0
           test_kp: 5.0
           test_kd: 0.2
-        # CubeMars AK45-10 KV75 datasheet (user-supplied 2026-09-24): 24 V rated, 14 pole pairs,
+        # CubeMars AK45-10 KV75 datasheet (2026-09-24): 24 V rated, 14 pole pairs,
         # 10:1, Kt 0.127 N·m/A (rotor side), rated 2.5 N·m @ 2.1 A, peak 7 N·m @ 5 A,
         # no-load 180 rpm, rated 150 rpm (output). Drive AppParams l_current_max is 35 A — far
         # above the motor's 5 A peak; lower it in the CubeMars tool as a drive-side limit.
         pole_pairs: 14.0            # datasheet (matches McParams foc_encoder_ratio 14)
         gear_ratio: 10.0            # datasheet 10:1
         raw_deg_per_output_rev: 360.0  # VERIFY: rotate output one turn by hand in STEP 3
-        direction: -1              # 2026-10-08 MIT firmware, user on the floor: old +1 drove BACKWARD; + = robot moves FORWARD
+        direction: -1              # 2026-10-08 MIT firmware, tested on the floor: old +1 drove BACKWARD; + = robot moves FORWARD
         position_offset_rad: 0.0
-        # datasheet (user 2026-10-03): rotor inertia 157.33 g·cm² -> x10² = 1.57e-3 kg·m² at the output
+        # datasheet (2026-10-03): rotor inertia 157.33 g·cm² -> x10² = 1.57e-3 kg·m² at the output
         # (measured accel test 2.0–2.6e-3 incl. wheel + friction); backdrive 0.1 N·m; Ke 13.33 V/krpm;
         # R_ll 2.2 Ω, L_ll 1330 µH; 14-bit encoder; backlash 18 arcmin.
         # Measured 2026-10-03: servo current commands |I| <= 0.40 A are ignored (0 A measured).
         kt_nm_per_a: 1.27           # output side = 0.127 x 10; cross-check rated 2.5/2.1=1.19,
                                     # peak 7/5=1.4. verified.kt after a torque-arm measurement.
-        # Limits = the motor's own physical capability (user decision 2026-09-25: no artificial
+        # Limits = the motor's own physical capability (2026-09-25: no artificial
         # software cap on output, so the robot can reject disturbances). Not lower than the motor can do.
         current_limit_a: 5.0        # datasheet peak current 5 A (peak 7 N·m); rated 2.1 A continuous
         velocity_limit_rad_s: 20.0  # no-load 180 rpm = 18.85 rad/s (~4 km/h with r = 0.060 m) + margin
@@ -53,10 +53,10 @@
           position_scale: false
           velocity_scale: false
           kt: false
-      # Hip joints, user-confirmed 2026-10-02: CAN id 3 = LEFT hip, id 4 = RIGHT hip (500 Hz uploads).
+      # Hip joints, 2026-10-02: CAN id 3 = LEFT hip, id 4 = RIGHT hip (500 Hz uploads).
       wheel_r:
         model: "AK45-10"
-        can_id: 1                   # RIGHT wheel (user 2026-10-02 / 2026-10-07)
+        can_id: 1                   # RIGHT wheel (2026-10-02 / 2026-10-07)
         protocol: "mit_legacy"      # 2026-10-08: AK45-10 MIT firmware (replies to every command, 0.33 ms;
                                     # no 0.5 A deadband). Servo firmware had the deadband.
         mit:                        # CMESC_MIT_APP_AK45_10.bin (desktop disassembly 2026-10-08)
@@ -67,22 +67,22 @@
           kd_max: 5.0
           test_kp: 5.0
           test_kd: 0.2
-        # CubeMars AK45-10 KV75 datasheet (user-supplied 2026-09-24): 24 V rated, 14 pole pairs,
+        # CubeMars AK45-10 KV75 datasheet (2026-09-24): 24 V rated, 14 pole pairs,
         # 10:1, Kt 0.127 N·m/A (rotor side), rated 2.5 N·m @ 2.1 A, peak 7 N·m @ 5 A,
         # no-load 180 rpm, rated 150 rpm (output). Drive AppParams l_current_max is 35 A — far
         # above the motor's 5 A peak; lower it in the CubeMars tool as a drive-side limit.
         pole_pairs: 14.0            # datasheet (matches McParams foc_encoder_ratio 14)
         gear_ratio: 10.0            # datasheet 10:1
         raw_deg_per_output_rev: 360.0  # VERIFY: rotate output one turn by hand in STEP 3
-        direction: 1               # 2026-10-08 MIT firmware, user on the floor: old -1 drove BACKWARD; + = robot moves FORWARD
+        direction: 1               # 2026-10-08 MIT firmware, tested on the floor: old -1 drove BACKWARD; + = robot moves FORWARD
         position_offset_rad: 0.0
-        # datasheet (user 2026-10-03): rotor inertia 157.33 g·cm² -> x10² = 1.57e-3 kg·m² at the output
+        # datasheet (2026-10-03): rotor inertia 157.33 g·cm² -> x10² = 1.57e-3 kg·m² at the output
         # (measured accel test 2.0–2.6e-3 incl. wheel + friction); backdrive 0.1 N·m; Ke 13.33 V/krpm;
         # R_ll 2.2 Ω, L_ll 1330 µH; 14-bit encoder; backlash 18 arcmin.
         # Measured 2026-10-03: servo current commands |I| <= 0.40 A are ignored (0 A measured).
         kt_nm_per_a: 1.27           # output side = 0.127 x 10; cross-check rated 2.5/2.1=1.19,
                                     # peak 7/5=1.4. verified.kt after a torque-arm measurement.
-        # Limits = the motor's own physical capability (user decision 2026-09-25: no artificial
+        # Limits = the motor's own physical capability (2026-09-25: no artificial
         # software cap on output, so the robot can reject disturbances). Not lower than the motor can do.
         current_limit_a: 5.0        # datasheet peak current 5 A (peak 7 N·m); rated 2.1 A continuous
         velocity_limit_rad_s: 20.0  # no-load 180 rpm = 18.85 rad/s (~4 km/h with r = 0.060 m) + margin
@@ -97,10 +97,10 @@
           position_scale: false
           velocity_scale: false
           kt: false
-      # Hip joints, user-confirmed 2026-10-02: CAN id 3 = LEFT hip, id 4 = RIGHT hip (500 Hz uploads).
+      # Hip joints, 2026-10-02: CAN id 3 = LEFT hip, id 4 = RIGHT hip (500 Hz uploads).
       leg_l:
         model: "AK60-6 V3.0"
-        can_id: 3                   # fixed (user 2026-10-02): left hip
+        can_id: 3                   # fixed (2026-10-02): left hip
         pole_pairs: 14.0            # manual V3.2.0 §3.1.5.2 example
         gear_ratio: 6.0             # AK60-6 = 6:1
         raw_deg_per_output_rev: 360.0  # VERIFY (scale check)
@@ -108,7 +108,7 @@
         position_offset_rad: -0.474730  # 2026-10-22 hip_cli zero (CAD theta 45 deg) = 0.572468 saved while the power-up 60 deg wrap was wrong -> minus 60 deg (0.6 deg from the 10-06 zero -0.464258)
         kt_nm_per_a: 0.81           # PROVISIONAL 2026-10-07: product page 0.135 x 6 (manual table 0.5994 is 35 % off;
                                     # hanging-leg test -> 0.67–0.82). Confirm with the weight-difference test.
-        current_limit_a: 15.0       # 2026-10-15 user ok (desktop CMA-11): hip command cap 12 N·m. [10.0 = datasheet peak 10.3 A @24 V x 0.81 = 8.1 N·m]
+        current_limit_a: 15.0       # 2026-10-15 (desktop CMA-11): hip command cap 12 N·m. [10.0 = datasheet peak 10.3 A @24 V x 0.81 = 8.1 N·m]
                                     # the drive delivered only ~35 % of the commanded torque while extending (4.7 A at 8.1 N·m) -> ~7 A expected
         velocity_limit_rad_s: 20.0  # VERIFY
         joint_min_rad: -1.0e9       # VERIFY: hip has mechanical stops — set real limits before use
@@ -139,15 +139,15 @@
           kt: false
       leg_r:
         model: "AK60-6 V3.0"
-        can_id: 4                   # fixed (user 2026-10-02): right hip
+        can_id: 4                   # fixed (2026-10-02): right hip
         pole_pairs: 14.0            # manual V3.2.0 §3.1.5.2 example
         gear_ratio: 6.0             # AK60-6 = 6:1
         raw_deg_per_output_rev: 360.0  # VERIFY (scale check)
         direction: -1              # hip_cli 2026-10-07: + = leg extends (sim M)
-        position_offset_rad: -0.382227  # 2026-10-08: legs folded on the retract stops read L -12.00 / R -10.90 -> R shifted -1.10 deg to match L (user: L = truth); was -0.401426
+        position_offset_rad: -0.382227  # 2026-10-08: legs folded on the retract stops read L -12.00 / R -10.90 -> R shifted -1.10 deg to match L (L = truth); was -0.401426
         kt_nm_per_a: 0.81           # PROVISIONAL 2026-10-07: product page 0.135 x 6 (manual table 0.5994 is 35 % off;
                                     # hanging-leg test -> 0.67–0.82). Confirm with the weight-difference test.
-        current_limit_a: 15.0       # 2026-10-15 user ok (desktop CMA-11): hip command cap 12 N·m. [10.0 = datasheet peak 10.3 A @24 V x 0.81 = 8.1 N·m]
+        current_limit_a: 15.0       # 2026-10-15 (desktop CMA-11): hip command cap 12 N·m. [10.0 = datasheet peak 10.3 A @24 V x 0.81 = 8.1 N·m]
                                     # the drive delivered only ~35 % of the commanded torque while extending (4.7 A at 8.1 N·m) -> ~7 A expected
         velocity_limit_rad_s: 20.0  # VERIFY
         joint_min_rad: -1.0e9       # VERIFY: hip has mechanical stops — set real limits before use
@@ -188,7 +188,7 @@
       #   t ±12 N·m. AK60-6 position range is blank in the manual table: verify before use. Vendor
       #   pack_cmd example clamps p_des/v_des to 0 and float_to_uint overflows at max — do not copy.
       #   Enable the 0x2A int32 position feedback (0.01°) for leg control (0x29 is only 0.1°).
-    # motor test UI / CLI limits (user request 2026-09-26: allow the motor maximum). The effective
+    # motor test UI / CLI limits (2026-09-26: allow the motor maximum). The effective
     # limit is min(this, per-motor limit above). Guards stay active: STOP, heartbeat, stale
     # feedback, drive fault, over-temperature, over-speed; always ends with 0 A.
     cli:

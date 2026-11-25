@@ -1,5 +1,5 @@
 """Runtime parameter changes for the GCS GUI (comms 2026-10-13_1300): only the names listed, only while the robot
-is disarmed (user 2026-10-13: "실시간 = 디스암하고"). No controller gains here — only limits, tracking, perception.
+is disarmed (2026-10-13: "실시간 = 디스암하고"). No controller gains here — only limits, tracking, perception.
 
     live.Live(node, {'vx_max': 'vx_max', 'bearing_tol_deg': lambda v: setattr(node, 'tol', math.radians(v))})
 

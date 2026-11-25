@@ -166,7 +166,7 @@ for name, o in out.items():
           f"    hull_xy: {fl(o['hull'])}   # x0, y0, x1, y1, ...",
           f"    slice_box_xy: {fl(o['slice_box']) if o['slice_box'] else '[]'}",
           f"    slice_hull_xy: {fl(o['slice'])}"]
-# 히트박스 (2026-10-12 사용자): 세 자세 z 투영 박스의 합집합 + 앞뒤좌우 margin. LiDAR 자기 몸 마스크용.
+# 히트박스 (2026-10-12): 세 자세 z 투영 박스의 합집합 + 앞뒤좌우 margin. LiDAR 자기 몸 마스크용.
 ub = [min(o["box"][0] for o in out.values()), max(o["box"][1] for o in out.values()),
       min(o["box"][2] for o in out.values()), max(o["box"][3] for o in out.values())]
 m_ = args.margin

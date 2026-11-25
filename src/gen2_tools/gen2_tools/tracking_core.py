@@ -205,7 +205,7 @@ class TargetManager:
         # where it may reappear: within gate_deg + gate_rate x lost time of the bearing it was last seen at (same uniforms:
         # appearance alone cannot tell two soldiers apart, 2026-10-25 test sim 0.99 -> swapped to the other one)
         self.g0, self.grate, self.gmax, self.fps = math.radians(gate_deg), math.radians(gate_rate_deg_s), math.radians(gate_max_deg), fps
-        # 크기 (= 거리) 일관성 (사용자 2026-10-29 "사람이 교차해서 지나갈 때 한 사람만 봐야"): 먼 대상 앞을 가까운 사람이 지나가면
+        # 크기 (= 거리) 일관성 (2026-10-29 "사람이 교차해서 지나갈 때 한 사람만 봐야"): 먼 대상 앞을 가까운 사람이 지나가면
         # 대상이 다 가려져 화면엔 그 사람만 남고, 옷이 비슷하면 ReID 가 그 사람을 고른다 (시뮬: 비슷한 옷 43-114 프레임 오추종).
         # 상자 높이가 마지막 대상 높이의 size_tol (+ size_rate / s 놓친 시간) 배 밖이면 후보 아님, 같은 번호가 그만큼 튀면 번호
         # 바뀜으로 봄. 대상을 가린 사람 (마지막에 겹친 번호) 은 대상 자리를 덮고 있는 동안 후보 아님.

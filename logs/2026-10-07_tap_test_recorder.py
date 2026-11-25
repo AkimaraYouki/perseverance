@@ -18,5 +18,5 @@ while time.monotonic()<t_end:
                 W.append((time.monotonic(),n,dr*v/14/10*2*math.pi/60))
     except BlockingIOError: pass
     time.sleep(0.0003)
-json.dump(dict(G=G,W=W),open('/home/parksudo/.claude/jobs/10169291/tmp/tap.json','w'))
+json.dump(dict(G=G,W=W),open('/tmp/tap.json','w'))
 print('samples gyro',len(G),'wheel',len(W))

@@ -1,4 +1,4 @@
-"""잔차 RL: LQR(바퀴) + VMC(다리) 기본 제어기 위에 정책이 작은 보정만 더한다 (2026-09-26 사용자 결정).
+"""잔차 RL: LQR(바퀴) + VMC(다리) 기본 제어기 위에 정책이 작은 보정만 더한다 (2026-09-26).
 
 기본 제어기 = scripts/wbctrl.py 의 주행 부분 (climb_test ctrl="lqr") 을 torch 로 벡터화한 것:
   상태 추정 (IMU 바이어스·잡음 + 기구학 + 땅 짚은 바퀴 속도), 균형점 보정(멈췄을 때), 모터 한계 따라 최고 속도,
@@ -420,7 +420,7 @@ class ResidualCtrlActionCfg(ActionTermCfg):
     roll_kp: float = 1.5; roll_ki: float = 15.0; roll_kd: float = 0.3; roll_rate_lpf_hz: float = 8.0  # noqa: E702
     roll_leak: float = 0.5; roll_freeze_deg: float = 20.0; level_max: float = 0.10  # noqa: E702
     contact_tau_min: float = 0.8
-    bump_slow: bool = False            # 턱 감지 -> 감속 (위 설명). 가혹 평가 0.8 m/s 삼각형길 88 -> 94 %. 기본 끔 (사용자: 험지 안정성 우선)
+    bump_slow: bool = False            # 턱 감지 -> 감속 (위 설명). 가혹 평가 0.8 m/s 삼각형길 88 -> 94 %. 기본 끔 (험지 안정성 우선)
     bump_rate: float = 1.5             # pitch 각속도 [rad/s] 가 넘거나
     bump_acc: float = 4.0              # 전후 감속 [m/s^2] 이 넘으면 턱
     bump_hold_s: float = 2.0

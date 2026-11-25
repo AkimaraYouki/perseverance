@@ -134,7 +134,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--urdf", default=str(HERE.parent / "model" / "robot_simple.urdf"))
     ap.add_argument("--extra-mass", type=float, default=0.25,
-                    help="실측 총질량 - 모델 총질량 [kg] (2026-09-24 사용자 추정 +0.25)")
+                    help="실측 총질량 - 모델 총질량 [kg] (2026-09-24 추정 +0.25)")
     ap.add_argument("--wheel-rotor", type=float, default=157.33e-7 * 10.0**2,
                     help="바퀴 모터 반사 관성 [kg m^2] (AK45-10 157.33 g cm^2 x 10^2)")
     ap.add_argument("--step-mm", type=float, default=10.0)

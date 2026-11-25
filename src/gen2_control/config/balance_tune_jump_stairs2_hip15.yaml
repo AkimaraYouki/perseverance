@@ -1,5 +1,5 @@
 # Desktop jump bundle, latest as of 2026-10-23 (NOT loaded by default — pass as an extra --params-file after
-# balance.yaml, or copy into balance.yaml, after the user's OK).
+# balance.yaml, or copy into balance.yaml, after an OK on the robot).
 # Base: sim/model/robot_params_2026-10-14_kt083/balance_tune_jump_cma11_hip15.yaml (CMA-11, hip command cap 15 N·m).
 # Overlay: comms/to-robot/2026-10-20_desktop-step-detect-mode.md "갱신 2 (2026-10-21)" — the 2-tier competition-stairs
 # optimum (extract_pitch, h_land, land_kp, land_kd, spin_match_k). Not portable yet (wb_core has no jump_retry):

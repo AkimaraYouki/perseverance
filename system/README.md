@@ -13,9 +13,9 @@
 | `systemd/gen2-wifi-watchdog.{service,timer}` + `sbin/gen2-wifi-watchdog.sh` | `/etc/systemd/system/`, `/usr/local/sbin/` | every 30 s: Wi-Fi disconnected → `nmcli c up` the highest-priority saved SSID that is visible. 2026-10-22: profile `robot` (phone hotspot, priority 200, autoconnect-retries 0 = forever) while the ROBOT AP / Pi is down; ROBOT5G stays at 100 |
 | `systemd/gen2-bootscreen.service` | `/etc/systemd/system/` (copy of `src/gen2_bringup/systemd/`) | boot status on the LCD until the status display takes over (docs/robot_bench.md "부팅 화면 읽는 법") |
 | `sysctl/99-gen2-arp.conf` | `/etc/sysctl.d/` | answer ARP only for addresses on the receiving interface (the Jetson answered for l4tbr0's 192.168.55.1 on the campus LAN) |
-| `usb-device-mode/nv-l4t-usb-device-mode-config.sh` | `/opt/nvidia/l4t-usb-device-mode/` | USB device-mode network moved 192.168.55.x → **192.168.66.x** (campus LAN uses 192.168.55.x). Default route via the host PC (192.168.66.100) **metric 100** (was 32766): plugged into the desktop, the Jetson uses the desktop's internet. Package file: re-apply after `nvidia-l4t-usb-service` upgrades |
-| `sysctl/99-gen2-linkdown.conf` | `/etc/sysctl.d/` | ignore routes on interfaces without carrier — USB cable pulled → the l4tbr0 default route is skipped and Wi-Fi takes over |
-| `networkmanager/91-gen2-wired-peers` + `gen2/wired_peers.conf` | `/etc/NetworkManager/dispatcher.d/`, `/etc/gen2/` | desk debugging: when the wired port comes up, pin each peer (on-link /32 route + permanent ARP) — the campus LAN has an ARP spoofer |
+| `usb-device-mode/nv-l4t-usb-device-mode-config.sh` | `/opt/nvidia/l4t-usb-device-mode/` | USB device-mode network moved 192.168.55.x → 192.168.66.x (campus LAN uses 192.168.55.x). Default route via the host PC (192.168.66.100) metric 100 (was 32766): plugged into the desktop, the Jetson uses the desktop's internet. Package file: re-apply after `nvidia-l4t-usb-service` upgrades |
+| `sysctl/99-gen2-linkdown.conf` | `/etc/sysctl.d/` | ignore routes on interfaces without carrier - USB cable pulled → the l4tbr0 default route is skipped and Wi-Fi takes over |
+| `networkmanager/91-gen2-wired-peers` + `gen2/wired_peers.conf` | `/etc/NetworkManager/dispatcher.d/`, `/etc/gen2/` | desk debugging: when the wired port comes up, pin each peer (on-link /32 route + permanent ARP) - the campus LAN has an ARP spoofer |
 | `udev/90-ax210-btusb.rules` | `/etc/udev/rules.d/` | load btusb for AX210 Bluetooth (NVIDIA rule blocks it) |
 | `scripts/st7789_test.py` | `~/lcd_test/` | standalone LCD wiring test |
 | `scripts/can_scope.sh` | `~/can_test/` | repeating CAN frames for oscilloscope checks |
@@ -39,22 +39,22 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now can0-up lcd-pinmux gen2-bench
 ```
 
-Desktop PC side (not the Jetson) — share the desktop's internet over USB-C (2026-10-03):
+Desktop PC side (not the Jetson) - share the desktop's internet over USB-C (2026-10-03):
 `desktop/90-jetson-usb-share` → desktop `/etc/NetworkManager/dispatcher.d/` (root, 755). When an interface gets a
 192.168.66.x address it turns on IPv4 forwarding and NATs 192.168.66.0/24 (the desktop's `/etc/sysctl.conf` keeps
-`ip_forward=0` otherwise). Why: the campus guest Wi-Fi (`kumoh-guest`) is a captive portal — HTTPS gets a self-signed
-certificate — so on it the Jetson has no internet and chrony cannot sync (clock stays at 1970 → every TLS check fails).
+`ip_forward=0` otherwise). Why: the campus guest Wi-Fi (`kumoh-guest`) is a captive portal - HTTPS gets a self-signed
+certificate - so on it the Jetson has no internet and chrony cannot sync (clock stays at 1970 → every TLS check fails).
 
 Not stored here (rebuild on the Jetson if the kernel changes):
 - Intel AX210 driver: iwlwifi/iwlmvm built from Ubuntu `linux-source-6.8.0` against the NVIDIA
   6.8.12-tegra headers, installed to `/lib/modules/$(uname -r)/updates/iwlwifi/`.
 - Decompressed firmware in `/lib/firmware` (`iwlwifi-ty-a0-gf-a0-{83,84,86}.ucode`, `.pnvm`,
-  `intel/ibt-0041-0041.{sfi,ddc}`) — the NVIDIA kernel cannot load `.zst` firmware.
+  `intel/ibt-0041-0041.{sfi,ddc}`) - the NVIDIA kernel cannot load `.zst` firmware.
 - Jetson-IO overlay `Camera IMX219-C` (CAM1) in `/boot/extlinux/extlinux.conf`.
 
 Wired network (campus LAN, 2026-09-26): `Wired connection 1` = DHCP client with `ipv4.never-default yes`
-(Wi-Fi keeps the default route). **Never set it to "Shared to other computers"** on the campus LAN —
+(Wi-Fi keeps the default route). Never set it to "Shared to other computers" on the campus LAN -
 that runs a DHCP server for the whole segment. Current lease: 192.168.54.23/24, gateway 192.168.54.1.
-The campus LAN has an **ARP spoofer** (`2c:f0:5d:8f:e4:12` answers for the gateway and for other hosts;
-40–60 % loss). With the peer pinned (91-gen2-wired-peers): 0 % loss, 0.68 ms to the desktop PC.
+The campus LAN has an ARP spoofer (`2c:f0:5d:8f:e4:12` answers for the gateway and for other hosts;
+40-60 % loss). With the peer pinned (91-gen2-wired-peers): 0 % loss, 0.68 ms to the desktop PC.
 Wired is for desk debugging only; competition/outdoor uses Wi-Fi only (dedicated TP-Link AP).

@@ -124,7 +124,7 @@ if args.course:
     _w = sum(c[2] for c in COURSE); COURSE = [(a, b, c / _w) for a, b, c in COURSE]  # noqa: E702
 EP_S = 7.0 if "--retry" not in sys.argv else (36.0 if ("--p_stairs" in sys.argv or "--course" in sys.argv) else 22.0)   # 턱 감지 모드는 천천히 접근 + 후진 + 재가속
 BOX_L, BOX_W, BOX_T = 1.4, 2.0, 0.20
-if "--box_l" in sys.argv:      # 턱 윗면 길이 (2026-10-24 사용자: 착지할 턱 길이 1 m)
+if "--box_l" in sys.argv:      # 턱 윗면 길이 (2026-10-24: 착지할 턱 길이 1 m)
     BOX_L = float(sys.argv[sys.argv.index("--box_l") + 1])
 
 # --- 장면: 평면 + 로봇마다 키네마틱 턱 (높이를 리셋 때마다 바꾼다) -------------------------------------------------
@@ -374,7 +374,7 @@ class JumpEnv:
         # 점프 요청: 모서리 앞 dtrig 에서 한 번 (실기 = 막힘 → 물러남 → 다시 달려 그 거리에서)
         want = ~self.jumped & (f.wx >= self.edge - self.dtrig) & (CTRL.phase == wbctrl.DRIVE) & (not args.retry)
         ph_before = CTRL.phase.copy()                                     # 단계 전이는 CTRL.step 안에서 일어난다
-        if args.edge_at_go and args.retry:        # 2026-10-24 사용자: 턱 코앞 (바퀴 앞 10 cm) 에서 서 있다가 출발
+        if args.edge_at_go and args.retry:        # 2026-10-24: 턱 코앞 (바퀴 앞 10 cm) 에서 서 있다가 출발
             go = np.flatnonzero((self.t < args.stand_s) & (self.t + DT >= args.stand_s) & (self.nst == 1))
             if len(go):
                 self.edge[go] = f.wx[go] + self.rng.uniform(args.edge_min, args.edge_max, len(go))
@@ -564,7 +564,7 @@ CMA_SPACE = [   # 이름, 하한, 상한 (climb_test TUNE 기본값에서 시작
 if args.cma_space == "all":     # 점프 + 턱 감지 + 신전 바퀴 속도 상한 (2026-10-20)
     CMA_SPACE = CMA_SPACE + [("retry_approach_v", 0.06, 0.2), ("retry_block_s", 0.05, 0.5), ("retry_back_m", 0.15, 0.9),
                              ("retry_v", 0.15, 0.3), ("trigger", 0.08, 0.5), ("retry_stall_frac", 0.15, 0.8), ("ex_w_max", 5.0, 19.0)]
-    # 사용자: 점프 전 속도 0.2–0.3 m/s -> 명령 범위로만 (retry_vmax 속도 보호 상한 0.3 은 넘어짐 14 -> 50 %, 2026-10-20 비교)
+    # 점프 전 속도 0.2–0.3 m/s -> 명령 범위로만 (retry_vmax 속도 보호 상한 0.3 은 넘어짐 14 -> 50 %, 2026-10-20 비교)
 if args.cma_space == "stairs":   # 2 단 계단 (2026-10-21): 이륙·착지 속도에 걸린 점프 값 + 턱 감지 값
     CMA_SPACE = [("t_retract", 0.12, 0.40), ("retract_lean", -3.0, 12.0), ("extract_pitch", -8.0, 12.0), ("leg_kp", 30.0, 120.0),
                  ("air_kp", 0.0, 60.0), ("air_kd", 0.0, 10.0), ("land_kp", 8.0, 60.0), ("land_kd", 0.2, 4.0), ("land_s", 0.10, 0.70),

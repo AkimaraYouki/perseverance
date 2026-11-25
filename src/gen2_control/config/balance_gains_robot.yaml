@@ -1,4 +1,4 @@
-# 2026-10-14 (user: apply desktop comms 0100): gain table x1.2 = 1/0.83 — the wheel drives deliver ~0.83 of the
+# 2026-10-14: apply desktop comms 0100): gain table x1.2 = 1/0.83 — the wheel drives deliver ~0.83 of the
 # commanded torque (wheel inertia test 2026-10-13). Source: sim/model/robot_params_2026-10-14_kt083/ (sim: harsh
 # 93.8 -> 95.4 %, robust 128 -> 139/176 with vmax 3.0). Previous table (x1.0, Kx -3) is in git history.
 # 실험용 (2026-10-14 데스크톱) — 적용 전. 바퀴 드라이브가 명령 토크의 0.83 만 낸다 (로봇 관성 시험 2026-10-13) -> 지금 표 (balance_gains_robot.yaml) x 1.20 (= 1/0.83).

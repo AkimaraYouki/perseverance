@@ -101,7 +101,7 @@ class CmdMux(Node):
         vx_in, k = vx, 1.0
         note = ''
         if now - self.scan_t > self.scan_to:
-            if self.limit_on:               # lidar_limit off (user): a dead LiDAR must not cap the pad either
+            if self.limit_on:               # lidar_limit off: a dead LiDAR must not cap the pad either
                 vx = max(-self.stale_vx, min(self.stale_vx, vx))
             note = 'scan stale'
         else:

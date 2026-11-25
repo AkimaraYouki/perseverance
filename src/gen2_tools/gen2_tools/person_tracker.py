@@ -4,7 +4,7 @@ designated target with OSNet-x0.25 re-identification (TensorRT) -> people/target
 person_follow_cam (people/camera is still published in the same format, + 'id' / 'target', so the HUD keeps working).
 
 Why: the old stack registered / kept the person only when a LiDAR leg track sat at the camera bearing, once per LiDAR
-scan (10 Hz) — a person with a green box but no matching leg track was never locked (user 2026-10-25).
+scan (10 Hz) — a person with a green box but no matching leg track was never locked (2026-10-25).
 
 Run (vision venv):  ~/venv_vision/bin/python -m gen2_tools.person_tracker
 Models: ~/gen2_ws/models/yolo11n-pose_320_fp16.engine, osnet_x0_25_msmt17.onnx (the .engine is built from it on the

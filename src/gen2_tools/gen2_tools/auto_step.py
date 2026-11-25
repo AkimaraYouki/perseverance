@@ -28,7 +28,7 @@ class AutoStep:
         # crept below the stall line 0.5 x 0.14 and the core saw 'blocked' on flat ground -> back off / re-run / fall.
         # A zero command resets that integrator and the core's 'moved' timer (wb_core: |vx| <= 0.02, want false).
         self.land_stop_s = land_stop_s
-        # 2-tier stairs (user 2026-10-27 "한 번 점프하고 2 단 점프니까 계속 턱 감지 켜 놓고 다 올라가면 해제"): after a jump
+        # 2-tier stairs (2026-10-27 "한 번 점프하고 2 단 점프니까 계속 턱 감지 켜 놓고 다 올라가면 해제"): after a jump
         # step mode stays ON; it is released once the robot has driven done_travel past the last landing without another
         # block / jump (the camera cannot see tier 2: plywood on plywood). Hitting tier 2 at follow speed fell in Isaac.
         self.done_travel = done_travel

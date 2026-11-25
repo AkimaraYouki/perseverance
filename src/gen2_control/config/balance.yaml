@@ -7,7 +7,7 @@ balance:
     rt_priority: 80
     max_tilt_deg: 45.0        # fault beyond this (fell)
     start_tilt_deg: 15.0      # stand/balance only when the body is held within this
-    imu_timeout_s: 0.2        # 2026-10-23 [0.05] user ok: the iAHRS stops sending for 28-166 ms every 8 s while it moves
+    imu_timeout_s: 0.2        # 2026-10-23 [0.05]: the iAHRS stops sending for 28-166 ms every 8 s while it moves
                               # (shm trace: reader waiting in read, samples lost) -> "IMU stale" faulted (0 A, robot drops).
                               # Within the timeout the last sample is held.
     motor_timeout_s: 0.05
@@ -15,12 +15,12 @@ balance:
     cmd_timeout_s: 0.5        # cmd_vel watchdog -> 0
     stand_ramp_s: 2.0         # stand: current leg height -> idle_h
     th_trim_deg: 0.2          # 2026-10-14: hub removed -> COM moved. +1.7 (first guess) -> th_bias converged to +1.4..1.5 (21:03 log) -> +0.2. Was -1.2 with the hub;
-                              # th_bias stuck (20:58 log) -> -1.2 + 2.9 = +1.7. Before: # balance-point trim, + = lean back. 0 = CAD COM (th_kin). 2026-10-08 after the IMU was re-seated (user):
-                              # 0 -> bias adapt +1.1, max 0.61 m; -1.0 -> bias -0.45, max 0.09 m; user picked -1.2
+                              # th_bias stuck (20:58 log) -> -1.2 + 2.9 = +1.7. Before: # balance-point trim, + = lean back. 0 = CAD COM (th_kin). 2026-10-08 after the IMU was re-seated:
+                              # 0 -> bias adapt +1.1, max 0.61 m; -1.0 -> bias -0.45, max 0.09 m; picked -1.2
     stand_feedforward: true   # stand: + weight feed-forward (0.5 m g per leg, via dh/dtheta) — current_pd only
     hip_mode: mit_pos         # 2026-10-09: mit_pos = p, kp, kd in the drive (kHz), ff from here. mit = host kp at 200 Hz (legs lagged 150 deg at 2.8 Hz -> roll rocking). servo_pos | current_pd old
     mit_kt_drive: 0.5994      # Kt the AK60-6 drive uses inside MIT (0.5 N·m -> 0.83 A measured 2026-10-07)
-    hip_pd_tau_max: 15.0      # 2026-10-23 [12.0] desktop jump bundle hip15 (user ok). 2026-10-15 [9.0] desktop CMA-11 / user ok: jumps reached only 5.6 cm (drive gave ~35 % of 8.1 N·m). mit_pos: clip the position error so the drive PD (+ |ff|) stays <= 9 N·m (sim hip limit).
+    hip_pd_tau_max: 15.0      # 2026-10-23 [12.0] desktop jump bundle hip15. 2026-10-15 [9.0] desktop CMA-11: jumps reached only 5.6 cm (drive gave ~35 % of 8.1 N·m). mit_pos: clip the position error so the drive PD (+ |ff|) stays <= 9 N·m (sim hip limit).
                               # 2026-10-12 first real jumps: the extension step gave 28-32 A (desktop comms 2235 / 0335)
     osc_flips: 6              # fault: hip velocity (|w| > osc_vel) changes sign this often within osc_window_s
     osc_window_s: 0.3
@@ -35,12 +35,12 @@ balance:
       vmc_kp: 60.0
       vmc_kd: 1.0
       vmax_kmh: 3.0           # 2026-10-14 desktop kt083: with 0.83 wheel torque 3.5 was worse on ramps / fast turns (robust 34 -> 40/48 at 3.0)
-      accel_max: 1.2          # 2026-10-14 user: start/stop felt slow. 0.8 -> 1.2 with jerk 6 = desktop sim 'fast start' (0.4 m/s 0.60 -> 0.43 s, lean 9.8 -> 13.7 deg, robust 49 -> 47/64). 1.5 overshot 10-09
+      accel_max: 1.2          # 2026-10-14: start/stop felt slow. 0.8 -> 1.2 with jerk 6 = desktop sim 'fast start' (0.4 m/s 0.60 -> 0.43 s, lean 9.8 -> 13.7 deg, robust 49 -> 47/64). 1.5 overshot 10-09
       lean_ff: 1.0            # desktop 2026-10-09: lean ahead by atan(a_ref/g) -> sim flat_stop 5 -> 15/16 (0.70 -> 0.40 m past the release)
       x_leak_moving: 0.5      # 1/s, driving: x_err leaks (steady speed error fixed, big catch-up forgotten in 2 s)
       jerk_max: 6.0           # m/s^3 S-curve [3]: releasing while accelerating unwinds the accel in 0.4 s (was 0.53 s, the target kept rising)
       bal_adapt_wz_max: 0.1   # 2026-10-14: no balance-point learning while turning (th_bias went +2.8 deg in a turn -> crept 1 m after)
-      x_turn_wz: 0.3   # [0.0] 2026-10-28 GCS (사용자 OK): 빠른 제자리 회전 뒤 되돌아감 — x_err 회전 중 리셋. 이전 0 = 10-14 사용자 B | [0.3] 2026-10-14 user B: hold position DURING in-place turns (the reversing wheel stalls -> pivot on it,
+      x_turn_wz: 0.3   # [0.0] 2026-10-28 GCS: 빠른 제자리 회전 뒤 되돌아감 — x_err 회전 중 리셋. 이전 0 = 10-14 B안 | [0.3] 2026-10-14 B안: hold position DURING in-place turns (the reversing wheel stalls -> pivot on it,
                               # body drifted 0.1-0.7 m forward in 19 turns). 0.3 = turning counts as moving (no creep back after long turns)
       v_ki: 0.8               # 2026-10-14 slope compensation: uphill the robot stalled (02:41: cmd 0.70, v 0.0, lean 17 deg, x_err at
                               # its 0.3 limit). Raises the tracked speed by 0.8 x integral(cmd - v) while the command is steady
@@ -55,19 +55,19 @@ balance:
       db_comp: 2              # 0 off, 1 boost, 2 sigma
       db_comp_nm: 0.65
       wheel_lpf_hz: 20.0
-      bal_adapt: 0.15  # [0.3] 2026-10-28 GCS (사용자 OK): bias walk 재발 (100704: th_bias 0 -> -3 in 170 s) — 학습 속도 절반 | user 2026-10-08 (0.1 / 0 tried: 0 stops the bias walk but parks ~0.17 m off)
+      bal_adapt: 0.15  # [0.3] 2026-10-28 GCS: bias walk 재발 (100704: th_bias 0 -> -3 in 170 s) — 학습 속도 절반 | 2026-10-08 (0.1 / 0 tried: 0 stops the bias walk but parks ~0.17 m off)
       bal_adapt_x_max: 0.15   # [0.05 blocked all learning: x_err left 5 cm at once, robot crept 0.3 m forward] 2026-10-14: learn only within 5 cm of the hold point. With gains x1.2 th_bias walked to -8 deg (limit) while
                               # standing, pitch -5..-8 deg, a lurch back of 0.3-0.7 m every 30-60 s (it learned the position hold's lean)
-      bal_adapt_max_deg: 1.5   # [3.0] 2026-10-28 GCS (사용자 OK): 조용히 선 구간 th_bias -0.8..+0.6 deg -> 1.5 로 걸어갈 범위 제한 | [8] real balance point ~ -1..-2 deg (th_trim -1.2 already); a walk cannot go far
+      bal_adapt_max_deg: 1.5   # [3.0] 2026-10-28 GCS: 조용히 선 구간 th_bias -0.8..+0.6 deg -> 1.5 로 걸어갈 범위 제한 | [8] real balance point ~ -1..-2 deg (th_trim -1.2 already); a walk cannot go far
       contact_tau_min: 0.8
       roll_kp: 1.0            # 2026-10-12 retest with hip_mode mit_pos (legs -29 deg at 2.8 Hz instead of -150): step 2 of the desktop plan
       roll_ki: 8.0            # 10-09 with mit (host kp) this rocked at 2.8 Hz; 10-12 with mit_pos: quiet (roll sd 0.35 deg, no 2.8 Hz), pushes/ramp OK. fallback 0.5 / 3
-      roll_kd: 0.1            # 2026-10-12 desktop step 3 (sim 80/80); user: "너무 잘됨". push recovery 0.13-0.26 s; hip current 10-100 Hz 0.24 A (0.05 with kd 0)
+      roll_kd: 0.1            # 2026-10-12 desktop step 3 (sim 80/80); "너무 잘됨". push recovery 0.13-0.26 s; hip current 10-100 Hz 0.24 A (0.05 with kd 0)
       roll_rate_lpf_hz: 4.0   # roll-rate LPF for the kd term (wb_core default 8)
       turn_lean: 0.0          # needs the roll loop
-      jump_max_v: 0.6         # 2026-10-28 user: default 15 N.m bundle again (0.4 for half a day refused step-detect jumps when the re-run overshot to 0.56 m/s). 10-15 user: up to 0.6 [0.4; sim CMA-11 tuned at 0.2-0.4]. 0 = off
+      jump_max_v: 0.6         # 2026-10-28: default 15 N.m bundle again (0.4 for half a day refused step-detect jumps when the re-run overshot to 0.56 m/s). 10-15: up to 0.6 [0.4; sim CMA-11 tuned at 0.2-0.4]. 0 = off
                               # (landed with legs tucked, wheels spinning backwards -> broke a wheel, 2026-10-13).
-      # jump state machine 2026-10-23 (user ok): desktop CMA-11 hip 15 N·m + 2026-10-21 2-tier stairs overlay
+      # jump state machine 2026-10-23: desktop CMA-11 hip 15 N·m + 2026-10-21 2-tier stairs overlay
       # (config/balance_tune_jump_stairs2_hip15.yaml; sim manual Y 8 cm 60 %, 10 cm 53 %).
       # [ ] = CMA-ES round 11 (2026-10-15, hip command cap 12 N·m; sim flat 95 %, 6 cm 60, 8 cm 53, 10 cm 45 %,
       # wheels 13.2 cm; flat first). Older: desktop CMA-ES round 7 (2026-10-14 13:00, robot-style hip cap, eff 0.5-0.7; sim flat 91 % / falls 1 %,

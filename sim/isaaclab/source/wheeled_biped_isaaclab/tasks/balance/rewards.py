@@ -125,7 +125,7 @@ def roll_track_exp(env: "ManagerBasedRLEnv", std: float,
 
 def spin_in_place_exp(env: "ManagerBasedRLEnv", command_name: str, asset_cfg: SceneEntityCfg,
                       std: float = 0.5, vx_blend: tuple = (0.05, 0.15), wz_blend: tuple = (0.1, 0.3)) -> torch.Tensor:
-    """정지 명령에서 회전할 때 두 바퀴가 서로 반대로 같은 크기로 돌게 한다 (2026-09-25 사용자 요청).
+    """정지 명령에서 회전할 때 두 바퀴가 서로 반대로 같은 크기로 돌게 한다 (2026-09-25).
 
     두 바퀴 각속도 평균(+y 규약) = 차축 중점의 직진 성분. 0 이 아니면 한쪽 바퀴를 축으로 원을 그린다
     (측정: 0.5 rad/s 제자리 회전에서 L -0.32 / R +1.35 rad/s, 6 s 에 중심 24 cm 이동).
@@ -215,7 +215,7 @@ def leg_stroke_margin(env: "ManagerBasedRLEnv", command_name: str, margin: float
     """자동 모드에서 다리가 행정 양끝 margin 안으로 붙는 것 (0~, 다리마다 (1 - 여유/margin)^2).
 
     m5100 자동 모드는 모든 지형에서 다리 119.7 mm (하한 122.5 아래, 처짐 포함)에 붙었다 — 낮을수록 안정하니
-    제일 쉬운 답이지만, 하한에서는 더 줄일 수 없어 요철을 못 흡수한다 (파도 roll 7 deg). 수동 모드는 사용자
+    제일 쉬운 답이지만, 하한에서는 더 줄일 수 없어 요철을 못 흡수한다 (파도 roll 7 deg). 수동 모드는 조종자가 준
     높이라 끈다.
     """
     asset: Articulation = env.scene[asset_cfg.name]

@@ -74,7 +74,7 @@ F_S = _font(_M, 10)       # rows
 F_SB = _font(_MB, 10)
 F_BIG = _font(_MB, 15)
 F_H = _font(_FB, 12)
-F_BANNER = _font(_FB, 92)   # HOLD / GO for the person giving hand signals (2026-10-28 GCS, user)
+F_BANNER = _font(_FB, 92)   # HOLD / GO for the person giving hand signals (2026-10-28 GCS)
 
 ROW = 13
 

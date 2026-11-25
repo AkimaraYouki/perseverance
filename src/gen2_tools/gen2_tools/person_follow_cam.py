@@ -8,7 +8,7 @@ sat at the camera bearing, once per LiDAR scan — a person with a green box was
 Where: bearing from the camera; distance from the LiDAR points inside the person's box (bearing span), nearest cluster,
 else from the feet row on the ground plane (wide lens: equidistant model). The target is kept in the odom frame with a
 velocity, so OCCLUDED / SEARCH / HOLD / Nav2 avoidance work exactly as in person_follow (inherited).
-Speed limit 0.7 m/s (user: follow / command maximum 0.7 m/s).
+Speed limit 0.7 m/s (follow / command maximum).
 
 Run: ros2 run gen2_tools person_follow_cam   (node name person_follow: same services follow/enable, follow/hold,
      topic follow/status, cmd_vel/auto — GUI / pad / gestures unchanged). Start person_tracker instead of
@@ -58,14 +58,14 @@ class PersonFollowCam(PersonFollow):
         self.cam_K, self.cam_D = p('K', [0.0]), p('D', [0.0])  # checkerboard calibration (camera_cal.yaml, 2026-10-26)
         self.cam_roll = p('cam_roll_deg', 0.0)                 # mount roll (cw HUD, 2026-10-27)
         self.bm = None
-        # 발 픽셀 추종 (사용자 2026-10-29 "발은 수평선 아래로 유지하게끔 추종, 수평선부터 픽셀은 파라미터로"): FOLLOW 의 전진 속도를
+        # 발 픽셀 추종 (2026-10-29 "발은 수평선 아래로 유지하게끔 추종, 수평선부터 픽셀은 파라미터로"): FOLLOW 의 전진 속도를
         # 거리 (LiDAR / 발 / 예측, 튐) 대신 사람 발 행이 카메라 수평선 아래 feet_px 에 오게 정한다. 멀수록 발이 수평선 쪽으로
         # 올라감 -> 전진, 가까우면 내려감 (화면 밖 = 아래 끝) -> 멈춤 / 조금 후진. 수평선 = 몸 피치 + cam_tilt 로 렌즈 모델에서
         self.feet_on = p('feet_follow', False)
         self.feet_px = p('feet_px', 80.0)                  # [px] 목표: 발이 수평선 아래 이만큼 (로봇 렌즈: 100 = 0.8 m, 80 = 1.0 m, 55 = 1.5 m)
         self.feet_k = p('feet_k', 0.01)                    # [m/s per px] 50 px 모자라면 0.5 m/s
         self.feet_dv, self.feet_t, self.feet_u, self.feet_row = None, -1e9, None, None
-        # 라이다 앞 정지 (사용자 2026-10-29: 미로를 사람 따라 통과, 사람이 너무 가깝거나 장애물이면 라이다로 멈추고 Nav2 로 피함):
+        # 라이다 앞 정지 (2026-10-29: 미로를 사람 따라 통과, 사람이 너무 가깝거나 장애물이면 라이다로 멈추고 Nav2 로 피함):
         # 몸 폭 (+ corridor_margin_m) 앞쪽 통로에 front_stop_m 안의 라이다 점 3 개 이상이면 전진 0 (회전 · 후진은 됨).
         # 거리 추정 (라이다 묶음 · 발 · 예측 · 발 픽셀) 이 틀려도 사람 다리나 벽 앞에서 선다. 0 = 끔
         self.front_stop = p('front_stop_m', 0.5)
@@ -88,7 +88,7 @@ class PersonFollowCam(PersonFollow):
         self.step_d, self.step_on_sent, self.odom_s, self.odom_prev = None, False, 0.0, None
         self.rt_phase, self.t_fire = 0, -1e9
         self.v_meas = 0.0
-        # 가려짐 탐색 (GCS 2026-10-28, 사용자 "장애물에 가려지면 자동으로 탐사해서 다시 붙기"): occluded_s 를 넘게 놓치면
+        # 가려짐 탐색 (GCS 2026-10-28, "장애물에 가려지면 자동으로 탐사해서 다시 붙기"): occluded_s 를 넘게 놓치면
         # 제자리 회전 (SEARCH) 전에 EXPLORE — 사람이 사라진 곳 + 가던 방향 explore_ahead_m 앞 (그다음 사라진 쪽 옆
         # explore_side_m) 으로 가서 (막히면 Nav2) 좌우를 훑는다. 재식별 (person_tracker REACQUIRED) 되면 바로 FOLLOW.
         self.ex_on = p('explore', True)
@@ -188,7 +188,7 @@ class PersonFollowCam(PersonFollow):
     def _front_stop(self, t, pb=None):
         """Clamp a direct command (not Nav2) in place: forward -> 0 when the LiDAR sees something right ahead.
         A wall / corner (the person is farther than front_stop_m + 0.3) also counts as 'blocked' -> Nav2 next tick
-        (user 2026-10-29 maze: wall corners between robot and person -> go around with Nav2, not stand still)."""
+        (2026-10-29 maze: wall corners between robot and person -> go around with Nav2, not stand still)."""
         self.front_hit = t.linear.x > 0.0 and self._front_blocked()
         if self.front_hit:
             t.linear.x = 0.0
@@ -391,7 +391,7 @@ class PersonFollowCam(PersonFollow):
                 t.linear.x = self.auto.step_v                     # lost the person while jumping: finish the step first
             self._auto(t, time.monotonic())
         if self.auto_on and self.auto.state == 'STEP':
-            # game day 2026-10-28 (user: manual D-pad + constant 0.7 forward works, follow + camera step does not): like the pad,
+            # game day 2026-10-28: manual D-pad + constant 0.7 forward works, follow + camera step does not): like the pad,
             # a constant forward command, no turning, no rate limit (the smoother turned 0 <-> 0.7 chatter into 0.3-0.5 = the
             # range where the re-run triggers at its 0.56-0.58 m/s overshoot), no Nav2. 0 only right next to the person.
             close = pb is not None and math.hypot(*pb) < self.step_stop_m

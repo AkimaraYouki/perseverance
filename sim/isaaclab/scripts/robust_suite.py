@@ -101,7 +101,7 @@ spec = dict(
     # 한쪽 바퀴 낙하 (2026-10-24, 기본 세트 밖): 높이 h 길에서 왼 바퀴만 떨어지고 (x 3 m) 2 m 뒤 오른 바퀴도 떨어짐
     drop6=dict(sec=16.0, v=0.4, gen=("drop_one", 0.06)), drop8=dict(sec=16.0, v=0.4, gen=("drop_one", 0.08)),
     drop10=dict(sec=16.0, v=0.4, gen=("drop_one", 0.10)),
-    # 공중에서 떨어뜨려 왼 바퀴만 높이 h 블록에 착지 (2026-10-24 사용자), 4 s 서 있다 0.3 m/s 출발 -> 1 m 뒤 블록 끝에서 왼 바퀴 낙하
+    # 공중에서 떨어뜨려 왼 바퀴만 높이 h 블록에 착지 (2026-10-24), 4 s 서 있다 0.3 m/s 출발 -> 1 m 뒤 블록 끝에서 왼 바퀴 낙하
     airstep6=dict(sec=12.0, v=0.3, go_at=4.0, spawn_z=0.18, gen=("half_block", 0.06)),
     airstep8=dict(sec=12.0, v=0.3, go_at=4.0, spawn_z=0.20, gen=("half_block", 0.08)),
     airstep10=dict(sec=12.0, v=0.3, go_at=4.0, spawn_z=0.22, gen=("half_block", 0.10)),

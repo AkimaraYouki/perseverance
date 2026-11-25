@@ -1,5 +1,5 @@
 {
- "policy": "/home/parksuho/.claude/jobs/fcc5fea5/tmp/policy_nobrake.pt",
+ "policy": "policy_nobrake.pt",
  "hard": false,
  "rows": [
   {

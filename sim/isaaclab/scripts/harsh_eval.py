@@ -1,5 +1,5 @@
 """가혹 평가: 실기 제어기 wbctrl (창·pv robust 와 같은 코드, 로봇 N 대 배열) 로 로봇 수천 대 x 20 s. **지형만 다르다**
-(2026-10-03 사용자: "지형만 다르고 제일 정확한 제어기 하나만"). 예전엔 GPU 복제 제어기(tasks/balance/residual.py)를 썼다.
+(2026-10-03: "지형만 다르고 제일 정확한 제어기 하나만"). 예전엔 GPU 복제 제어기(tasks/balance/residual.py)를 썼다.
 
 로봇 쪽 (climb_test.py TUNE 그대로, pv robust 와 같음): 제어기·게인, IMU 잡음·치우침, 바퀴 엔코더 잡음, 제어 지연 + 지터,
   몸통 질량·무게중심·바퀴 모터 한계 오차 (로봇마다), 바퀴 축 마찰·관성 (로봇 실측 2026-10-03). --harsh 배율이 잡음·오차에 곱해진다.
@@ -148,12 +148,12 @@ EVAL_TERRAINS = T.ROUGH_TERRAINS_CFG.replace(
         "slope_down": R["slope_up"].replace(proportion=0.1, slope_range=(0.0, 0.30)),
         "step_down": T.MeshPyramidStairsTerrainCfg(proportion=0.1, step_height_range=(0.02, 0.09), step_width=1.0,
                                                    platform_width=2.0, border_width=0.0),
-        # bumps (흩어진 네모 턱) 뺌 — 사용자 2026-10-03: "맨날 걸려 넘어지던 네모난 둔턱 빼"
+        # bumps (흩어진 네모 턱) 뺌 — 2026-10-03: "맨날 걸려 넘어지던 네모난 둔턱 빼"
         "gravel": R["gravel"].replace(proportion=0.1),
     },
 )
 
-if args.suite == "rough":                # 자동 주행 험지 (사용자: 삼각형길은 조종으로, 자갈·파도길은 자동으로 -> 험지 주행 안정성 우선)
+if args.suite == "rough":                # 자동 주행 험지 (삼각형길은 조종으로, 자갈·파도길은 자동으로 -> 험지 주행 안정성 우선)
     EVAL_TERRAINS = EVAL_TERRAINS.replace(num_cols=11, sub_terrains={
         "flat": MeshPlaneTerrainCfg(proportion=1.0),
         "stones": StonesCfg(proportion=1.0, kind="stones", h_range=(0.03, 0.12), **T._HF),
@@ -163,7 +163,7 @@ if args.suite == "rough":                # 자동 주행 험지 (사용자: 삼�
         "rugged": R["rugged"].replace(proportion=1.0),                  # 2 m 기복 + 40 cm 요철 + 자갈
         "wave_long": R["wave_long"].replace(proportion=1.0),            # 파도 0~10 cm, 4 개
         "wave_short": R["wave_short"].replace(proportion=1.0),          # 파도 0~6 cm, 8 개
-        # bumps (1~4 cm 네모 턱 0.3~1 m) 뺌 — 사용자 2026-10-03
+        # bumps (1~4 cm 네모 턱 0.3~1 m) 뺌 — 2026-10-03
         "blocks": StonesCfg(proportion=1.0, kind="gravel", h_range=(0.01, 0.04), **T._HF),   # 10 cm 블록 0~1~4 cm, 수직 모서리 (영상에서 넘어진 지형)
         # 가운데에서 바깥으로 달리므로: 역피라미드(R["slope_down"]) = 오르막, 피라미드(R["slope_up"]) = 내리막 (2026-09-27 전엔 이름이 반대였음)
         "slope_up": R["slope_down"].replace(proportion=1.0, slope_range=(0.0, 0.30)),
