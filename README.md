@@ -255,6 +255,10 @@ gen2_tune.sh plywood   # 점프 세트: plywood | hip12 | default
 
 기구 설계(4절 링크 치수 최적화, CAD, 3D 프린팅)부터 전장과 하드웨어 통합, 제어기 설계, 시뮬레이션과 sim2real, ROS 2 소프트웨어, 사람 추종과 자동 턱 넘기, 실험과 대회 운용까지 혼자 개발했습니다.
 
+**문인주** ([@rmfnxm92](https://github.com/rmfnxm92)) — 금오공과대학교 AIAS Lab 학부연구생
+
+2026 한국기계가공학회 추계학술대회 캡스톤 디자인 발표 (포스터·발표 슬라이드, [발표 자료](docs/presentations/README.md))
+
 지도교수: 손정우 교수 (AIAS Lab)
 
 라이선스는 아직 정하지 않았습니다. 정하기 전까지 모든 권리는 저작자에게 있습니다.

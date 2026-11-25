@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hip (leg) setup CLI: joint direction, zero pose and leg height, in leg terms.
 
-Leg = 1-DOF four-bar (docs/lab-meeting/hardware/01_cad.md, sim/model/leg_map.py): the hip motor
+Leg = 1-DOF four-bar (sim/model/leg_map.py): the hip motor
 turns crank angle theta; CAD zero pose theta0 = 45.0 deg, usable range theta 38.0 .. 97.8 deg.
 With the 140 mm wheel (R 70 mm) the motor-axle height is h = 192.5 / 206.5 / 312.5 mm at
 theta min / zero / max (leg_map.h_of_theta). Joint value M = theta - theta0, sim convention: **M + = leg extends**

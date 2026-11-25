@@ -41,7 +41,7 @@ class ArucoFollow(Node):
         super().__init__('aruco_follow')
         p = lambda n, v: self.declare_parameter(n, v).value  # noqa: E731
         self.dict_name = p('dictionary', 'DICT_4X4_50')
-        self.size = p('marker_size_m', 0.08)          # docs/aruco sheet: 80 mm black square
+        self.size = p('marker_size_m', 0.08)          # printed marker: 80 mm black square (4x4, ids 0-3)
         self.ids = set(p('ids', [0, 1, 2, 3]))
         self.hz = p('process_hz', 15.0)
         fx, fy, cx, cy = p('fx', 530.0), p('fy', 529.0), p('cx', 320.0), p('cy', 240.0)
