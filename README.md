@@ -55,10 +55,8 @@ Onshape에서 설계한 CAD를 URDF(폐루프 관절 포함)로 뽑아 Isaac Sim
 
 ### 4절 링크 다리
 
-<p align="center">
-  <img src="docs/media/leg_extension_cad.jpg" height="300" alt="다리 펴짐 (CAD 겹침)">
-  <img src="docs/media/leg_drift_torque.png" height="300" alt="바퀴축 흔들림, 고관절 토크·전달각">
-</p>
+<p align="center"><img src="docs/media/leg_fourbar.png" width="100%" alt="다리 펴짐 (CAD 겹침), 바퀴축 앞뒤 흔들림, 고관절 토크·전달각"></p>
+<p align="center"><sub>왼쪽부터 다리를 웅크림 → 폄 순서로 겹친 CAD, 높이별 바퀴축 앞뒤 흔들림, 고관절 토크와 전달각</sub></p>
 
 고관절 모터 하나로 4절 링크를 돌려 바퀴를 120mm 올리고 내립니다. 다리가 움직일 때 바퀴가 앞뒤로 밀리면 그 자체가 균형을 흔들기 때문에, 바퀴축이 거의 수직으로 움직이도록 링크 길이 다섯 개를 미분 진화로 넓게 찾은 뒤 최소제곱으로 다듬었습니다(링크 80mm 이상, 전달각 30° 이상, 고관절 토크 4.5N·m 이하). 결과는 바퀴축 앞뒤 흔들림 1.34mm(RMS), 전달각 49~147°, 최대 고관절 토크 4.35N·m입니다(설계 계산값).
 
